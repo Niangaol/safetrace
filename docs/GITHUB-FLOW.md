@@ -66,6 +66,12 @@ scope: 模块/线名，如 ingest / gateway / qa / contracts
 
 ## 六、远端仓库设置清单（建仓后由队长一次性完成）
 
+> **平台限制（2026-09-28 实测）**：私有仓库 + 个人 Free 账号无法开启分支保护规则
+> （`gh api .../protection` 返回 403：Upgrade to GitHub Pro or make this repository public）。
+> 当前以**本地 pre-push 钩子**（typecheck + test + 契约校验，与 CI 同口径）作为合并前门禁；
+> 若日后升级 Pro 或将仓库转公开，按下节清单补上保护规则。仓库已建：
+> `https://github.com/Niangaol/safetrace`（private，main 为默认分支，CI 已接通）。
+
 ```bash
 gh repo create Niangaol/safetrace --private --source=. --remote=origin --push
 ```
