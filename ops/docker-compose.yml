@@ -1,0 +1,175 @@
+# =============================================================================
+# SafeTrace P0 基础设施一键编排（Docker Compose）
+#
+# 组成：
+#   qdrant      向量库（Qdrant v1.15.4，端口 6333）
+#   postgres    关系库（postgres:16-alpine，端口 5432）
+#   langfuse    可观测全家桶（server + worker + clickhouse + redis + minio）
+#
+# 用法（在仓库根目录）：
+#   docker compose -f ops/docker-compose.yml up -d        # 一键拉起全部
+#   bash ops/scripts/wait-healthy.sh                      # 等待全部 healthy
+#   bash ops/scripts/smoke.sh                             # 就绪后跑冒烟
+#   docker compose -f ops/docker-compose.yml down         # 停止（数据留在 ops/data/）
+#
+# 覆盖默认值：postgres 的 POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+# 会在 compose 解析时从环境变量或 .env 读取（默认 safetrace/safetrace/safetrace）。
+# 例如：在 ops/ 目录放置 .env（内容 POSTGRES_PASSWORD=xxx）后执行
+#       cd ops && docker compose up -d，或在 shell 里 export 后再 up。
+# 注意：DATABASE_URL 也随这三个变量一起变，langfuse 与宿主机程序保持同一套凭据。
+#
+# 【无 Docker 备选路径】本机没装 Docker 时不要强跑本文件，改用备选栈：
+#   1) 向量库：Qdrant 单文件二进制（Qdrant releases 里的可执行文件），
+#      直接运行启动，同样监听 6333，数据落在本地目录；
+#   2) 关系库：SQLite（.env 里 SQLITE_PATH=./var/safetrace.sqlite，store 自动使用）；
+#   3) 可观测：Langfuse 整体跳过（可选功能，P0 不阻塞）；
+#   4) 验证：bash ops/scripts/smoke.sh 只跑 npm run smoke（冒烟零容器依赖）。
+# =============================================================================
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    container_name: safetrace-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: safetrace-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-safetrace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-safetrace}
+      POSTGRES_DB: ${POSTGRES_DB:-safetrace}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      # $$ 转义后由容器内 shell 求值，凭据跟随 POSTGRES_USER/DB 变量
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ---- Langfuse v3 自托管全家桶（可观测，可选） ----------------------------
+
+  langfuse-server:
+    image: langfuse/langfuse:3
+    container_name: safetrace-langfuse-server
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-safetrace}:${POSTGRES_PASSWORD:-safetrace}@postgres:5432/${POSTGRES_DB:-safetrace}
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: dev-only-change-me
+      SALT: dev-only-change-me
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      REDIS_CONNECTION_STRING: redis://redis:6379
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY_ID: minio
+      MINIO_SECRET_ACCESS_KEY: minio12345
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  langfuse-worker:
+    image: langfuse/langfuse:3
+    container_name: safetrace-langfuse-worker
+    restart: unless-stopped
+    command: ["worker"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-safetrace}:${POSTGRES_PASSWORD:-safetrace}@postgres:5432/${POSTGRES_DB:-safetrace}
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: dev-only-change-me
+      SALT: dev-only-change-me
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      REDIS_CONNECTION_STRING: redis://redis:6379
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY_ID: minio
+      MINIO_SECRET_ACCESS_KEY: minio12345
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    container_name: safetrace-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./data/clickhouse:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: safetrace-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  minio:
+    image: minio/minio:latest
+    container_name: safetrace-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio12345
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
