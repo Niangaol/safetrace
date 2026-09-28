@@ -3,7 +3,8 @@
  * fetch → adapter → dedupe（内存 Map 按 intel）→ dq1 → publish 到总线
  * （raw.docs / intel.items / dq.verdicts，trace_id 贯穿，causation_id 串联）。
  * 闸门口径：只放行 pass/degrade 进 intel.items；review/quarantine 的判定仍入 dq.verdicts（A1/S1 可见）。
- * 所有降级（fixture 回放）都以 FallbackEvent 形式发往 fallback.events（禁止静默兜底）。
+ * 所有降级（fixture 回放）都以 FallbackEvent 形式发往 fallback.events，并在返回结果上标记
+ * degraded_to（禁止静默兜底）。
  */
 import { EventBus, nextId } from "@safetrace/shared";
 import type { EventStore, FallbackEvent, IntelItem, QualityVerdict, RawDoc } from "@safetrace/shared";
@@ -39,6 +40,11 @@ export interface IngestRunResult {
   verdicts: QualityVerdict[];
   /** 本轮登记的全部降级事件（同步发往 fallback.events）。 */
   fallbackEvents: FallbackEvent[];
+  /**
+   * 降级标记（红线：禁止静默兜底，响应对象必须携带）。
+   * 本轮发生过 fixture 回放降级时为 "fixture"；未发生任何降级则不设置。
+   */
+  degraded_to?: string;
 }
 
 interface SourceRunner {
@@ -106,5 +112,14 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
     }
   }
 
-  return { fetched, parsed, merged: mergedItems, verdicts, fallbackEvents };
+  // 红线：fixture 回放是真实发生的降级，必须在响应对象上标记 degraded_to
+  const degradedToFixture = fallbackEvents.some((e) => e.degraded_of === "fixture");
+  return {
+    fetched,
+    parsed,
+    merged: mergedItems,
+    verdicts,
+    fallbackEvents,
+    ...(degradedToFixture ? { degraded_to: "fixture" } : {}),
+  };
 }
