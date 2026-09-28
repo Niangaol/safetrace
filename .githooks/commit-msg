@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Conventional Commits 校验（docs/GITHUB-FLOW.md 第三节）
+# 拒不合规提交；紧急绕过：git commit --no-verify（事后需在周会说明）
+set -uo pipefail
+MSG_FILE="$1"
+SUBJECT=$(head -n1 "$MSG_FILE")
+# 方括号表达式代替转义括号，避免跨平台/引号层转义丢失
+PATTERN='^(feat|fix|contract|docs|test|refactor|chore|ops|perf|build|ci|release)([(][a-z0-9_-]+[)])?!?: .+'
+if ! [[ "$SUBJECT" =~ $PATTERN ]]; then
+  echo "" >&2
+  echo "[commit-msg] 提交信息不符合 Conventional Commits：" >&2
+  echo "  $SUBJECT" >&2
+  echo "" >&2
+  echo "格式：<type>(<scope>): <subject>" >&2
+  echo "type in feat|fix|contract|docs|test|refactor|chore|ops|perf|build|ci|release" >&2
+  echo "示例：feat(ingest): KEV 连接器 + Y2 适配器回归 fixture" >&2
+  exit 1
+fi
+# 主题行长度软提醒
+if [ "${#SUBJECT}" -gt 72 ]; then
+  echo "[commit-msg] 提醒：主题行 ${#SUBJECT} 字符，建议 <=72" >&2
+fi
+exit 0
