@@ -1,0 +1,24 @@
+{
+  "query_id": "q_0001",
+  "chunks": [
+    {
+      "chunk_id": "chunk_nvd_cve_2021_44228_desc",
+      "doc_type": "vuln_advisory",
+      "text": "Apache Log4j2 2.0-beta9 through 2.15.0 JNDI features used in configuration...",
+      "score_dense": 0.93,
+      "score_sparse": 0.88,
+      "score_rerank": 0.95,
+      "quality_score": 0.98,
+      "provenance": {
+        "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-44228",
+        "section": "description",
+        "page": 1,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ],
+  "retrieval_ms": 312,
+  "embedder_model_id": "hash-256",
+  "trace_id": "tr_q_0001",
+  "schema_version": "1.0"
+}

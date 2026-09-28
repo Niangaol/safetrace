@@ -1,0 +1,26 @@
+{
+  "_comment": "CVE 状态为 REJECT（硬红线）",
+  "intel_id": "intel_dirty_01",
+  "cve_ids": [
+    "CVE-2020-0001"
+  ],
+  "source_ids": [
+    "kev"
+  ],
+  "title": "Rejected entry",
+  "published_at": "2020-06-01T00:00:00Z",
+  "first_seen_at": "2020-06-01T01:00:00Z",
+  "entities": {
+    "product": "x",
+    "vendor": "y",
+    "version_range": [],
+    "cwe": [],
+    "cpes": []
+  },
+  "raw_refs": [
+    "payload.json"
+  ],
+  "source_reliability": 0.5,
+  "schema_version": "1.0",
+  "_cve_status": "REJECTED"
+}

@@ -1,0 +1,18 @@
+{
+  "_comment": "关键 5 字段全缺（硬红线）",
+  "intel_id": "intel_dirty_05",
+  "cve_ids": [
+    "CVE-2020-0001"
+  ],
+  "source_ids": [
+    "kev"
+  ],
+  "title": "",
+  "published_at": "",
+  "first_seen_at": "2020-06-01T01:00:00Z",
+  "entities": null,
+  "raw_refs": [],
+  "source_reliability": 0.5,
+  "schema_version": "1.0",
+  "summary": ""
+}

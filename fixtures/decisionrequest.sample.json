@@ -1,0 +1,16 @@
+{
+  "decision_id": "dec_y5_0001",
+  "kind": "y5_triage",
+  "state": { "kev_flag": true, "cvss_v3_base": 10.0, "epss_percentile": 0.99963 },
+  "questions": [
+    {
+      "q_id": "level",
+      "type": "choice",
+      "options": ["P0", "P1", "P2", "P3"],
+      "rubric": "KEV命中 或 (CVSS>=9 且 EPSS>=0.5) -> P0；CVSS>=7 或 EPSS>=0.2 -> P1；CVSS>=4 -> P2；其余 P3",
+      "cardinality_max": 4
+    }
+  ],
+  "trace_id": "tr_y5_0001",
+  "schema_version": "1.0"
+}

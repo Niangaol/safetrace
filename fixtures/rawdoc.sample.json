@@ -1,0 +1,11 @@
+{
+  "source_id": "cisa_kev",
+  "source_type": "kev",
+  "external_id": "CVE-2021-44228",
+  "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+  "fetched_at": "2026-09-28T12:00:00Z",
+  "content_type": "json",
+  "payload_ref": "fixtures/sources/kev.sample.json",
+  "http_etag": "W/\"5f2a1c3-9e8b\"",
+  "parse_warnings": []
+}

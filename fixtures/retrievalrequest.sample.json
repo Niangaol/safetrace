@@ -1,0 +1,10 @@
+{
+  "query_id": "q_0001",
+  "query_text": "Log4Shell 影响哪些版本？怎么修复？",
+  "top_k": 5,
+  "doc_types": ["vuln_advisory", "vendor_advisory"],
+  "cve_ids": ["CVE-2021-44228"],
+  "min_quality": 0.7,
+  "trace_id": "tr_q_0001",
+  "schema_version": "1.0"
+}

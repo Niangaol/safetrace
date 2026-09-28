@@ -1,0 +1,27 @@
+{
+  "_comment": "版本区间 unknown（降级）",
+  "intel_id": "intel_dirty_10",
+  "cve_ids": [
+    "CVE-2020-0001"
+  ],
+  "source_ids": [
+    "kev"
+  ],
+  "title": "测试样本",
+  "published_at": "2020-06-01T00:00:00Z",
+  "first_seen_at": "2020-06-01T01:00:00Z",
+  "entities": {
+    "product": "x",
+    "vendor": "y",
+    "version_range": [
+      "unknown"
+    ],
+    "cwe": [],
+    "cpes": []
+  },
+  "raw_refs": [
+    "payload.json"
+  ],
+  "source_reliability": 0.5,
+  "schema_version": "1.0"
+}

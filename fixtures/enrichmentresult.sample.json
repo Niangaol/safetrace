@@ -1,0 +1,33 @@
+{
+  "intel_id": "intel_lz3k9x_cve_2021_44228",
+  "dimensions_completed": ["cvss", "paper"],
+  "dimensions_failed": [],
+  "artifacts": {
+    "papers": [
+      {
+        "paper_id": "arXiv:2112.00507",
+        "source": "arxiv",
+        "title": "Log4Shell: A Large-Scale Analysis of the Vulnerability and Its Exploitation",
+        "year": 2021,
+        "venue": "arXiv",
+        "relevance_score": 0.94,
+        "confidence": 0.9,
+        "evidence_terms": ["log4j", "jndi", "ldap", "rce"]
+      }
+    ],
+    "score_assessment": {
+      "cvss_v3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+      "cvss_v3_base": 10.0,
+      "source_of_score": "nvd",
+      "epss_score": 0.97401,
+      "epss_percentile": 0.99963,
+      "kev_flag": true,
+      "exploit_maturity": "high",
+      "impact_summary": "可远程利用，无需交互，波及全部Log4j2 2.x<=2.14.1 部署。",
+      "confidence": 0.98
+    }
+  },
+  "enrichment_score": 0.91,
+  "completed_at": "2026-09-28T12:05:00Z",
+  "schema_version": "1.0"
+}
