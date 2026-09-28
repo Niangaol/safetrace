@@ -15,6 +15,7 @@ test("pipeline：离线全链路，总线可读回 raw.docs / intel.items / dq.v
   assert.equal(res.merged.length, 1); // 同一 CVE 的 4 源报道归并为一条
   assert.equal(res.verdicts.length, 1);
   assert.equal(res.fallbackEvents.length, 4); // 每个源一次 fixture 回放降级
+  assert.equal(res.degraded_to, "fixture"); // 红线：降级在响应对象上显式可见
 
   // —— 归并结果：多源引用 + 强标识齐全 ——
   const merged = res.merged[0]!;
@@ -66,6 +67,7 @@ test("pipeline：sourceIds 过滤只跑指定源（不降级其他源）", async
   assert.equal(res.parsed.length, 1);
   assert.equal(res.merged.length, 1);
   assert.equal(res.fallbackEvents.length, 1);
+  assert.equal(res.degraded_to, "fixture");
   assert.deepEqual(res.merged[0]!.source_ids, ["cisa_kev"]);
   assert.deepEqual(res.verdicts[0]!.verdict, "pass");
   assert.equal((await store.read("intel.items")).length, 1);
@@ -79,5 +81,6 @@ test("pipeline：planned 源（ghsa/arxiv）无采集器，指定即静默跳过
   assert.equal(res.parsed.length, 0);
   assert.equal(res.merged.length, 0);
   assert.equal(res.verdicts.length, 0);
+  assert.equal(res.degraded_to, undefined); // 无抓取即无降级：不标记
   assert.equal((await store.read("raw.docs")).length, 0);
 });
