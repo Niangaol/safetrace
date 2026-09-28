@@ -1,0 +1,67 @@
+{
+  "version": "0",
+  "description": "Q 线黄金问题集 v0：Q1 意图分类与 Q4 拒答（abstain）的离线回归基准。字段：qid/text/expected_intent/expect_abstain?/notes",
+  "cases": [
+    {
+      "qid": "gq-01",
+      "text": "Log4Shell 影响哪些版本？",
+      "expected_intent": "impact_range",
+      "notes": "impact_range 基准①：影响面 / 版本范围"
+    },
+    {
+      "qid": "gq-02",
+      "text": "CVE-2021-44228 受影响的产品范围有多大？",
+      "expected_intent": "impact_range",
+      "notes": "impact_range 基准②：带 CVE 编号，验证 cve_ids 槽位"
+    },
+    {
+      "qid": "gq-03",
+      "text": "Log4Shell 应该怎么修复？有没有官方补丁？",
+      "expected_intent": "remediation",
+      "notes": "remediation 基准①：修复 + 补丁"
+    },
+    {
+      "qid": "gq-04",
+      "text": "OpenSSH 这个漏洞如何缓解和升级？",
+      "expected_intent": "remediation",
+      "notes": "remediation 基准②：缓解 + 升级"
+    },
+    {
+      "qid": "gq-05",
+      "text": "什么是 Log4Shell？它的原理是什么？",
+      "expected_intent": "concept",
+      "notes": "concept 基准：概念 / 原理解释"
+    },
+    {
+      "qid": "gq-06",
+      "text": "Log4Shell 的完整攻击链是怎么打出来的？攻击者通过哪些攻击步骤拿到服务器权限？",
+      "expected_intent": "attack_chain",
+      "notes": "attack_chain 基准：攻击链 / 攻击步骤"
+    },
+    {
+      "qid": "gq-07",
+      "text": "近一年 RCE 类高危漏洞的数量趋势如何？",
+      "expected_intent": "trend",
+      "notes": "trend 基准①：时间趋势 + 数量统计"
+    },
+    {
+      "qid": "gq-08",
+      "text": "有没有分析 Log4Shell 的学术论文？",
+      "expected_intent": "paper_related",
+      "notes": "paper_related 基准：论文关联（F 线 papers 维度）"
+    },
+    {
+      "qid": "gq-09",
+      "text": "最近一个月安全社区的热点漏洞趋势是怎样的？",
+      "expected_intent": "trend",
+      "notes": "trend 基准②：最近 + 热点 + 趋势"
+    },
+    {
+      "qid": "gq-10",
+      "text": "CVE-2099-4321 应该怎么修复？",
+      "expected_intent": "remediation",
+      "expect_abstain": true,
+      "notes": "无答案基准：该 CVE 不在索引中。两层拒答——①Q2 带 cve_ids 槽位过滤返回空；②即便不过滤，Q4 发现证据不覆盖问题中的 CVE 也拒答。禁止编造"
+    }
+  ]
+}
