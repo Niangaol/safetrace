@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace/local/contracts/ToolRegistration.json",
+  "title": "ToolRegistration",
+  "description": "S4 工具注册项：契约层 JSON Schema + 权限 + 灰度状态。MCP 投影共用同一份 schema。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool_id",
+    "version",
+    "kind",
+    "input_schema",
+    "output_schema",
+    "permissions",
+    "state",
+    "registered_at"
+  ],
+  "properties": {
+    "tool_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "工具版本不可变，修 bug 发新版本"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "source_adapter",
+        "enrich_dimension",
+        "retriever",
+        "decision",
+        "selfheal"
+      ]
+    },
+    "input_schema": {
+      "type": "object",
+      "description": "JSON Schema 对象"
+    },
+    "output_schema": {
+      "type": "object"
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network",
+        "filesystem",
+        "exec"
+      ],
+      "properties": {
+        "network": {
+          "type": "boolean"
+        },
+        "filesystem": {
+          "type": "string",
+          "enum": [
+            "none",
+            "read",
+            "workspace-write"
+          ]
+        },
+        "exec": {
+          "type": "boolean",
+          "description": "F3 沙箱执行类工具默认 false；执行必须显式开关"
+        }
+      }
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "staging",
+        "canary",
+        "active",
+        "retired"
+      ],
+      "description": "生命周期：白名单灰度"
+    },
+    "mcp_projection": {
+      "type": "boolean",
+      "description": "是否生成 MCP tools/list 投影（初赛仅一致性校验）"
+    },
+    "sha256": {
+      "type": "string",
+      "description": "注册内容哈希，非法 schema 拒载"
+    },
+    "registered_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

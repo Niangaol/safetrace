@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/RawDoc.json",
+  "title": "RawDoc",
+  "description": "原始抓取文档（Y1/Y2 → Y3）。S2 主题 raw.docs 的 payload。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source_id",
+    "source_type",
+    "external_id",
+    "url",
+    "fetched_at",
+    "content_type",
+    "payload_ref"
+  ],
+  "properties": {
+    "source_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "源实例唯一 ID，对应源登记表"
+    },
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "nvd_cve",
+        "cve_org",
+        "ghsa",
+        "osv",
+        "vendor_advisory",
+        "security_community",
+        "security_blog",
+        "poec_source",
+        "kev",
+        "standard_policy",
+        "paper"
+      ],
+      "description": "源类型枚举；新增只可追加"
+    },
+    "external_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "上游原生 ID（CVE 编号/GHSA ID/OSV ID 等），幂等回放键"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "fetched_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "本系统抓取完成时间，ISO-8601 UTC 带 Z"
+    },
+    "content_type": {
+      "type": "string",
+      "enum": [
+        "json",
+        "html",
+        "xml",
+        "text",
+        "pdf"
+      ]
+    },
+    "payload_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "原始 payload 存储引用（文件路径或对象存储键）"
+    },
+    "http_etag": {
+      "type": "string",
+      "description": "ETag，增量采集窗口依据"
+    },
+    "parse_warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Y2 解析过程中的非致命告警（缺字段只置空不猜测）"
+    }
+  }
+}

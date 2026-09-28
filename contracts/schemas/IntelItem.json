@@ -1,0 +1,140 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/IntelItem.json",
+  "title": "IntelItem",
+  "description": "不可变情报对象（Y3 → F 线）。S2 主题 intel.items 的 payload。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intel_id",
+    "cve_ids",
+    "source_ids",
+    "title",
+    "published_at",
+    "first_seen_at",
+    "entities",
+    "raw_refs",
+    "source_reliability",
+    "schema_version"
+  ],
+  "properties": {
+    "intel_id": {
+      "type": "string",
+      "pattern": "^intel_[0-9A-Za-z_-]+$",
+      "description": "本系统生成的不可变 ID"
+    },
+    "cve_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^CVE-[0-9]{4}-[0-9]{4,}$"
+      }
+    },
+    "ghsa_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "osv_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "姊妹编号/别名；只建关联不合并"
+    },
+    "source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "全部来源 source_id（归并后多源引用）"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "description": "抽取式摘要，不得引入外部事实"
+    },
+    "published_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "上游首次公开发布时间（时效统计基准）"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "本系统首次入库时间；与 published_at 分离，防上游延迟污染自证"
+    },
+    "entities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product",
+        "vendor",
+        "version_range",
+        "cwe",
+        "cpes"
+      ],
+      "properties": {
+        "product": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vendor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version_range": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwe": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cpes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "raw_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "payload_ref 列表，可回溯原始响应"
+    },
+    "source_reliability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "源可靠度初始权重"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    }
+  }
+}
