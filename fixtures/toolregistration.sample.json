@@ -1,0 +1,12 @@
+{
+  "tool_id": "adapter.kev",
+  "version": "1.0.0",
+  "kind": "source_adapter",
+  "input_schema": { "type": "object", "required": ["payload"], "properties": { "payload": { "type": "object" } } },
+  "output_schema": { "type": "array", "items": { "type": "object" } },
+  "permissions": { "network": true, "filesystem": "read", "exec": false },
+  "state": "active",
+  "mcp_projection": true,
+  "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "registered_at": "2026-09-28T12:00:00Z"
+}

@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "vulns": [
+        {
+          "id": "GHSA-jfh8-c2jp-5v3q",
+          "aliases": ["CVE-2021-44228"],
+          "modified": "2024-11-28T02:39:50.994931Z",
+          "published": "2021-12-10T17:03:26Z",
+          "summary": "Improper Input Validation and Deserialization of Untrusted Data in Log4j2",
+          "details": "Apache Log4j2 versions 2.0-beta9 through 2.15.0 are vulnerable to remote code execution.",
+          "severity": [ { "type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H" } ],
+          "affected": [
+            {
+              "package": { "ecosystem": "Maven", "name": "org.apache.logging.log4j:log4j-core" },
+              "ranges": [ { "type": "ECOSYSTEM", "events": [ { "introduced": "2.0-beta9" }, { "fixed": "2.15.0" } ] } ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
