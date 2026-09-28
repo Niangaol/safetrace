@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 与本地 pre-push 同口径：契约校验 + 类型检查 + 单测，全绿才允许合入 main
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖（lockfile 必须入库，否则 npm ci 失败）
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试（离线可跑，无需 Docker / API key）
+        run: npm run test
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 契约与 fixtures 校验（唯一接口真相来源）
+        run: python scripts/validate_contracts.py
