@@ -11,6 +11,6 @@
       "@safetrace/qa": ["src/qa/src/index.ts"]
     }
   },
-  "include": ["src/*/src/**/*.ts", "src/*/test/**/*.ts", "scripts/**/*.ts"],
+  "include": ["src/*/src/**/*.ts", "src/*/test/**/*.ts", "scripts/**/*.ts", "global.d.ts"],
   "exclude": ["node_modules", "**/dist"]
 }
