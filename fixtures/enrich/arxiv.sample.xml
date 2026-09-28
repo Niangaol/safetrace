@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- F1 arXiv 离线回放样本（与 fixtures/enrichmentresult.sample.json 的论文条目对齐）。
+     真实形态参考 export.arxiv.org/api/query 的 Atom 响应。
+     entry1 与查询全命中（relevance=1）；entry2 仅部分命中（relevance=0.4），用于降序/relevance 档位断言。 -->
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="html">ArXiv Query: search_query=all:&quot;Log4Shell JNDI remote code execution&quot;</title>
+  <id>http://arxiv.org/api/fixture</id>
+  <updated>2021-12-06T00:00:00-05:00</updated>
+  <opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">2</opensearch:totalResults>
+  <opensearch:startIndex xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">0</opensearch:startIndex>
+  <opensearch:itemsPerPage xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">2</opensearch:itemsPerPage>
+  <entry>
+    <id>http://arxiv.org/abs/2112.00507v1</id>
+    <updated>2021-12-06T00:00:00-05:00</updated>
+    <published>2021-12-06T00:00:00Z</published>
+    <title>Log4Shell: A Large-Scale Analysis of the Vulnerability &amp; Its Exploitation</title>
+    <summary>  The Log4Shell vulnerability (CVE-2021-44228) in Apache Log4j2 allows
+remote code execution through attacker controlled JNDI lookups. We analyze
+exploitation traffic and mitigation at Internet scale.  </summary>
+    <author><name>SafeTrace Fixture</name></author>
+    <link href="http://arxiv.org/abs/2112.00507v1" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2112.00507v1" rel="related" type="application/pdf"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2301.12345v2</id>
+    <updated>2023-01-30T00:00:00-05:00</updated>
+    <published>2023-01-30T00:00:00Z</published>
+    <title>Deserialization Vulnerabilities in Java: A Survey of Mitigations</title>
+    <summary>  We survey code injection and unsafe deserialization flaws in Java
+applications, comparing static analysis and sandboxing mitigations for unsafe
+lookup endpoints such as LDAP during runtime execution and code loading.  </summary>
+    <author><name>SafeTrace Fixture</name></author>
+    <link href="http://arxiv.org/abs/2301.12345v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2301.12345v2" rel="related" type="application/pdf"/>
+  </entry>
+</feed>
