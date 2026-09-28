@@ -1,0 +1,173 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/EnrichmentResult.json",
+  "title": "EnrichmentResult",
+  "description": "富化结果（F 线 → S1）。S2 主题 enrich.items 的 payload。每个维度必须带 source 与 confidence。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intel_id",
+    "dimensions_completed",
+    "dimensions_failed",
+    "artifacts",
+    "enrichment_score",
+    "completed_at",
+    "schema_version"
+  ],
+  "properties": {
+    "intel_id": {
+      "type": "string"
+    },
+    "dimensions_completed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "paper",
+          "asset",
+          "poc",
+          "cvss",
+          "remediation",
+          "triage"
+        ]
+      }
+    },
+    "dimensions_failed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "paper",
+          "asset",
+          "poc",
+          "cvss",
+          "remediation",
+          "triage"
+        ]
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "papers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "paper_id",
+              "source",
+              "title",
+              "relevance_score",
+              "confidence"
+            ],
+            "properties": {
+              "paper_id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "arxiv",
+                  "s2"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "year": {
+                "type": "integer"
+              },
+              "venue": {
+                "type": "string"
+              },
+              "relevance_score": {
+                "type": "number"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "evidence_terms": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "score_assessment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cvss_v3_vector",
+            "cvss_v3_base",
+            "source_of_score"
+          ],
+          "properties": {
+            "cvss_v3_vector": {
+              "type": "string",
+              "pattern": "^CVSS:3\\.[01]/.*$"
+            },
+            "cvss_v3_base": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10
+            },
+            "source_of_score": {
+              "type": "string",
+              "enum": [
+                "nvd",
+                "cna",
+                "ghsa",
+                "adp",
+                "system_derived"
+              ],
+              "description": "权威源优先；system_derived 必须附理由"
+            },
+            "derived_reason": {
+              "type": "string"
+            },
+            "epss_score": {
+              "type": "number"
+            },
+            "epss_percentile": {
+              "type": "number"
+            },
+            "kev_flag": {
+              "type": "boolean"
+            },
+            "exploit_maturity": {
+              "type": "string"
+            },
+            "impact_summary": {
+              "type": "string"
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    },
+    "enrichment_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "维度完整度与证据覆盖率加权"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    }
+  }
+}

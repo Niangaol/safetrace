@@ -1,0 +1,214 @@
+openapi: 3.0.3
+info:
+  title: SafeTrace MG1 & Retrieval API
+  version: 0.1.0
+  description: |
+    MG1 模型网关与检索服务的 HTTP 接口（P0 契约件 v1）。
+    红线：业务代码不得直连 provider SDK；本地/云端切换只改 config/models.yml。
+servers:
+  - url: http://127.0.0.1:8317
+    description: MG1 本地
+  - url: http://127.0.0.1:8318
+    description: 检索服务本地
+
+paths:
+  /healthz:
+    get:
+      summary: 健康检查（compose 与冒烟脚本依赖）
+      responses:
+        '200':
+          description: 服务健康
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  degraded_to: { type: string, description: 非空即当前处于显式降级态 }
+
+  /v1/chat/complete:
+    post:
+      summary: ChatComplete（MG1 三类调用之一）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role, messages, trace_id]
+              properties:
+                role: { type: string, description: 模型角色名（planner/answerer/decision…） }
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role: { type: string, enum: [system, user, assistant] }
+                      content: { type: string }
+                params:
+                  type: object
+                  properties:
+                    temperature: { type: number }
+                    max_tokens: { type: integer }
+                provider_hint: { type: string, description: 可选强制 provider（演练用） }
+                trace_id: { type: string }
+      responses:
+        '200':
+          description: LlmReply
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [text, model_id, provider, usage, latency_ms, cached, degraded_to]
+                properties:
+                  text: { type: string }
+                  model_id: { type: string }
+                  provider: { type: string }
+                  usage: { type: object, properties: { prompt_tokens: { type: integer }, completion_tokens: { type: integer } } }
+                  latency_ms: { type: integer }
+                  cached: { type: boolean }
+                  degraded_to: { type: string, description: 降级通道；空串表示正常路径 }
+        '503':
+          description: 全链熔断（L4），返回结构化降级页
+
+  /v1/embed:
+    post:
+      summary: Embed（MG1）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, texts, trace_id]
+              properties:
+                role: { type: string }
+                texts: { type: array, items: { type: string } }
+                trace_id: { type: string }
+      responses:
+        '200':
+          description: Embedding
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [vectors, model_id, provider]
+                properties:
+                  vectors: { type: array, items: { type: array, items: { type: number } } }
+                  model_id: { type: string, description: S3 索引-模型绑定键 }
+                  provider: { type: string }
+
+  /v1/rerank:
+    post:
+      summary: Rerank（MG1；ollama provider 无此能力，启动时校验禁冒充）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, query, docs, trace_id]
+              properties:
+                role: { type: string }
+                query: { type: string }
+                docs: { type: array, items: { type: string } }
+                trace_id: { type: string }
+      responses:
+        '200':
+          description: RankedDocs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ranked]
+                properties:
+                  ranked:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        index: { type: integer }
+                        score: { type: number }
+
+  /v1/decide:
+    post:
+      summary: D4 结构化决策（typed question -> 受约束输出）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionRequest' }
+      responses:
+        '200':
+          description: DecisionReply
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionReply' }
+
+  /v1/retrieve:
+    post:
+      summary: Q2 跨文档检索（证据包对 Q3/Q4 只暴露 EvidenceSet）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RetrievalRequest' }
+      responses:
+        '200':
+          description: RetrievalResponse
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetrievalResponse' }
+
+components:
+  schemas:
+    DecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision_id, kind, state, questions, trace_id, schema_version]
+      properties:
+        decision_id: { type: string }
+        kind: { type: string, enum: [y5_triage, q1_route, q3_sufficiency, dq_verdict] }
+        state: { type: object }
+        questions: { type: array, items: { type: object } }
+        trace_id: { type: string }
+        schema_version: { type: string }
+    DecisionReply:
+      type: object
+      additionalProperties: false
+      required: [decision_id, kind, decision, calibrated_prob, decided_by, schema_version]
+      properties:
+        decision_id: { type: string }
+        kind: { type: string }
+        decision: { type: object }
+        calibrated_prob: { type: number }
+        decided_by: { type: string, enum: [jev_api, llm_fallback, rule_fallback, cache] }
+        fallback_reason: { type: string }
+        schema_version: { type: string }
+    RetrievalRequest:
+      type: object
+      additionalProperties: false
+      required: [query_id, query_text, top_k, trace_id, schema_version]
+      properties:
+        query_id: { type: string }
+        query_text: { type: string }
+        top_k: { type: integer, minimum: 1, maximum: 100 }
+        doc_types: { type: array, items: { type: string } }
+        cve_ids: { type: array, items: { type: string } }
+        min_quality: { type: number }
+        trace_id: { type: string }
+        schema_version: { type: string }
+    RetrievalResponse:
+      type: object
+      additionalProperties: false
+      required: [query_id, chunks, retrieval_ms, embedder_model_id, trace_id, schema_version]
+      properties:
+        query_id: { type: string }
+        chunks: { type: array, items: { type: object } }
+        retrieval_ms: { type: integer }
+        embedder_model_id: { type: string }
+        degraded_to: { type: string }
+        trace_id: { type: string }
+        schema_version: { type: string }

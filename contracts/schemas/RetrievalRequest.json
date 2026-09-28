@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/RetrievalRequest.json",
+  "title": "RetrievalRequest",
+  "description": "检索请求（Q2 输入）。Qdrant 混合检索入口。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "query_id",
+    "query_text",
+    "top_k",
+    "trace_id",
+    "schema_version"
+  ],
+  "properties": {
+    "query_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "query_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "top_k": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "doc_types": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "vuln_advisory",
+          "vendor_advisory",
+          "paper",
+          "standard",
+          "policy",
+          "enrichment"
+        ]
+      }
+    },
+    "cve_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "published_after": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "min_quality": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "DQ1 质量分下限，脏数据不入检索"
+    },
+    "trace_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    }
+  }
+}
