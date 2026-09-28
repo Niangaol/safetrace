@@ -1,0 +1,127 @@
+/**
+ * MG1 ModelProfile（contracts/models.yml 的 TS 镜像）。
+ * 纪律：业务代码只认 role 名；切 provider 只改 yml + .env，代码零改动。
+ */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+export type ProviderType = "cache" | "openai_compat";
+export type RoleName = "planner" | "answerer" | "embedder" | "reranker" | "decision";
+
+export interface ModelProfile {
+  role: RoleName;
+  provider: string;
+  model_id: string;
+  model_version: string;
+  max_rpm: number;
+  max_tpm: number;
+  max_concurrency: number;
+  timeout_ms: number;
+  fallback_chain: string[];
+  capability_flags: Record<string, unknown>;
+}
+
+export interface ProviderDef {
+  type: ProviderType;
+  base_url_env?: string;
+  base_url_default?: string;
+  api_key_env?: string;
+  capability_flags?: Record<string, unknown>;
+}
+
+export interface ModelsConfig {
+  version: number;
+  providers: Record<string, ProviderDef>;
+  default_fallback_chain: string[];
+  roles: Record<RoleName, ModelProfile>;
+}
+
+/** 解析 models.yml（无 YAML 库，按本项目配置子集手写解析，零依赖）。 */
+export function loadModelsConfig(path = resolve("config/models.yml")): ModelsConfig {
+  const text = readFileSync(path, "utf8");
+  // 顶层 sections
+  const sections = splitSections(text);
+  const version = Number(text.match(/^version:\s*(\d+)/m)?.[1] ?? 1);
+
+  // default_fallback_chain: [a, b, c]
+  const chainLine = text.match(/^default_fallback_chain:\s*\[([^\]]*)\]/m);
+  const default_fallback_chain = chainLine
+    ? chainLine[1]!.split(",").map((s) => s.trim()).filter(Boolean)
+    : ["cache", "template"];
+
+  // providers 段：缩进两格的 provider 名 -> fields
+  const providers: Record<string, ProviderDef> = {};
+  const provBlock = sections.get("providers") ?? "";
+  for (const m of provBlock.matchAll(/^  ([a-z_]+):.*\n((?:    .*\n?)*)/gm)) {
+    const name = m[1]!;
+    const body = m[2]!;
+    const type = body.match(/type:\s*(\w+)/)?.[1] ?? "cache";
+    providers[name] = {
+      type: type as ProviderType,
+      base_url_env: body.match(/base_url_env:\s*(\S+)/)?.[1],
+      base_url_default: body.match(/base_url_default:\s*(\S+)/)?.[1],
+      api_key_env: body.match(/api_key_env:\s*(\S+)/)?.[1],
+      capability_flags: parseInlineFlags(body),
+    };
+  }
+
+  // roles 段
+  const roles = {} as Record<RoleName, ModelProfile>;
+  const rolesBlock = sections.get("roles") ?? "";
+  for (const m of rolesBlock.matchAll(/^  ([a-z_]+):.*\n((?:    .*\n?)*)/gm)) {
+    const role = m[1] as RoleName;
+    const body = m[2]!;
+    roles[role] = {
+      role,
+      provider: body.match(/provider:\s*(\S+)/)?.[1] ?? "cache",
+      model_id: body.match(/model_id:\s*(\S+)/)?.[1] ?? "unknown",
+      model_version: body.match(/model_version:\s*(\S+)/)?.[1] ?? "v0",
+      max_rpm: Number(body.match(/max_rpm:\s*(\d+)/)?.[1] ?? 600),
+      max_tpm: Number(body.match(/max_tpm:\s*(\d+)/)?.[1] ?? 2000000),
+      max_concurrency: Number(body.match(/max_concurrency:\s*(\d+)/)?.[1] ?? 4),
+      timeout_ms: Number(body.match(/timeout_ms:\s*(\d+)/)?.[1] ?? 30000),
+      fallback_chain: parseChain(body) ?? ["cache", "template"],
+      capability_flags: parseInlineFlags(body),
+    };
+  }
+
+  return { version, providers, default_fallback_chain, roles };
+}
+
+function parseChain(body: string): string[] | undefined {
+  const m = body.match(/fallback_chain:\s*\[([^\]]*)\]/);
+  return m ? m[1]!.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+}
+
+function parseInlineFlags(body: string): Record<string, unknown> {
+  const m = body.match(/capability_flags:\s*\{([^}]*)\}/);
+  if (!m) return {};
+  const out: Record<string, unknown> = {};
+  for (const pair of m[1]!.split(",")) {
+    const [k, v] = pair.split(":").map((s) => s?.trim() ?? "");
+    if (!k) continue;
+    out[k] = v === "true" ? true : v === "false" ? false : v && /^\d+$/.test(v) ? Number(v) : v;
+  }
+  return out;
+}
+
+function splitSections(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let current: string | null = null;
+  const buf: string[] = [];
+  for (const line of text.split("\n")) {
+    const h = line.match(/^([a-z_]+):\s*$/);
+    if (h) {
+      if (current) out.set(current, buf.join("\n"));
+      current = h[1]!;
+      buf.length = 0;
+    } else if (current && (line.startsWith("  ") || line.trim() === "")) {
+      buf.push(line);
+    } else if (current && !line.startsWith(" ")) {
+      out.set(current, buf.join("\n"));
+      current = null;
+    }
+  }
+  if (current) out.set(current, buf.join("\n"));
+  return out;
+}
