@@ -1,0 +1,32 @@
+# 依赖与构建
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 密钥与本地配置（严禁入库）
+.env
+.env.local
+!.env.example
+
+# 本地数据（SQLite/Qdrant/Langfuse 运行产物）
+*.sqlite
+*.sqlite-*
+*.db
+qdrant_data/
+.langfuse/
+ops/data/
+data/
+
+# 运行日志与临时
+*.log
+tmp/
+.DS_Store
+Thumbs.db
+
+# 测试与覆盖率
+coverage/
+.nyc_output/
+
+# 演示录像与交件材料不进仓库（体积大且含脱敏审校流程）
+*.mp4
+ recordings/

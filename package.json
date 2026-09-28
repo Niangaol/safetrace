@@ -1,0 +1,34 @@
+{
+  "name": "safetrace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SafeTrace · 智能体驱动的 AI 安全知识情报系统（中国电子杯 赛题九）P0 骨架",
+  "license": "UNLICENSED",
+  "type": "module",
+  "workspaces": [
+    "src/shared",
+    "src/gateway",
+    "src/ingest",
+    "src/enrich",
+    "src/qa"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "validate:contracts": "python scripts/validate_contracts.py",
+    "check": "npm run typecheck && npm run test && npm run validate:contracts",
+    "smoke": "tsx scripts/smoke.ts",
+    "gateway:serve": "tsx src/gateway/src/server.ts",
+    "qa:serve": "tsx src/qa/src/server.ts",
+    "cli:ask": "tsx src/qa/src/cli.ts",
+    "new-branch": "bash scripts/new-branch.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}

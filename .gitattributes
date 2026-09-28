@@ -1,0 +1,12 @@
+# 统一 LF；二进制与 Office 产物不参与文本规范化
+* text=auto eol=lf
+
+*.docx binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.mp4 binary
+*.zip binary
+*.sqlite binary
