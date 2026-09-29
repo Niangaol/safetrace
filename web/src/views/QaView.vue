@@ -74,6 +74,35 @@ const finished = computed(() => reachedStages.value.has('done'))
 /** 结构化后的答案块：用于突出关键内容（标题/引用号/硬事实/动作词） */
 const answerBlocks = computed(() => parseAnswer(qa.answer))
 
+/**
+ * 折叠状态（模仿 opencode 的"次要内容默认收起"）。
+ * - 答案段落：只默认展开「结论 / 建议动作」这类先要看的，其余收起；
+ * - 执行轨迹：默认收起成一行摘要（展开才看每一步）。
+ * 用 Set 记录"被手动切换过"的段落，避免重渲染时丢掉用户的选择。
+ */
+const expandedSections = ref<Set<number>>(new Set())
+const toggledSections = ref<Set<number>>(new Set())
+
+function isSectionOpen(index: number, collapsedByDefault: boolean): boolean {
+  if (toggledSections.value.has(index)) return expandedSections.value.has(index)
+  return !collapsedByDefault
+}
+function toggleSection(index: number, collapsedByDefault: boolean) {
+  const nextExpanded = new Set(expandedSections.value)
+  const nextToggled = new Set(toggledSections.value)
+  const currentlyOpen = isSectionOpen(index, collapsedByDefault)
+  if (currentlyOpen) nextExpanded.delete(index)
+  else nextExpanded.add(index)
+  nextToggled.add(index)
+  expandedSections.value = nextExpanded
+  toggledSections.value = nextToggled
+}
+/** 答案换新时清空折叠选择（否则新答案会继承旧答案的开关状态） */
+function resetSectionState() {
+  expandedSections.value = new Set()
+  toggledSections.value = new Set()
+}
+
 /** 当前被点中的引用编号，用于把对应证据也高亮出来 */
 const activeRef = ref<string | null>(null)
 
@@ -88,7 +117,7 @@ const isSample = ref(false)
  *   - 每步显示 工具名 / 入参摘要 / 结果 / **该步耗时**（由相邻两步时间差算出）；
  *   - 正在执行的那步有活动指示，失败的步标红，不隐藏。
  */
-const showTrace = ref(true)
+const showTrace = ref(false)
 
 /** 每步耗时：用"下一步开始"或"自身结束"减去"自身开始" */
 const traceRows = computed(() =>
@@ -163,6 +192,7 @@ const retrieveRounds = computed(() => qa.stages.filter((s) => s.stage === 'retri
 async function submit(q?: string) {
   const text = (q ?? question.value).trim()
   if (!text || qa.thinking) return
+  resetSectionState()
   qa.ask(text)
   question.value = ''
 }
@@ -425,36 +455,52 @@ onMounted(async () => {
       -->
       <div v-if="hasAnswer" class="answer-body">
         <div v-for="(block, bi) in answerBlocks" :key="bi" class="ans-block">
-          <div v-if="block.heading" class="ans-heading">{{ block.heading }}</div>
-          <p v-for="(line, li) in block.lines" :key="`l-${li}`" class="ans-line">
-            <template v-for="(t, ti) in line" :key="`t-${ti}`">
-              <button
-                v-if="t.kind === 'citation'"
-                class="cite-chip"
-                :class="{ active: activeRef === t.ref }"
-                :title="`跳到证据 ${t.ref}`"
-                @click="focusRef(t.ref!)"
-              >
-                {{ t.text }}
-              </button>
-              <span v-else :class="tokenClass(t)">{{ t.text }}</span>
-            </template>
-          </p>
-          <ul v-if="block.bullets?.length" class="ans-bullets">
-            <li v-for="(b, li) in block.bullets" :key="`b-${li}`">
-              <template v-for="(t, ti) in b" :key="`bt-${ti}`">
+          <!-- 段落标题可点击折叠：次要段落默认收起，只留结论/建议动作展开 -->
+          <button
+            v-if="block.heading"
+            class="ans-heading"
+            :class="{ collapsed: !isSectionOpen(bi, block.collapsedByDefault) }"
+            :title="isSectionOpen(bi, block.collapsedByDefault) ? '点击收起' : '点击展开'"
+            @click="toggleSection(bi, block.collapsedByDefault)"
+          >
+            <span class="ans-caret">{{ isSectionOpen(bi, block.collapsedByDefault) ? '▾' : '▸' }}</span>
+            {{ block.heading }}
+            <span v-if="!isSectionOpen(bi, block.collapsedByDefault)" class="ans-count">
+              {{ block.lineCount }} 行 · 点击展开
+            </span>
+          </button>
+
+          <template v-if="isSectionOpen(bi, block.collapsedByDefault)">
+            <p v-for="(line, li) in block.lines" :key="`l-${li}`" class="ans-line">
+              <template v-for="(t, ti) in line" :key="`t-${ti}`">
                 <button
                   v-if="t.kind === 'citation'"
                   class="cite-chip"
                   :class="{ active: activeRef === t.ref }"
+                  :title="`跳到证据 ${t.ref}`"
                   @click="focusRef(t.ref!)"
                 >
                   {{ t.text }}
                 </button>
                 <span v-else :class="tokenClass(t)">{{ t.text }}</span>
               </template>
-            </li>
-          </ul>
+            </p>
+            <ul v-if="block.bullets?.length" class="ans-bullets">
+              <li v-for="(b, li) in block.bullets" :key="`b-${li}`">
+                <template v-for="(t, ti) in b" :key="`bt-${ti}`">
+                  <button
+                    v-if="t.kind === 'citation'"
+                    class="cite-chip"
+                    :class="{ active: activeRef === t.ref }"
+                    @click="focusRef(t.ref!)"
+                  >
+                    {{ t.text }}
+                  </button>
+                  <span v-else :class="tokenClass(t)">{{ t.text }}</span>
+                </template>
+              </li>
+            </ul>
+          </template>
         </div>
       </div>
       <div v-else class="muted" style="padding: 16px; font-size: 12px">
@@ -572,9 +618,11 @@ onMounted(async () => {
 .ans-block { margin-bottom: 12px; }
 .ans-block:last-child { margin-bottom: 0; }
 
-/* 段落标题：结论 / 依据 / 推理链 / 建议动作 */
+/* 段落标题：结论 / 依据 / 推理链 / 建议动作。可点击折叠 */
 .ans-heading {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   margin-bottom: 4px;
   padding: 1px 8px;
   border-radius: 5px;
@@ -584,7 +632,18 @@ onMounted(async () => {
   color: #7dd3fc;
   background: rgba(56, 189, 248, 0.12);
   border: 1px solid rgba(56, 189, 248, 0.28);
+  cursor: pointer;
+  transition: background 0.15s;
 }
+.ans-heading:hover { background: rgba(56, 189, 248, 0.22); }
+/* 收起的段落弱化，让展开的结论更突出 */
+.ans-heading.collapsed {
+  color: #94a3b8;
+  background: rgba(100, 116, 139, 0.12);
+  border-color: rgba(100, 116, 139, 0.3);
+}
+.ans-caret { font-size: 10px; opacity: 0.85; }
+.ans-count { font-weight: 400; font-size: 10px; opacity: 0.7; }
 
 .ans-line { margin: 0 0 4px; }
 .ans-bullets { margin: 2px 0 6px; padding-left: 18px; }

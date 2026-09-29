@@ -89,6 +89,19 @@ for (const probe of ['修复版本', 'SandboxedEnvironment', 'CISA KEV', '反向
   if (!rebuilt.includes(probe)) problems.push(`重建文本丢失内容「${probe}」`)
 }
 
+// 6) 折叠策略：结论/建议动作默认展开，依据/推理链默认收起
+const openByDefault = blocks.filter((b) => !b.collapsedByDefault).map((b) => b.heading)
+const closedByDefault = blocks.filter((b) => b.collapsedByDefault).map((b) => b.heading)
+console.log('默认展开:', openByDefault)
+console.log('默认收起:', closedByDefault)
+if (!openByDefault.includes('结论')) problems.push('「结论」应默认展开')
+if (!openByDefault.includes('建议动作')) problems.push('「建议动作」应默认展开')
+if (!closedByDefault.includes('依据')) problems.push('「依据」应默认收起')
+// 每段都要有行数，折叠时才能显示"共 N 行"
+for (const b of blocks) {
+  if (!b.lineCount) problems.push(`段落「${b.heading ?? '(无标题)'}」缺少 lineCount`)
+}
+
 if (problems.length) {
   console.log('发现问题：')
   for (const p of problems) console.log('  -', p)

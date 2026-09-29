@@ -103,8 +103,10 @@ export async function getJson<T>(
     if (MOCK_MODE === 'auto' && isBackendUnavailable(status)) {
       markMock(
         status === 0
-          ? '后端不可达（fetch 失败）'
-          : `后端未提供该数据（HTTP ${status}）`,
+          ? // 说清"谁"连不上：这里指**本项目的 API 服务**（默认 127.0.0.1:8000），不是数据库。
+            // 原先写"后端不可达"容易被读成"数据库挂了"（实测确实产生过误解）。
+            'API 服务未启动或不可达（默认 127.0.0.1:8000）'
+          : `API 未提供该数据（HTTP ${status}）`,
       )
       return mockGet<T>(path, params)
     }
@@ -129,7 +131,11 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   } catch (e) {
     const status = (e as Error & { status?: number }).status ?? 0
     if (MOCK_MODE === 'auto' && isBackendUnavailable(status)) {
-      markMock(status === 0 ? '后端不可达（fetch 失败）' : `后端未提供该接口（HTTP ${status}）`)
+      markMock(
+        status === 0
+          ? 'API 服务未启动或不可达（默认 127.0.0.1:8000）'
+          : `API 未提供该接口（HTTP ${status}）`,
+      )
       return mockPost<T>()
     }
     throw e
@@ -163,7 +169,7 @@ export function streamChat(
       if (!res.ok || !res.body) {
         // 后端没实现问答端点时回退到预置回答（同样显式标注来源）
         if (MOCK_MODE === 'auto' && isBackendUnavailable(res.status)) {
-          markMock(`后端未提供问答接口（HTTP ${res.status}）`)
+          markMock(`API 未提供问答接口（HTTP ${res.status}）`)
           mockStreamChat(body as { question?: string }, onEvent)
           return
         }
@@ -200,7 +206,7 @@ export function streamChat(
       if ((e as Error).name === 'AbortError') return
       const status = (e as Error & { status?: number }).status ?? 0
       if (MOCK_MODE === 'auto' && status === 0) {
-        markMock('后端不可达（问答流失败），已改用预置回答')
+        markMock('API 服务不可达（问答流失败），已改用预置回答')
         mockStreamChat(body as { question?: string }, onEvent)
         return
       }

@@ -48,14 +48,6 @@ function cov(v: number | null | undefined): string {
         <line x1="125" y1="110" x2="175" y2="110" stroke="#2a4060" stroke-width="3" stroke-dasharray="6 4" class="pipe" />
         <line x1="285" y1="110" x2="335" y2="110" stroke="#2a4060" stroke-width="3" stroke-dasharray="6 4" class="pipe" />
         <line x1="695" y1="110" x2="745" y2="110" stroke="#2a4060" stroke-width="3" stroke-dasharray="6 4" class="pipe" />
-        <line x1="855" y1="110" x2="860" y2="110" stroke="#2a4060" stroke-width="3" stroke-dasharray="6 4" class="pipe" />
-      </g>
-
-      <!-- ═══ Flowing particles ═══ -->
-      <g class="particles">
-        <circle cx="0" cy="110" r="2.5" fill="#38bdf8" class="particle p1" />
-        <circle cx="0" cy="110" r="2.5" fill="#818cf8" class="particle p2" />
-        <circle cx="0" cy="110" r="2.5" fill="#a78bfa" class="particle p3" />
       </g>
 
       <!-- ═══ STAGE 1: Y-line ═══ -->
@@ -132,10 +124,10 @@ function cov(v: number | null | undefined): string {
         <rect x="20" y="118" width="320" height="3" rx="1.5" fill="#818cf8" opacity="0.7" class="evidence-fill" />
         <text x="180" y="136" text-anchor="middle" fill="#22c55e" font-size="8" font-weight="600" font-family="JetBrains Mono">evidence chain: 100% · 7/7 dims</text>
 
-        <!-- data flow strip -->
-        <rect x="20" y="148" width="320" height="8" rx="4" fill="#0a0f1a" stroke="#1e2d44" />
-        <g class="flow-strip"><rect x="0" y="0" width="10" height="8" rx="2" fill="#818cf8" opacity="0.6" /></g>
-        <g class="flow-strip2"><rect x="0" y="0" width="10" height="8" rx="2" fill="#38bdf8" opacity="0.6" /></g>
+        <!-- data flow strip（条内带动效；位移只走 X，见样式注释） -->
+        <rect x="20" y="170" width="320" height="8" rx="4" fill="#0a0f1a" stroke="#1e2d44" />
+        <g class="flow-strip"><rect x="0" y="170" width="10" height="8" rx="2" fill="#818cf8" opacity="0.6" /></g>
+        <g class="flow-strip2"><rect x="0" y="170" width="10" height="8" rx="2" fill="#38bdf8" opacity="0.6" /></g>
 
         <!-- status badges -->
         <g font-family="JetBrains Mono" font-size="7">
@@ -197,20 +189,6 @@ function cov(v: number | null | undefined): string {
 .pipe { animation: dashFlow 0.8s linear infinite; }
 @keyframes dashFlow { to { stroke-dashoffset: -10; } }
 
-/* flowing particles */
-.particle.p1 { animation: particleMove 4s linear infinite; }
-.particle.p2 { animation: particleMove 4s linear infinite; animation-delay: 1.3s; }
-.particle.p3 { animation: particleMove 4s linear infinite; animation-delay: 2.6s; }
-@keyframes particleMove {
-  0%   { transform: translateX(125px); opacity: 0; }
-  5%   { opacity: 1; }
-  18%  { transform: translateX(285px); }
-  38%  { transform: translateX(695px); }
-  55%  { transform: translateX(855px); }
-  95%  { opacity: 1; }
-  100% { transform: translateX(860px); opacity: 0; }
-}
-
 /* station lights */
 .station-light { animation: stationPulse 2s ease-in-out infinite; }
 @keyframes stationPulse {
@@ -229,13 +207,17 @@ function cov(v: number | null | undefined): string {
   100% { transform: scaleX(1); opacity: 0.5; }
 }
 
-/* flow strip */
+/* data flow strip
+   注意：位移**只能走 X**。原先的 keyframes 是 `translate(20px, 148px) → translate(330px, 148px)`，
+   而这两个是"面板内模板坐标"，会**叠加**到父分组 `translate(335,20)` 与 rect 自身的 `y` 上，
+   于是实际落在 y≈316 —— 掉到面板下方 100+px，画面上就是几个莫名漂浮的色点。
+   现在只动 X（Y 交给 rect 的 y），位移范围限制在条内 20..310。 */
 .flow-strip { animation: stripMove 3s linear infinite; }
 @keyframes stripMove {
-  0% { transform: translate(20px, 148px); opacity: 0; }
-  10% { opacity: 0.6; }
-  90% { opacity: 0.6; }
-  100% { transform: translate(330px, 148px); opacity: 0; }
+  0%   { transform: translateX(20px); opacity: 0; }
+  10%  { opacity: 0.6; }
+  90%  { opacity: 0.6; }
+  100% { transform: translateX(310px); opacity: 0; }
 }
 .flow-strip2 { animation: stripMove 3s linear infinite; animation-delay: 1.5s; }
 
@@ -277,10 +259,9 @@ function cov(v: number | null | undefined): string {
   50% { opacity: 0.3; }
 }
 
-/* vector dots */
-.vector-dots { animation: vectorFloat 4s ease-in-out infinite; }
-@keyframes vectorFloat {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
-}
+/* vector dots
+   原先这里挂了 `transform: translateY(0→-3px)` 的浮动动画，但该分组同时用
+   SVG 的 `transform="translate(25,130)"` 定位 —— CSS transform 会**覆盖**SVG 属性，
+   于是这组点被拉到 translateY(0) 并丢掉定位，成了又一处位置错乱的浮动点。
+   这里去掉动画，位置由 SVG 属性决定（静态即正确）。 */
 </style>

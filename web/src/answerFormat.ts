@@ -32,7 +32,17 @@ export interface AnswerBlock {
   lines: InlineToken[][]
   /** 列表项（以 - 或数字. 开头） */
   bullets?: InlineToken[][]
+  /** 该段行数（含列表项），用于折叠时显示"共 N 行" */
+  lineCount: number
+  /** 是否默认折叠（只保留最重要的段落展开，其余收起，减少视觉噪音） */
+  collapsedByDefault: boolean
 }
+
+/**
+ * 默认展开的段落：读者最先要看的结论与处置动作。
+ * 其余（依据 / 推理链 / 摘要 …）默认收起 —— 需要核对时再展开，而不是一屏全是字。
+ */
+const PRIMARY_HEADINGS = new Set(['结论', '建议动作', '建议', '风险'])
 
 /** 在 LLM 输出里被高频使用的"硬事实"模式 —— 这些最值得被眼睛抓住 */
 const VALUE_PATTERNS: { re: RegExp; kind: HighlightKind }[] = [
@@ -134,7 +144,7 @@ export function parseAnswer(answer: string): AnswerBlock[] {
     const para = rawPara.trim()
     if (!para) continue
 
-    const block: AnswerBlock = { lines: [] }
+    const block: AnswerBlock = { lines: [], lineCount: 0, collapsedByDefault: false }
     for (const rawLine of para.split('\n')) {
       const line = rawLine.trim()
       if (!line) continue
@@ -147,26 +157,37 @@ export function parseAnswer(answer: string): AnswerBlock[] {
         } else {
           // 同一段里出现第二个标题：另起一块，避免两段挤在一起
           blocks.push(block)
-          const next: AnswerBlock = { heading: heading[1], lines: [] }
-          if (heading[2]) next.lines.push(tokenizeInline(heading[2]))
+          const next: AnswerBlock = { heading: heading[1], lines: [], lineCount: 0, collapsedByDefault: false }
+          if (heading[2]) {
+            next.lines.push(tokenizeInline(heading[2]))
+            next.lineCount++
+          }
           blocks.push(next)
           continue
         }
-        if (heading[2]) block.lines.push(tokenizeInline(heading[2]))
+        if (heading[2]) {
+          block.lines.push(tokenizeInline(heading[2]))
+          block.lineCount++
+        }
         continue
       }
 
       const bullet = /^(?:[-*•]|\d+[.)])\s+(.*)$/.exec(line)
       if (bullet) {
         block.bullets = [...(block.bullets ?? []), tokenizeInline(bullet[1])]
+        block.lineCount++
         continue
       }
 
       // 行内 `**粗体**` 去标记但保留文字（加粗语义交给高亮类别表达）
       block.lines.push(tokenizeInline(line.replace(/\*\*(.+?)\*\*/g, '$1')))
+      block.lineCount++
     }
 
-    if (block.lines.length || block.bullets?.length || block.heading) blocks.push(block)
+    if (block.lines.length || block.bullets?.length || block.heading) {
+      block.collapsedByDefault = !!block.heading && !PRIMARY_HEADINGS.has(block.heading)
+      blocks.push(block)
+    }
   }
   return blocks
 }
