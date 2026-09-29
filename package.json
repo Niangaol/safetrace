@@ -18,13 +18,14 @@
   "scripts": {
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json",
-    "validate:contracts": "python scripts/validate_contracts.py",
+    "validate:contracts": "PY=$(command -v python3 || command -v python) && \"$PY\" scripts/validate_contracts.py",
     "check": "npm run typecheck && npm run test && npm run validate:contracts",
     "smoke": "tsx scripts/smoke.ts",
     "gateway:serve": "tsx src/gateway/src/server.ts",
     "qa:serve": "tsx src/qa/src/server.ts",
     "cli:ask": "tsx src/qa/src/cli.ts",
-    "new-branch": "bash scripts/new-branch.sh"
+    "new-branch": "bash scripts/new-branch.sh",
+    "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/commit-msg .githooks/pre-push"
   },
   "devDependencies": {
     "@types/node": "^24",
