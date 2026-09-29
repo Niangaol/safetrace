@@ -26,7 +26,10 @@ class Settings(BaseSettings):
 
     # ---- LLM 路由 ----
     llm_provider: str = "deepseek"
-    llm_flash_model: str = "deepseek-v4-flash"
+    # 模型 ID **必须**用服务端真实存在的名字。2026-09-29 实测
+    # `GET https://api.deepseek.com/models` 返回的 id 是 `deepseek-flash` 与 `deepseek-v4-pro`；
+    # 原先这里写 `deepseek-v4-flash`（不存在的 ID），一旦配好 key 走 flash 档就会被 400 顶回来。
+    llm_flash_model: str = "deepseek-flash"
     llm_pro_model: str = "deepseek-v4-pro"
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com"

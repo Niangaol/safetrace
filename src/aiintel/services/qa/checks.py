@@ -42,7 +42,9 @@ async def check_answer(question: str, answer: str, evidence: list[Any]) -> dict:
             {"role": "user", "content": f"问题：{question}\n\n证据：\n{context}\n\n回答：{answer}"},
         ],
         task="judge",
-        max_tokens=500,
+        # 同 qa.plan：思维 token 计入 completion，500 会被推理吃满导致 content 为空
+        # （实测 reasoning_tokens=500、finish_reason=length），自检因此永远解析失败。
+        max_tokens=2500,
         node="qa.check",
         agent="QAAgent",
     )

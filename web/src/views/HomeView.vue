@@ -6,6 +6,27 @@ import { getJson } from '../api'
 import SystemFactory from '../components/SystemFactory.vue'
 import type { CollectStatus, MetricsOverview } from '../types'
 
+/** 智能体运行记录（GET /agents/runs 的真实字段） */
+interface AgentRun {
+  id: string
+  graph: string
+  trigger: string
+  state: string
+  tokens: number
+  cost_cny: number
+  latency_ms: number
+  error: string | null
+  created_at: string | null
+}
+
+/** 工具注册表（GET /agents/tools 的真实字段） */
+interface AgentTool {
+  name: string
+  description: string
+  permission: string
+  cost_tier: string
+}
+
 const features = [
   { icon: 'M3 3h7v7H3V3zm0 11h7v7H3v-7zm11-11h7v7h-7V3zm0 11h7v7h-7v-7z', title: '态势大屏', desc: '实时监控威胁情报采集、富化与成本指标', to: '/dashboard' },
   { icon: 'M12 2l9 4v6c0 5.5-3.8 10.7-9 12-5.2-1.3-9-6.5-9-12V6l9-4z', title: '情报列表', desc: '全量漏洞情报检索、多维度筛选与排序', to: '/intel' },
@@ -17,18 +38,21 @@ const features = [
 // 对不上——导航栏显示"实时数据"而正文写死假数字，是最容易被评委一眼验伪的矛盾。
 const metrics = ref<MetricsOverview | null>(null)
 const status = ref<CollectStatus | null>(null)
+/** 智能体运行记录与工具注册表：也都是真实接口，不是写死的名字 */
+const runs = ref<AgentRun[]>([])
+const tools = ref<AgentTool[]>([])
 
 onMounted(async () => {
-  try {
-    const [m, s] = await Promise.all([
-      getJson<MetricsOverview>('/metrics/overview'),
-      getJson<CollectStatus>('/collect/status'),
-    ])
-    metrics.value = m
-    status.value = s
-  } catch {
-    // 取不到就显示占位符，而不是编一个好看的假数字
-  }
+  const results = await Promise.allSettled([
+    getJson<MetricsOverview>('/metrics/overview'),
+    getJson<CollectStatus>('/collect/status'),
+    getJson<{ items: AgentRun[] }>('/agents/runs'),
+    getJson<{ tools: AgentTool[] }>('/agents/tools'),
+  ])
+  if (results[0].status === 'fulfilled') metrics.value = results[0].value
+  if (results[1].status === 'fulfilled') status.value = results[1].value
+  if (results[2].status === 'fulfilled') runs.value = results[2].value.items ?? []
+  if (results[3].status === 'fulfilled') tools.value = results[3].value.tools ?? []
 })
 
 const stats = computed(() => {
@@ -42,12 +66,45 @@ const stats = computed(() => {
   ]
 })
 
-const agents = [
-  { name: 'TriageAgent', role: '分流与路由', color: '#38bdf8' },
-  { name: 'EnrichAgent', role: '七维富化', color: '#818cf8' },
-  { name: 'QAAgent', role: '检索问答', color: '#a78bfa' },
-  { name: 'WatchAgent', role: '监控告警', color: '#22c55e' },
-]
+/**
+ * 智能体卡片：名字与颜色是产品定义（稳定的），但**运行数字全部来自 `/agents/runs`**。
+ * `graph` 字段与后端的编排图同名：collect / enrich / qa / alert。
+ */
+const AGENT_META = [
+  { graph: 'collect', name: 'WatchAgent', role: '监测 · 采集与去重', color: '#38bdf8' },
+  { graph: 'enrich', name: 'EnrichAgent', role: '富化 · 七维加工', color: '#818cf8' },
+  { graph: 'qa', name: 'QAAgent', role: '问答 · 检索与合成', color: '#a78bfa' },
+  { graph: 'alert', name: 'AlertAgent', role: '告警 · 分级通知', color: '#22c55e' },
+] as const
+
+const agents = computed(() =>
+  AGENT_META.map((meta) => {
+    const mine = runs.value.filter((r) => r.graph === meta.graph)
+    const done = mine.filter((r) => r.state === 'done').length
+    const failed = mine.filter((r) => r.state === 'error').length
+    const tokens = mine.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
+    const cost = mine.reduce((sum, r) => sum + (r.cost_cny ?? 0), 0)
+    return {
+      ...meta,
+      runs: mine.length,
+      done,
+      failed,
+      tokens,
+      cost,
+      // 没有任何运行记录时如实显示"未运行"，而不是编一个好看的数字
+      state: mine.length === 0 ? 'idle' : failed > 0 ? 'warn' : 'ok',
+      stateLabel: mine.length === 0 ? '未运行' : failed > 0 ? `${failed} 次失败` : '运行正常',
+    }
+  }),
+)
+
+/** 工具注册表：权限与成本档位是"能不能被滥用/烧钱"的关键信息，如实展示 */
+const toolsByTier = computed(() => {
+  const order = ['free', 'flash', 'pro']
+  return [...tools.value].sort(
+    (a, b) => order.indexOf(a.cost_tier) - order.indexOf(b.cost_tier) || a.name.localeCompare(b.name),
+  )
+})
 </script>
 
 <template>
@@ -105,23 +162,59 @@ const agents = [
       <h2 class="section-title">系统运转</h2>
       <p class="section-subtitle">五条流水线循环运行 · 采集 → 分流 → 富化 → 底座 → 问答</p>
       <div class="factory-panel fade-in">
-        <SystemFactory />
+        <SystemFactory
+          :raw-items="metrics?.collect.raw_items ?? null"
+          :vulns="metrics?.collect.vulns ?? null"
+          :merge-ratio="metrics?.collect.merge_ratio ?? null"
+          :coverage-ratio="metrics?.enrich.coverage_ratio ?? null"
+          :chunks="metrics?.knowledge.chunks ?? null"
+        />
       </div>
     </section>
 
     <!-- agents -->
     <section class="agents-section">
-      <h2 class="section-title">智能体架构</h2>
-      <p class="section-subtitle">四条并行线协同工作，LangGraph 状态机编排</p>
+      <h2 class="section-title">智能体与工具</h2>
+      <p class="section-subtitle">
+        四条编排线的运行数字来自 <code>/api/v1/agents/runs</code>，工具权限与成本档位来自
+        <code>/api/v1/agents/tools</code>（无记录时如实显示「未运行」）
+      </p>
       <div class="agents-grid">
-        <div v-for="a in agents" :key="a.name" class="agent-card">
+        <div v-for="a in agents" :key="a.graph" class="agent-card">
           <div class="agent-dot" :style="{ background: a.color, boxShadow: `0 0 12px ${a.color}` }"></div>
           <div class="agent-info">
             <span class="agent-name">{{ a.name }}</span>
             <span class="agent-role">{{ a.role }}</span>
+            <span class="agent-metrics">
+              运行 {{ a.runs }} 次 · 成功 {{ a.done }} · 失败 {{ a.failed }} ·
+              {{ a.tokens.toLocaleString() }} tok · ¥{{ a.cost.toFixed(4) }}
+            </span>
           </div>
+          <span class="agent-state" :class="a.state">{{ a.stateLabel }}</span>
         </div>
       </div>
+
+      <details v-if="toolsByTier.length" class="tools-panel">
+        <summary>
+          已注册工具 {{ toolsByTier.length }} 个（权限 <code>internal</code>；成本档位决定走哪个模型）
+        </summary>
+        <table class="tools-table">
+          <thead>
+            <tr><th>工具</th><th>说明</th><th>成本档位</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in toolsByTier" :key="t.name">
+              <td><code>{{ t.name }}</code></td>
+              <td class="muted">{{ t.description }}</td>
+              <td>
+                <span class="badge" :class="t.cost_tier === 'free' ? 'low' : t.cost_tier === 'pro' ? 'critical' : 'medium'">
+                  {{ t.cost_tier }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </details>
     </section>
 
     <!-- pipeline -->
@@ -404,6 +497,43 @@ const agents = [
   50% { opacity: 0.4; }
 }
 .agent-info { display: flex; flex-direction: column; }
+.agent-metrics {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 3px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.agent-state {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.agent-state.ok { color: #22c55e; background: rgba(34, 197, 94, 0.1); border-color: rgba(34, 197, 94, 0.3); }
+.agent-state.warn { color: #f59e0b; background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.3); }
+.agent-state.idle { color: #64748b; background: rgba(100, 116, 139, 0.1); border-color: rgba(100, 116, 139, 0.3); }
+
+.tools-panel {
+  margin-top: 14px;
+  background: #131c2e;
+  border: 1px solid #1e2d44;
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.tools-panel summary { cursor: pointer; font-size: 13px; color: #94a3b8; }
+.tools-panel summary code { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.tools-table { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 12px; }
+.tools-table th {
+  text-align: left;
+  color: #64748b;
+  font-weight: 500;
+  padding: 6px 8px;
+  border-bottom: 1px solid #1e2d44;
+}
+.tools-table td { padding: 6px 8px; border-bottom: 1px solid #16213a; vertical-align: top; }
+.tools-table code { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #7dd3fc; }
 .agent-name {
   font-size: 13px;
   font-weight: 600;

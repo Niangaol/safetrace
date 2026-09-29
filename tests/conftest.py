@@ -14,7 +14,18 @@ os.environ.setdefault("APP_ENV", "dev")
 os.environ.setdefault("API_TOKEN", "")
 os.environ.setdefault("COST_DAILY_BUDGET_CNY", "1000")
 os.environ.setdefault("LLM_API_KEY", "")
+# 测试必须与开发者本机 .env 无关：`test_llm_router.py` 有 3 条用例**专门验证本地兜底**
+# （云端 HTTP 失败 / 预算耗尽 / 流式降级）。若本机 .env 写了 LLM_LOCAL_ENABLED=false
+# （本机没装 Ollama 时最自然的写法），这 3 条会因"没有可用的 LLM 后端"直接报错。
+# 这里给测试固定为 true；真实演示跑时仍以 .env 为准。
+os.environ.setdefault("LLM_LOCAL_ENABLED", "true")
 os.environ.setdefault("POSTGRES_DSN", "postgresql+psycopg://intel:intel@localhost:5432/intel")
+# ⚠️ REDIS_URL 必须有个**非空**默认值，否则测试结果会随开发者本机 .env 变化。
+# `REDIS_URL=""`（本机没 Redis 时最自然的写法）会让 EventBus 走「事件总线已禁用」分支并
+# **丢弃全部事件**，于是所有断言"发布了哪些事件 / 因果链"的用例集体失败（实测 12 条）。
+# 这里给一个指向本地的值即可：用例都注入 FakeRedis，不会真连；
+# 关键只是让 bus 处于"启用"状态，测试才是确定的。
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 
 @pytest.fixture()

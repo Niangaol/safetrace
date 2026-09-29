@@ -1,5 +1,36 @@
 <script setup lang="ts">
 // Pure SVG + CSS — abstract data flow pipeline
+//
+// 图上这几个数字**必须由外部传入真实指标**：先前是写死的（5,230 items / 75.4% merge /
+// 1,284 deduped / 96% cov / 8,492 chunks），与库里真实值（22 / 40.9% / 13 / 100%）对不上，
+// 也和首页顶部已经接了真实接口的数字自相矛盾 —— 一眼就能被验伪。
+const props = withDefaults(
+  defineProps<{
+    rawItems?: number | null
+    vulns?: number | null
+    mergeRatio?: number | null
+    coverageRatio?: number | null
+    chunks?: number | null
+  }>(),
+  {
+    rawItems: null,
+    vulns: null,
+    mergeRatio: null,
+    coverageRatio: null,
+    chunks: null,
+  },
+)
+
+/** 数字取不到时显示 "—"，不编造。 */
+function n(v: number | null | undefined): string {
+  return v === null || v === undefined ? '—' : v.toLocaleString()
+}
+function pct(v: number | null | undefined): string {
+  return v === null || v === undefined ? '—' : `${(v * 100).toFixed(1)}%`
+}
+function cov(v: number | null | undefined): string {
+  return v === null || v === undefined ? '—' : `${(v * 100).toFixed(0)}%`
+}
 </script>
 
 <template>
@@ -49,7 +80,7 @@
 
         <rect x="14" y="150" width="82" height="4" rx="2" fill="#1e2d44" />
         <rect x="14" y="150" width="82" height="4" rx="2" fill="#38bdf8" opacity="0.7" class="meter-fill" />
-        <text x="55" y="168" text-anchor="middle" fill="#38bdf8" font-size="8" font-weight="600" font-family="JetBrains Mono">5,230 items</text>
+        <text x="55" y="168" text-anchor="middle" fill="#38bdf8" font-size="8" font-weight="600" font-family="JetBrains Mono">{{ n(props.rawItems) }} items</text>
       </g>
 
       <!-- ═══ STAGE 2: Triage ═══ -->
@@ -66,11 +97,11 @@
         <rect x="68" y="103" width="22" height="3" rx="1.5" fill="#22c55e" class="ch-bar c3" />
 
         <text x="55" y="128" text-anchor="middle" fill="#64748b" font-size="7" font-family="JetBrains Mono">hash + SimHash</text>
-        <text x="55" y="148" text-anchor="middle" fill="#22c55e" font-size="9" font-weight="600" font-family="JetBrains Mono">75.4% merge</text>
+        <text x="55" y="148" text-anchor="middle" fill="#22c55e" font-size="9" font-weight="600" font-family="JetBrains Mono">{{ pct(props.mergeRatio) }} merge</text>
 
         <rect x="14" y="160" width="82" height="4" rx="2" fill="#1e2d44" />
         <rect x="14" y="160" width="82" height="4" rx="2" fill="#a78bfa" opacity="0.6" class="meter-fill2" />
-        <text x="55" y="176" text-anchor="middle" fill="#a78bfa" font-size="7" font-weight="600" font-family="JetBrains Mono">1,284 deduped</text>
+        <text x="55" y="176" text-anchor="middle" fill="#a78bfa" font-size="7" font-weight="600" font-family="JetBrains Mono">{{ n(props.vulns) }} deduped</text>
       </g>
 
       <!-- ═══ STAGE 3: F-line (Enrichment) ═══ -->
@@ -109,7 +140,7 @@
         <!-- status badges -->
         <g font-family="JetBrains Mono" font-size="7">
           <rect x="20" y="166" width="64" height="11" rx="3" fill="#0a0f1a" stroke="#22c55e" stroke-width="0.5" opacity="0.8" />
-          <text x="52" y="174" text-anchor="middle" fill="#22c55e">96% cov</text>
+          <text x="52" y="174" text-anchor="middle" fill="#22c55e">{{ cov(props.coverageRatio) }} cov</text>
           <rect x="92" y="166" width="66" height="11" rx="3" fill="#0a0f1a" stroke="#eab308" stroke-width="0.5" opacity="0.8" />
           <text x="125" y="174" text-anchor="middle" fill="#eab308">◇ mock F2</text>
           <rect x="166" y="166" width="70" height="11" rx="3" fill="#0a0f1a" stroke="#ff8800" stroke-width="0.5" opacity="0.8" />
@@ -140,7 +171,7 @@
           <circle cx="55" cy="6" r="1.5" fill="#818cf8" />
         </g>
 
-        <text x="55" y="160" text-anchor="middle" fill="#22c55e" font-size="9" font-weight="600" font-family="JetBrains Mono">8,492 chunks</text>
+        <text x="55" y="160" text-anchor="middle" fill="#22c55e" font-size="9" font-weight="600" font-family="JetBrains Mono">{{ n(props.chunks) }} chunks</text>
         <text x="55" y="174" text-anchor="middle" fill="#475569" font-size="6" font-family="Inter">pgvector · 1024-dim · RRF</text>
       </g>
 

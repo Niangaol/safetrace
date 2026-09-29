@@ -43,6 +43,28 @@ class LLMResult:
     latency_ms: int = 0
     raw: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def truncated(self) -> bool:
+        """是否因 `max_tokens` 用尽被截断。
+
+        **必须能看出来**：本仓用的 deepseek-v4-pro / deepseek-flash 会**强制输出思维链**，
+        思维 token 计入 completion。预算给小了，推理会把额度吃满、`content` 直接是空串，
+        而 HTTP 状态仍是 200 —— 于是表现为"模型没报错，但什么都没返回"，
+        上游只能看到一句 `模型未返回 JSON: `，极难定位（实测踩过）。
+        """
+
+        choices = self.raw.get("choices") or []
+        if not choices:
+            return False
+        return choices[0].get("finish_reason") == "length"
+
+    @property
+    def reasoning_tokens(self) -> int:
+        """思维 token 数（计入 completion，按输出计费）。"""
+
+        details = (self.raw.get("usage") or {}).get("completion_tokens_details") or {}
+        return int(details.get("reasoning_tokens") or 0)
+
     def json(self) -> Any:
         """解析结构化输出，容忍 ```json 包裹。"""
 
@@ -51,6 +73,11 @@ class LLMResult:
             text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
         start, end = text.find("{"), text.rfind("}")
         if start < 0 or end < 0:
+            if self.truncated:
+                raise LLMError(
+                    f"模型输出被 max_tokens 截断，正文为空（思维 token 已用 {self.reasoning_tokens}，"
+                    f"model={self.model}）。请调大 max_tokens，而不是重试。"
+                )
             raise LLMError(f"模型未返回 JSON: {text[:200]}")
         return json.loads(text[start : end + 1])
 

@@ -55,7 +55,12 @@ class QAAgent:
         result = await get_llm().complete(
             [{"role": "system", "content": PLANNER_PROMPT}, {"role": "user", "content": question}],
             task="classify",
-            max_tokens=500,
+            # ⚠️ 不能用 500：deepseek-v4-pro / deepseek-flash 都**强制输出思维链**，
+            # 且思维 token 计入 completion。实测 max_tokens=500 时
+            # 推理直接吃满预算（finish_reason=length、reasoning_tokens=500、content 为空），
+            # 于是规划阶段永远解析失败、静默退化成单查询。
+            # 实测 2000 才留得下正文（reasoning≈1600 + content≈130）。
+            max_tokens=2500,
             node="qa.plan",
             agent="QAAgent",
         )
@@ -155,7 +160,7 @@ class QAAgent:
                 ]
                 buffer: list[str] = []
                 async for piece in get_llm().stream(
-                    messages, task="reason", max_tokens=1600, node="qa.answer"
+                    messages, task="reason", max_tokens=3000, node="qa.answer"
                 ):
                     buffer.append(piece)
                     yield {"event": "token", "text": piece}
@@ -185,7 +190,7 @@ class QAAgent:
                     # 重写前清空已发 token：非流式聚合不应把两版答案拼在一起
                     buffer.clear()
                     async for piece in get_llm().stream(
-                        messages, task="reason", max_tokens=1600, node="qa.rewrite"
+                        messages, task="reason", max_tokens=3000, node="qa.rewrite"
                     ):
                         buffer.append(piece)
                         yield {"event": "token", "text": piece}

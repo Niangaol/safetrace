@@ -747,6 +747,9 @@ def seed(db_path: str) -> dict[str, int]:
         for owner_id, content in CHUNKS:
             n = chunk_no.get(owner_id, 0)
             chunk_no[owner_id] = n + 1
+            # 编号必须进 content：检索匹配的是 chunk.content，而 owner_id 才是 CVE 号
+            # （否则用 CVE 编号提问检索不到自己的切片，见 scripts/reseed_knowledge.py 注释）
+            text_body = f"{owner_id} {content}"
             conn.execute(
                 text(
                     "INSERT INTO chunk (id, owner_type, owner_id, chunk_no, content, tsv, created_at) "
@@ -757,8 +760,8 @@ def seed(db_path: str) -> dict[str, int]:
                     "owner_type": "paper" if owner_id.startswith("arxiv-") else "vuln",
                     "owner_id": owner_id,
                     "chunk_no": n,
-                    "content": content,
-                    "tsv": content,
+                    "content": text_body,
+                    "tsv": text_body,
                     "created_at": _hours_ago(rng.randint(1, 60)),
                 },
             )

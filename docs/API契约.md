@@ -58,7 +58,16 @@ GitHub webhook 接收端（实时链路）。需校验 `X-Hub-Signature-256`。
 ## 3. 漏洞与富化
 
 ### `GET /vulns`
-查询参数：`q`（关键词）、`severity`（逗号分隔）、`ai_risk_category`、`cwe`、`vendor`、`has_poc`(bool)、`published_from` / `published_to`、`enriched`(bool)、`page` / `page_size`、`sort`（`published_at` | `cvss_score` | `fetched_at`）。
+查询参数：`q`（关键词）、`severity`（逗号分隔）、`ai_risk_category`、`cwe`、`vendor`、`has_poc`(bool)、`published_from` / `published_to`、`enriched`(bool)、`page` / `page_size`、
+`sort`（`published_at` | `cvss_score` | `epss` | `kev` | `fetched_at`）。
+
+> **`sort=epss|kev` 是 2026-09-29 夜新增的**：动态优先级（`services/triage.py`）按 **KEV + EPSS + CVSS** 加权，
+> 但这两个字段此前只落库、不外发，前端因此看不到"为什么这条排前面"。现在：
+> - 响应体补 `epss` / `kev` / `kev_due_date` 三个字段；
+> - `sort=epss` 用 `coalesce(epss, -1.0)` 降序，保证"无 EPSS"的条目排在最后
+>   （SQLite 与 PG 对 NULL 在 DESC 下的位置处理不同，必须显式处理）；
+> - 实测同样 13 条数据下 `sort=epss` 与 `sort=cvss_score` 的**首条不同**，
+>   即"CVSS 单因子"与"被利用概率优先"会给出不同结论。
 
 ```jsonc
 {
@@ -71,10 +80,15 @@ GitHub webhook 接收端（实时链路）。需校验 `X-Hub-Signature-256`。
       "severity": "critical",
       "cvss_score": 9.8,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+      // 动态优先级信号（KEV/EPSS 采集器写入；triage 用它们加权）
+      "epss": 0.87,              // 0~1，未来 30 天被利用概率；未覆盖时为 null
+      "kev": true,               // 是否已列入 CISA KEV（真 bool，不是 0/1/None）
+      "kev_due_date": "2026-10-15",  // KEV 官方强制修复截止日，仅 KEV 源提供，否则 null
       "cwe": ["CWE-78"],
       "cpe": ["cpe:2.3:a:vllm:vllm:*:*:*:*:*:*:*:*"],
       "ai_risk_category": "ai_infrastructure",
       "exploit_status": "poc_available",
+      "quality_score": 0.92,      // DQ1 质量闸门输出
       "published_at": "2026-09-20T08:00:00+08:00",
       "fetched_at": "2026-09-20T10:12:00+08:00",
       "collect_latency_seconds": 7920,
@@ -82,7 +96,7 @@ GitHub webhook 接收端（实时链路）。需校验 `X-Hub-Signature-256`。
       "enriched": true
     }
   ],
-  "total": 1284,
+  "total": 13,
   "page": 1,
   "page_size": 20
 }
@@ -169,32 +183,60 @@ GitHub webhook 接收端（实时链路）。需校验 `X-Hub-Signature-256`。
 }
 ```
 
-`stream: true` 响应 `text/event-stream`，事件序列：
+`stream: true` 响应 `text/event-stream`。**帧格式**（`dumps_event()`）：每帧两行，
+`event: <名>` + `data: <整个事件对象的 JSON>` —— 注意 **JSON 里也带一个 `event` 字段**，
+前端解析请以 `data:` 载荷里的 `event` 为准（`event:` 行是同名的冗余，用于调试与 curl 可读性）。
+
+> ⚠️ 实测校准（2026-09-29 夜）：本节的示例原先与实现不一致（`stage` 事件缺 `event` 字段、
+> `citation` 用 `citations` 递增数、`done` 里写 `answer_id`）。下面按
+> `src/aiintel/services/qa/agent.py` 的**实际产出**重写；前端 `api.ts` 的 SSE 解析
+> 也必须按"逐行找 `data:`"来做 —— 早期实现只取每帧第一行，会把这类多行帧整帧丢掉。
 
 ```
 event: stage
-data: {"stage":"rewrite","message":"正在理解问题意图…"}
+data: {"event":"stage","stage":"rewrite","message":"正在理解问题意图…"}
 
 event: stage
-data: {"stage":"retrieve","round":1,"hit":8}
+data: {"event":"stage","stage":"retrieve","round":1,"hit":0}      ← hit 是**当前累计**命中数
 
 event: stage
-data: {"stage":"retrieve","round":2,"hit":5}
+data: {"event":"stage","stage":"retrieve","round":3,"hit":1}
 
 event: citation
-data: {"id":"S1","title":"...","url":"...","score":0.87}
+data: {"event":"citation","id":"S1","title":"vuln:CVE-2026-31001","url":"CVE-2026-31001","score":0.0}
 
 event: token
-data: {"text":"最近影响 vLLM 的高危漏洞包括…"}
+data: {"event":"token","text":"结论：…"}      ← 增量文本，前端累加
 
 event: reasoning
-data: {"step":1,"sub_question":"vLLM 近 30 天高危漏洞有哪些？","finding":"共 3 个，均为 CVSS ≥ 9.0"}
+data: {"event":"reasoning","step":1,"sub_question":"识别与提问相关的漏洞","finding":""}
+
+event: reasoning
+data: {"event":"reasoning","step":2,"sub_question":"汇总其可利用性与影响面","finding":"证据支持"}
 
 event: done
-data: {"session_id":"sess_abc123","answer_id":"ans_01J","elapsed_ms":4200,"citations":7,"cost_cny":0.031,"model":"deepseek-v4-pro","degraded":false}
+data: {"event":"done","session_id":"sess_…","elapsed_ms":25190,"citations":3,
+       "citation_count":3,"model":"deepseek-v4-pro","cost_cny":0.0316,
+       "degraded":false,"reasoning":[{"step":1,"sub_question":"…","finding":"证据支持"}]}
 ```
 
-`stream: false` 时直接返回 `{ "answer": "...", "citations": [...], "reasoning": [...], "elapsed_ms": 4200 }`。
+三条**容易被误读**的地方：
+
+1. **`reasoning` 事件会发两轮**：先在 `token` 段之后发一遍（`finding` 通常为空），
+   自检完成后再发一遍**补全 `finding`**。前端应按 `step` 覆盖而非追加，否则会看到重复步骤。
+2. **`citation.score` 在当前环境恒为 `0.0`** —— 未装 `sentence_transformers` 时检索降级为关键词匹配，
+   没有语义分。这不是 bug，但**不应当**在页面上伪装成有意义的排序分（演示页已注明）。
+3. **`done.reasoning` 也带完整推理链**，可直接以它为准做最终渲染。
+
+`stream: false` 时返回同一个 `done` 事件对象。
+
+**成本实测**：一次问答（8 条证据 + 四段式答案）约 **¥0.03**（`deepseek-v4-pro`）；
+`cost_cny` 为真实计费值，未配 key 走 cache provider 时为 `0.0`。
+
+> ⚠️ **`max_tokens` 陷阱（配好 key 后必读）**：本仓所用模型强制输出思维链，思维 token 计入 `completion`。
+> `max_tokens` 给小了（如 500）时推理会吃满额度、`content` 为空串，**HTTP 仍是 200**，
+> 于是规划/自检静默失败、答案为空。当前取 2500（JSON 类）/ 3000（答案），
+> 并可用 `LLMResult.truncated` / `LLMResult.reasoning_tokens` 判断是否被截断。
 
 `done` 事件中 `degraded=true` 表示当日前端已超预算、本次由本地模型兜底（大屏同步展示降级标识）。
 

@@ -65,12 +65,17 @@ def reseed(db_path: Path, *, edges: bool = True, dry_run: bool = False) -> int:
             for owner_id, content in CHUNKS:
                 n = chunk_no.get(owner_id, 0)
                 chunk_no[owner_id] = n + 1
+                # ⚠️ **必须把编号前缀写进 content**：`CHUNKS` 把 "CVE-2026-31001" 存成
+                # owner_id，而检索是对 `chunk.content` 做匹配。若不前缀，用 CVE 编号提问
+                # 就永远检索不到它自己的切片（实测踩过：问 "CVE-2026-31001 怎么修复"，
+                # 命中的是别的 CVE）。owner_type=='vuln' 时 owner_id 正是用户会输入的检索词。
+                text_body = f"{owner_id} {content}"
                 row = {
                     "id": uuid.uuid4().hex,
                     "owner_type": "paper" if owner_id.startswith("arxiv-") else "vuln",
                     "owner_id": owner_id,
                     "chunk_no": n,
-                    "content": content,
+                    "content": text_body,
                     # tsv 留空：SQLite 没有 to_tsvector，检索侧走 ILIKE 兜底
                     "tsv": None,
                     "created_at": _hours_ago(rng.randint(1, 60)),
