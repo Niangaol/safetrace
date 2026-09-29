@@ -5,6 +5,7 @@
 import { createServer as createHttpServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
+import { ModelGateway } from "@safetrace/gateway";
 import { validateInstance } from "@safetrace/shared";
 import type { RetrievalRequest, SchemaLike } from "@safetrace/shared";
 import { MemoryIndex, QdrantEngine, indexChunks, readFixtureChunks } from "./q2-retrieval.js";
@@ -36,7 +37,27 @@ const RETRIEVAL_REQUEST_SCHEMA: SchemaLike = {
 export async function createDefaultEngine(): Promise<RetrievalEngine> {
   const url = process.env.QDRANT_URL;
   if (url) {
-    return new QdrantEngine({ url, collection: process.env.QDRANT_COLLECTION ?? "safetrace_chunks" });
+    const gateway = new ModelGateway();
+    const profile = gateway.embeddingProfile();
+    const collection = process.env.QDRANT_COLLECTION ?? "safetrace_chunks";
+    const engine = new QdrantEngine({
+      url,
+      collection,
+      api_key: process.env.QDRANT_API_KEY,
+      model_id: profile.model_id,
+      embedding_dim: profile.dimension,
+      embedder: (texts, traceId) => gateway.embed("embedder", texts, traceId),
+    });
+    if (process.env.QDRANT_SEED_FIXTURES === "true") {
+      if (!profile.dimension) throw new Error("QDRANT_SEED_FIXTURES 需要在 embedder capability_flags.dim 配置真实向量维度");
+      await indexChunks(engine, readFixtureChunks(), {
+        collection_name: collection,
+        model_id: profile.model_id,
+        dim: profile.dimension,
+        metric: "cosine",
+      });
+    }
+    return engine;
   }
   const memory = new MemoryIndex();
   await indexChunks(memory, readFixtureChunks(), {

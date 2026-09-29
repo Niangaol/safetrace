@@ -10,8 +10,9 @@ import { readFileSync } from "node:fs";
 import { degrade } from "@safetrace/shared";
 import type { EventBus, EvidenceChunk, FallbackEvent, RetrievalRequest, RetrievalResponse } from "@safetrace/shared";
 
-/** P0 默认嵌入器：特征哈希 256 维（无外部模型依赖，离线可复现）。 */
+/** 仅兼容旧配置/哈希工具；Qdrant 写入必须使用 MG1 provider 返回的真实 embedding。 */
 export const DEFAULT_EMBEDDER_ID = "hash-256";
+export const DEFAULT_LEXICAL_INDEX_ID = "bm25-lite-v1";
 const K1 = 1.2;
 const B = 0.75;
 const QDRANT_TIMEOUT_MS = 5000;
@@ -23,6 +24,15 @@ const CJK_RE = /[\u4e00-\u9fff]+/g;
 export interface RetrievalEngine {
   search(req: RetrievalRequest): Promise<RetrievalResponse>;
 }
+
+export interface EmbeddingResult {
+  vectors: number[][];
+  model_id: string;
+  provider: string;
+  degraded_to: string;
+}
+
+export type EmbeddingFunction = (texts: string[], traceId: string) => Promise<EmbeddingResult>;
 
 /** S3「索引-模型」绑定记录：同名集合换模型必须重建索引（绑定冲突直接抛错）。 */
 export interface CollectionMeta {
@@ -50,7 +60,7 @@ export function tokenize(text: string): string[] {
   return tokens;
 }
 
-/** 特征哈希向量（L2 归一，cosine 口径）。P0 占位嵌入器，MG1 /v1/embed 接线后替换。 */
+/** 旧特征哈希辅助函数仅供兼容性测试；不得写入语义 Qdrant 集合。 */
 export function hashVector(text: string, dim: number): number[] {
   const v = new Array<number>(dim).fill(0);
   for (const t of tokenize(text)) {
@@ -86,7 +96,7 @@ export class MemoryIndex implements IndexableEngine {
   private collections = new Map<string, CollectionMeta>();
 
   constructor(opts: { model_id?: string } = {}) {
-    this.modelId = opts.model_id ?? DEFAULT_EMBEDDER_ID;
+    this.modelId = opts.model_id ?? DEFAULT_LEXICAL_INDEX_ID;
   }
 
   get size(): number {
@@ -119,20 +129,20 @@ export class MemoryIndex implements IndexableEngine {
       const score = this.bm25(doc, qTokens);
       if (score > 0) scored.push({ chunk: doc.chunk, score });
     }
-    // 分数降序；同分按 chunk_id 字典序，保证结果确定性
     scored.sort((a, b) => b.score - a.score || a.chunk.chunk_id.localeCompare(b.chunk.chunk_id));
     const top = scored.slice(0, Math.max(0, req.top_k));
     const max = top.length > 0 ? top[0]!.score : 0;
-    const chunks: EvidenceChunk[] = top.map(({ chunk, score }) => ({
-      ...chunk,
-      score_dense: round4(max > 0 ? score / max : 0),
-      score_rerank: round4(max > 0 ? score / max : 0), // P0 无独立 reranker：MG1 /v1/rerank 接线后替换
-    }));
+    const chunks: EvidenceChunk[] = top.map(({ chunk, score }) => {
+      const indexed = { ...chunk };
+      delete indexed.score_dense;
+      delete indexed.score_rerank;
+      return { ...indexed, score_sparse: round4(max > 0 ? score / max : 0) };
+    });
     return {
       query_id: req.query_id,
       chunks,
       retrieval_ms: Date.now() - t0,
-      embedder_model_id: this.modelId,
+      embedder_model_id: "bm25-lite-v1",
       trace_id: req.trace_id,
       schema_version: req.schema_version,
     };
@@ -198,6 +208,8 @@ export interface QdrantEngineOptions {
   collection?: string;
   api_key?: string;
   model_id?: string;
+  embedding_dim?: number;
+  embedder?: EmbeddingFunction;
   timeout_ms?: number;
   /** degrade 事件出口（fallback.events）；不传则只记 lastDegradedTo */
   bus?: EventBus;
@@ -214,10 +226,13 @@ export class QdrantEngine implements IndexableEngine {
   private readonly memory: MemoryIndex;
   private readonly collections = new Map<string, CollectionMeta>();
   private pendingMeta: CollectionMeta | undefined;
+  private vectorDim: number | undefined;
+  private mirrorReady = false;
 
   constructor(opts: QdrantEngineOptions = {}) {
     this.opts = opts;
     this.modelId = opts.model_id ?? DEFAULT_EMBEDDER_ID;
+    this.vectorDim = opts.embedding_dim;
     this.memory = new MemoryIndex({ model_id: this.modelId });
   }
 
@@ -233,6 +248,9 @@ export class QdrantEngine implements IndexableEngine {
     if (meta.model_id !== this.modelId) {
       throw new Error("S3 绑定冲突：索引模型 " + this.modelId + " 与请求模型 " + meta.model_id + " 不一致（禁止静默混用）");
     }
+    if (!Number.isInteger(meta.dim) || meta.dim <= 0) throw new Error("S3 集合维度必须是正整数");
+    if (this.vectorDim !== undefined && this.vectorDim !== meta.dim) throw new Error("S3 集合维度与 embedder 配置不一致");
+    this.vectorDim = meta.dim;
     this.pendingMeta = meta;
     this.collections.set(meta.collection_name, meta);
   }
@@ -242,46 +260,64 @@ export class QdrantEngine implements IndexableEngine {
     if (process.env.OFFLINE_FIXTURES === "true") {
       return this.degradeTo(req, "fixture", "OFFLINE_FIXTURES=true：离线模式直接回放 fixtures 样本");
     }
-    if (!url) {
-      return this.degradeTo(req, "memory_index", "QDRANT_URL 未配置，向量检索不可用");
-    }
+    if (!url) return this.degradeTo(req, "memory_index", "QDRANT_URL 未配置，向量检索不可用");
     try {
-      const res = await this.qdrantSearch(url, req);
+      const dense = await this.qdrantSearch(url, req);
+      if (!this.mirrorReady || this.memory.size === 0) {
+        this.lastDegradedTo = undefined;
+        return dense;
+      }
+      const sparse = await this.memory.search(req);
+      const hybrid = fuseHybrid(dense.chunks, sparse.chunks, req.top_k);
       this.lastDegradedTo = undefined;
-      return res;
+      return { ...dense, chunks: hybrid };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return this.degradeTo(req, "memory_index", "Qdrant 检索失败（" + msg + "）");
     }
   }
 
-  /** 写入：建集（named vector dense）+ 批量 upsert points；payload 携带契约字段。 */
+    /** 写入双路索引：真实 MG1 embedding 写 Qdrant，BM25 镜像供混合检索和故障降级。 */
   async upsert(chunks: EvidenceChunk[]): Promise<void> {
+    this.memory.upsert(chunks);
+    this.mirrorReady = true;
+    if (chunks.length === 0) return;
     const url = this.opts.url ?? process.env.QDRANT_URL ?? "";
-    if (!url) throw new Error("QDRANT_URL 未配置：无法写入 Qdrant（禁止静默改投 MemoryIndex）");
+    if (!url) throw new Error("QDRANT_URL 未配置：BM25 镜像已保留，但不能写入向量库");
+    const vectors = await this.embedTexts(chunks.map((c) => c.text), "tr_q2_index", this.pendingMeta?.dim);
     const meta = this.pendingMeta ?? {
       collection_name: this.opts.collection ?? process.env.QDRANT_COLLECTION ?? "safetrace_chunks",
       model_id: this.modelId,
-      dim: 256,
+      dim: vectors[0]!.length,
       metric: "cosine" as const,
     };
+    if (vectors[0]!.length !== meta.dim) throw new Error("embedding 维度与 Qdrant 集合元数据不一致");
     const base = url.replace(/\/+$/, "");
     const fetchImpl = this.opts.fetch_impl ?? fetch;
     const signal = AbortSignal.timeout(this.opts.timeout_ms ?? QDRANT_TIMEOUT_MS);
-    const putResp = await fetchImpl(base + "/collections/" + encodeURIComponent(meta.collection_name), {
+    const collectionUrl = base + "/collections/" + encodeURIComponent(meta.collection_name);
+    const createResp = await fetchImpl(collectionUrl, {
       method: "PUT",
       headers: this.headers(),
       body: JSON.stringify({ vectors: { dense: { size: meta.dim, distance: meta.metric } } }),
       signal,
     });
-    if (!putResp.ok) throw new Error("Qdrant 建集失败 HTTP " + putResp.status);
-    const upResp = await fetchImpl(base + "/collections/" + encodeURIComponent(meta.collection_name) + "/points?wait=true", {
+    if (!createResp.ok && createResp.status !== 409) throw new Error("Qdrant 建集失败 HTTP " + createResp.status);
+    if (createResp.status === 409) {
+      const infoResp = await fetchImpl(collectionUrl, { method: "GET", headers: this.headers(), signal });
+      if (!infoResp.ok) throw new Error("Qdrant 已有集合但读取元数据失败 HTTP " + infoResp.status);
+      const info = (await infoResp.json()) as { result?: { config?: { params?: { vectors?: { dense?: { size?: number; distance?: string } } } } } };
+      const existing = info.result?.config?.params?.vectors?.dense;
+      if (existing?.size !== meta.dim) throw new Error("Qdrant 已有集合维度不匹配；必须新建集合并重建索引");
+      if (existing.distance && existing.distance.toLowerCase() !== meta.metric.toLowerCase()) throw new Error("Qdrant 已有集合距离度量不匹配");
+    }
+    const upResp = await fetchImpl(collectionUrl + "/points?wait=true", {
       method: "PUT",
       headers: this.headers(),
       body: JSON.stringify({
-        points: chunks.map((c) => ({
+        points: chunks.map((c, i) => ({
           id: numericId(c.chunk_id),
-          vector: { dense: hashVector(c.text, meta.dim) },
+          vector: { dense: vectors[i]! },
           payload: {
             chunk_id: c.chunk_id,
             doc_type: c.doc_type,
@@ -289,14 +325,15 @@ export class QdrantEngine implements IndexableEngine {
             quality_score: c.quality_score ?? null,
             provenance: c.provenance,
             cve_ids: extractCveIds(c.text),
+            embedding_model_id: this.modelId,
           },
         })),
       }),
       signal,
     });
     if (!upResp.ok) throw new Error("Qdrant 写入失败 HTTP " + upResp.status);
-    this.ensureMemorySeeded();
-    this.memory.upsert(chunks); // 本地镜像：降级时有据可查
+    this.pendingMeta = meta;
+    this.collections.set(meta.collection_name, meta);
   }
 
   private headers(): Record<string, string> {
@@ -307,15 +344,14 @@ export class QdrantEngine implements IndexableEngine {
 
   private async qdrantSearch(url: string, req: RetrievalRequest): Promise<RetrievalResponse> {
     const t0 = Date.now();
-    const collection = this.opts.collection ?? process.env.QDRANT_COLLECTION ?? "safetrace_chunks";
-    const dim = this.pendingMeta?.dim ?? 256;
+    const collection = this.pendingMeta?.collection_name ?? this.opts.collection ?? process.env.QDRANT_COLLECTION ?? "safetrace_chunks";
+    const vectors = await this.embedTexts([req.query_text], req.trace_id, this.pendingMeta?.dim ?? this.vectorDim);
     const body: Record<string, unknown> = {
-      vector: { name: "dense", vector: hashVector(req.query_text, dim) },
+      vector: { name: "dense", vector: vectors[0]! },
       limit: req.top_k,
       with_payload: true,
+      filter: qdrantFilter(req, this.modelId),
     };
-    const filter = qdrantFilter(req);
-    if (filter) body.filter = filter;
     const fetchImpl = this.opts.fetch_impl ?? fetch;
     const resp = await fetchImpl(url.replace(/\/+$/, "") + "/collections/" + encodeURIComponent(collection) + "/points/search", {
       method: "POST",
@@ -336,6 +372,25 @@ export class QdrantEngine implements IndexableEngine {
       trace_id: req.trace_id,
       schema_version: req.schema_version,
     };
+  }
+
+  private async embedTexts(texts: string[], traceId: string, expectedDim?: number): Promise<number[][]> {
+    if (!this.opts.embedder) throw new Error("MG1 embedder 未接入；拒绝用 hash-256 伪装语义向量");
+    const result = await this.opts.embedder(texts, traceId);
+    if (result.model_id === DEFAULT_EMBEDDER_ID) throw new Error("MG1 返回旧 hash-256 占位模型；拒绝写入/查询语义集合");
+    if (result.provider === "cache" || result.degraded_to) throw new Error("MG1 embedding 已降级（" + (result.degraded_to || "cache provider") + "）；拒绝写入/查询语义集合");
+    if (result.model_id !== this.modelId) throw new Error("MG1 embedding model_id 与 Qdrant 集合绑定不一致");
+    if (!Array.isArray(result.vectors) || result.vectors.length !== texts.length) throw new Error("MG1 embedding 返回数量与输入不一致");
+    const dimension = result.vectors[0]?.length ?? 0;
+    if (dimension <= 0 || (expectedDim !== undefined && dimension !== expectedDim)) throw new Error("MG1 embedding 向量维度无效或不匹配");
+    for (const vector of result.vectors) {
+      if (vector.length !== dimension || vector.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+        throw new Error("MG1 embedding 含维度不一致或非有限数值");
+      }
+    }
+    if (this.vectorDim !== undefined && this.vectorDim !== dimension) throw new Error("MG1 embedding 维度与当前集合绑定不一致");
+    this.vectorDim = dimension;
+    return result.vectors;
   }
 
   private async degradeTo(req: RetrievalRequest, degradedOf: string, trigger: string): Promise<RetrievalResponse> {
@@ -364,16 +419,43 @@ export class QdrantEngine implements IndexableEngine {
   }
 
   private ensureMemorySeeded(): void {
-    if (this.memory.size === 0) this.memory.upsert(readFixtureChunks());
+    if (this.memory.size === 0) {
+      this.memory.upsert(readFixtureChunks());
+      this.mirrorReady = false;
+    }
   }
 }
 
-function qdrantFilter(req: RetrievalRequest): Record<string, unknown> | undefined {
-  const must: unknown[] = [];
+export function fuseHybrid(denseChunks: EvidenceChunk[], sparseChunks: EvidenceChunk[], topK: number): EvidenceChunk[] {
+  const rows = new Map<string, { chunk: EvidenceChunk; denseRank?: number; sparseRank?: number }>();
+  denseChunks.forEach((chunk, index) => rows.set(chunk.chunk_id, { chunk, denseRank: index + 1 }));
+  sparseChunks.forEach((chunk, index) => {
+    const row = rows.get(chunk.chunk_id);
+    if (row) {
+      row.chunk = { ...row.chunk, score_sparse: chunk.score_sparse };
+      row.sparseRank = index + 1;
+    } else {
+      rows.set(chunk.chunk_id, { chunk, sparseRank: index + 1 });
+    }
+  });
+  return [...rows.values()]
+    .map(({ chunk, denseRank, sparseRank }) => {
+      const fusedScore = (denseRank === undefined ? 0 : 1 / (60 + denseRank)) + (sparseRank === undefined ? 0 : 1 / (60 + sparseRank));
+      const result = { ...chunk };
+      delete result.score_rerank;
+      return { chunk: result, fusedScore };
+    })
+    .sort((a, b) => b.fusedScore - a.fusedScore || a.chunk.chunk_id.localeCompare(b.chunk.chunk_id))
+    .slice(0, Math.max(0, topK))
+    .map((row) => row.chunk);
+}
+
+function qdrantFilter(req: RetrievalRequest, modelId: string): Record<string, unknown> {
+  const must: unknown[] = [{ key: "embedding_model_id", match: { value: modelId } }];
   if (req.doc_types && req.doc_types.length > 0) must.push({ key: "doc_type", match: { any: req.doc_types } });
   if (req.min_quality !== undefined) must.push({ key: "quality_score", range: { gte: req.min_quality } });
   if (req.cve_ids && req.cve_ids.length > 0) must.push({ key: "cve_ids", match: { any: req.cve_ids } });
-  return must.length > 0 ? { must } : undefined;
+  return { must };
 }
 
 function toChunk(p: { id: string | number; score: number; payload?: Record<string, unknown> }): EvidenceChunk {
@@ -384,9 +466,13 @@ function toChunk(p: { id: string | number; score: number; payload?: Record<strin
     doc_type: (pl.doc_type as EvidenceChunk["doc_type"]) ?? "vuln_advisory",
     text: String(pl.text ?? ""),
     score_dense: round4(p.score),
-    score_rerank: round4(p.score), // 待 MG1 /v1/rerank 接线后替换
     ...(typeof pl.quality_score === "number" ? { quality_score: pl.quality_score } : {}),
-    provenance: { url: prov.url ?? "", section: prov.section ?? "" },
+    provenance: {
+      url: prov.url ?? "",
+      section: prov.section ?? "",
+      ...(typeof prov.page === "number" ? { page: prov.page } : {}),
+      ...(typeof prov.sha256 === "string" ? { sha256: prov.sha256 } : {}),
+    },
   };
 }
 

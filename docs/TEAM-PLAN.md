@@ -197,10 +197,12 @@ python -m eval.collect_latency         # 22 条时效，秒级
 
 这条路线作为小切片试点推进，不得挤占 D6 契约冻结、R-04/R-05 和 A-02 等 D3–D8 必做验收。完整任务与状态见 `docs/TASKS.md` 的 P-10。
 
+当前本地工作树已完成受控单页抓取、规则优先/安全门抽取接口、MG1 embedding→Qdrant 和 BM25+dense RRF 的可单测切片；尚未接正式 ingest/DQ1、持久化快照/人工队列，也未启动 Qdrant/真实模型验收。下面仍是目标链路，不应读成已交付能力。
+
 - **采集顺序**：官方 API/RSS/结构化源优先；仅对人工登记的安全公告域名调用 Firecrawl。首版只抓明确 URL，不做无边界整站递归，不绕登录、访问控制或 robots 限制。
 - **采集/解析兜底**：直连 + 指数退避/ETag/最近一次成功快照 → source-specific 规则解析 → 允许列表内 Firecrawl 网页提取（适合 JS 页面）→ MG1 结构化 LLM 抽取（契约校验、逐字段保留来源）→ 人工复核/隔离区。在线失败不得静默回放 fixture；fixture 只用于显式离线模式。旧快照可以用但必须标 stale/降级原因。
 - **规则与模型边界**：CVSS、版本范围、来源权威级别等可确定事实继续由规则/权威字段计算；LLM 只做缺结构页面的字段抽取、归一和有引用摘要，输出必须过 JSON Schema/字段来源校验，不得覆盖权威事实或补造值。公开网页是 `untrusted` 输入；A-03 数据边界和 A-04 注入防护通过前，LLM 阶段保持关闭，只用 parser/stub，不把原始网页发给云模型。低置信度、冲突或校验失败进入独立人工复核/隔离队列，不复用 `DecisionReply` 冒充 ingest 审核。
-- **知识库**：RawDoc/IntelItem 与结构化事实是可审计主数据；Qdrant 只保存可重建的 EvidenceChunk 向量索引。检索目标为 BM25 + 真实 embedding 混合召回、可选 rerank、引用回到原文；记录 `embedder_model_id`。当前 `hash-256` 只能作为离线占位，不算语义向量。Qdrant/embedding 不可用时退回 BM25/MemoryIndex 并显式标降级。
+- **知识库**：RawDoc/IntelItem 与结构化事实是可审计主数据；Qdrant 只保存可重建的 EvidenceChunk 向量索引。当前本地 Q2 切片已通过 MG1 接入真实 embedding，使用 BM25 + dense RRF 并记录 `embedding_model_id`；cache/hash 降级向量会被拒绝，默认配置仍走 BM25。正式来源索引、持久化来源/时间/哈希映射、真实 Qdrant/模型运行验收仍待办；Qdrant/embedding 不可用时显式退回 MemoryIndex。
 - **成本/安全**：Firecrawl 云 API 按抓取页消耗 credits；Firecrawl、云 LLM 与 embedding 出网全部 opt-in，默认不开启。密钥只从 `.env` 读且不得提交；自动化测试 stub 外部服务。当前没有云模型 key，不得宣称 LLM 已实跑。
 - **负责与验收**：李念负责 MG1/Q2/兜底编排；数据源域名和第七源与 XueXuhang 的方案 A 对齐；演示状态由 KKK9747human 接入前端。验收至少覆盖：域名拒绝、每级降级均留痕、LLM 输出 JSON 契约校验/低置信度进入独立人工态、BM25+dense 可切换且 hash 降级可见、引用保留 source_url 与 chunk_id。新增人工审核载体/事件须走契约评审，不能把 `DecisionReply.decided_by=human` 当作采集审核队列。
 

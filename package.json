@@ -25,6 +25,7 @@
     "assets:demo": "node --import tsx scripts/demo-assets.ts",
     "gateway:serve": "tsx src/gateway/src/server.ts",
     "qa:serve": "tsx src/qa/src/server.ts",
+    "crawl:page": "tsx scripts/crawl-page.ts",
     "cli:ask": "tsx src/qa/src/cli.ts",
     "new-branch": "bash scripts/new-branch.sh",
     "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/commit-msg .githooks/pre-push"

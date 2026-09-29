@@ -30,6 +30,17 @@ interface RoleRuntime {
   breakers: Map<string, CircuitBreaker>;
 }
 
+function assertEmbeddingVectors(vectors: number[][], count: number, expectedDim?: number): void {
+  if (!Array.isArray(vectors) || vectors.length !== count) throw new Error("embedding 返回数量与输入不一致");
+  const dim = vectors[0]?.length ?? 0;
+  if (dim <= 0 || (expectedDim !== undefined && dim !== expectedDim)) throw new Error("embedding 维度与角色配置不一致");
+  for (const vector of vectors) {
+    if (vector.length !== dim || vector.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new Error("embedding 含空向量、维度不一致或非有限数值");
+    }
+  }
+}
+
 /**
  * 计量所需公共字段：latency_ms / cached 必须随调用结果一起回传，
  * 由 record() 原样落库——禁止在 record 层写死（R-03：写死 0/false 会丢失真实值，
@@ -70,6 +81,20 @@ export class ModelGateway {
       model_id: rt.profile.model_id,
       fallback_chain: rt.profile.fallback_chain,
     }));
+  }
+
+  /** Embedder 的集合建集元数据；维度必须与模型实际返回保持一致。 */
+  embeddingProfile(): { provider: string; model_id: string; dimension?: number } {
+    const profile = this.mustRole("embedder").profile;
+    const rawDimension = profile.capability_flags.dim;
+    const dimension = typeof rawDimension === "number" && Number.isInteger(rawDimension) && rawDimension > 0
+      ? rawDimension
+      : undefined;
+    return {
+      provider: profile.provider,
+      model_id: profile.model_id,
+      ...(dimension === undefined ? {} : { dimension }),
+    };
   }
 
   /** 熔断状态快照（A1 消费）。 */
@@ -121,16 +146,21 @@ export class ModelGateway {
     await rt.bucket.take(1);
     const release = await rt.semaphore.acquire();
     const t0 = Date.now();
+    const rawDim = rt.profile.capability_flags.dim;
+    const expectedDim = typeof rawDim === "number" && Number.isInteger(rawDim) && rawDim > 0 ? rawDim : undefined;
     try {
       return await this.withFallback<Embedding>(role, "embed", async (providerName, modelId) => {
         if (providerName === "cache") {
-          const dim = Number(rt.profile.capability_flags.dim ?? 256);
-          return { vectors: texts.map((t) => hashEmbedding(t, dim)), model_id: modelId, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
+          const dim = expectedDim ?? 256;
+          const vectors = texts.map((text) => hashEmbedding(text, dim));
+          assertEmbeddingVectors(vectors, texts.length, dim);
+          return { vectors, model_id: modelId, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
         }
         const def = this.cfg.providers[providerName];
         if (!def) throw new Error("未知 provider: " + providerName);
         const cfg = resolveConfig(def, modelId, rt.profile.timeout_ms);
         const vectors = await compatEmbed(cfg, texts);
+        assertEmbeddingVectors(vectors, texts.length, expectedDim);
         return { vectors, model_id: modelId, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
       }, traceId);
     } finally {

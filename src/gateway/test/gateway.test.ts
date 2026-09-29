@@ -64,6 +64,55 @@ test("embed/rerank：cache provider 确定性与维度", async () => {
   assert.ok(ranked.ranked[0]!.score > ranked.ranked[1]!.score);
 });
 
+test("embedder profile：模型 ID 与声明维度来自角色配置", () => {
+  const profile = new ModelGateway().embeddingProfile();
+  assert.deepEqual(profile, { provider: "cache", model_id: "hash-256", dimension: 256 });
+});
+
+test("embed：OpenAI-compatible 响应按 index 对齐到输入顺序", async () => {
+  const realFetch = globalThis.fetch;
+  const first = new Array(256).fill(0);
+  const second = new Array(256).fill(0);
+  first[0] = 1;
+  second[1] = 1;
+  let requestUrl = "";
+  let requestBody: { model: string; input: string[] } | undefined;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    requestUrl = String(input);
+    requestBody = JSON.parse(String(init?.body)) as { model: string; input: string[] };
+    return new Response(JSON.stringify({
+      data: [
+        { index: 1, embedding: second },
+        { index: 0, embedding: first },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await new ModelGateway({ forceProvider: "deepseek" }).embed("embedder", ["first text", "second text"], "tr_embed_alignment");
+    assert.ok(requestUrl.endsWith("/embeddings"));
+    assert.deepEqual(requestBody?.input, ["first text", "second text"]);
+    assert.equal(result.provider, "deepseek");
+    assert.deepEqual(result.vectors, [first, second]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("embed：维度不符不被误标为真实向量，显式退回 cache", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    data: [{ index: 0, embedding: [0.2, 0.8] }],
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    const result = await new ModelGateway({ forceProvider: "deepseek" }).embed("embedder", ["test"], "tr_embed_bad_dim");
+    assert.equal(result.provider, "cache");
+    assert.equal(result.degraded_to, "cache");
+    assert.equal(result.vectors[0]!.length, 256);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("计量：usage 记录与 totals", async () => {
   const usage = new MemoryUsageStore();
   const gw = new ModelGateway({ usageStore: usage });

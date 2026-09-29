@@ -208,7 +208,7 @@ cd ops && docker compose up -d qdrant postgres && bash scripts/wait-healthy.sh &
 | P-07 | KKK9747human | PRD 7.3 界面清单 | 接 Q 线 HTTP 真数据；实现一屏完整问答与可展开推理链；展示降级；对接 compose 演示环境。当前 main 页面仍是预置样例，真实 API 接线与验收未完成；F2 资产页待 R1 确认 | P-03、P-05、A-06；R1 | 进行中 | 砍④ |
 | P-08 | 全 | NFR-03/08、AT-07、DoD | 定义每个指标的样本规模、时间窗和统计方法；补 provider 配置切换可复现记录及边界样本结果。≤60 秒只是 PRD 建议目标；前端预置看板值不能充当实测，任何准确率/完成度不得在无实测时写成已达成 | A-03、R-04、E-07 | 待办 | 基础 |
 | P-09 | 全 | PRD 第 11 节 R1–R8 | 形成负责人决策记录：F2 是否提 P0、7 类源及完成判定、24h/72h、D6/D8、Jev 定位、“推理链”口径、矛盾统计来源、完成度仅作内部估算 | 负责人确认；分别关联 E-01/E-07/D-02/A-02 | 待办 | 禁砍 |
-| P-10 | 李念（MG1/Q2）；与 Xue 对齐来源，KKK 接前端 | FR-Y01/S02/S03/Q02/Q04 | 受控 Firecrawl 采集与规则→MG1 LLM→人工隔离多级兜底；结构化主数据 + Qdrant 真实 embedding/BM25 混合检索。API/RSS 优先，Firecrawl 只抓白名单公告 URL；LLM 不改写 CVSS/版本等权威事实；保留 URL/时间/hash/chunk/model 版本。A-03/A-04 完成前不将不可信网页送云 LLM，先实现 parser、隔离和 stub 测试；外部 API 默认关闭 | C-02/C-04、A-03/A-04；来源白名单确认；不得挤占 R-04/R-05/A-02 | 进行中（小切片） | 砍④ |
+| P-10 | 李念（MG1/Q2）；与 Xue 对齐来源，KKK 接前端 | FR-Y01/S02/S03/Q02/Q04 | 受控 Firecrawl 采集与规则→MG1 LLM→人工隔离多级兜底；结构化主数据 + Qdrant 真实 embedding/BM25 混合检索。当前本地小切片已实现 allowlist/robots 单页 direct→Firecrawl→last-good、规则/安全门抽取接口、MG1→Qdrant 向量与 RRF，并有离线测试；仍未接正式 ingest/DQ1 索引、持久化快照/人工队列或真实 Qdrant/模型运行。A-03/A-04 前不将不可信网页送云 LLM；外部 API 默认关闭 | C-02/C-04、A-03/A-04；来源白名单确认；不得挤占 R-04/R-05/A-02 | 进行中（小切片） | 砍④ |
 
 ### 13.3 需求覆盖索引
 
@@ -221,7 +221,7 @@ PRD 条款按当前台账唯一归属，避免重复开任务；“待办/阻塞
 | FR-F01/F02/F03 | `src/enrich` F1/F4/F6 | 基础模块已实现；真实运行与特定冲突验收样本仍按 E-02/P-05 跟踪 |
 | FR-F04/F05 | P-01 | 本次改动仅新增静态合成数据匹配原型；团队未确认范围，不接真实资产 |
 | FR-F06 | P-06、S-03 | 只保留 Mock/披露要求，尚无 POC 执行或修复建议生产链路 |
-| FR-S01 | E-05/P-10 | Qdrant REST 与 BM25 已有；当前写入仍用 `hash-256` 占位，不是语义向量；真实 embedding 与 Compose 实测由 P-10/E-05 跟踪 |
+| FR-S01 | P-10/E-05 | Qdrant 查询/写入已拒绝 hash/cache embedding，Q2 通过 MG1 真实 provider 并支持 BM25-lite RRF；默认仍是 BM25，正式来源索引和 Qdrant/模型实测待办 |
 | FR-S02/S03 | P-03/P-04 | 结构化事实检索、证据版本与失效处理待办 |
 | FR-Q01 | R-04 | 20 条黄金问答已接入回归；未知/攻击/冲突样本继续由 A-04、P-05、P-08 补齐 |
 | FR-Q02/Q03 | P-05/P-10 | 多来源检索、原文定位和显式冲突/不足仍待办；P-10 先做单源受控抓取及 hybrid retrieval 小切片 |

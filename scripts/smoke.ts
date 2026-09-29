@@ -92,7 +92,7 @@ async function main(): Promise<number> {
   check(withSource.length === enrichResults.length, "每个富化结果带 source（禁无源富化）");
 
   // ---------- 3) S1 索引：fixture 种子 + 富化产物 ----------
-  console.log("\n[3] S1 统一索引 MemoryIndex（hash-256 占位嵌入，S3 绑定登记）");
+  console.log("\n[3] S1 统一索引 MemoryIndex（BM25-lite 词法兜底，S3 元数据登记）");
   const engine = new MemoryIndex();
   const seedChunks = readFixtureChunks();
   await indexChunks(engine, seedChunks, {
@@ -101,7 +101,7 @@ async function main(): Promise<number> {
     dim: 256,
     metric: "cosine",
   });
-  check(engine.modelId === "hash-256", "embedder_model_id 与 S3 CollectionMeta 绑定一致");
+  check(engine.modelId === "bm25-lite-v1", "词法索引 ID 与 S3 CollectionMeta 绑定一致");
 
   // ---------- 4) MG1 接线点：AnswerSynthesizer 注入 + 一次真实调用 ----------
   console.log("\n[4] MG1 接线（AnswerSynthesizer 经 /v1/chat/complete 语义调用 cache provider）");

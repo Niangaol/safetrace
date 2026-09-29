@@ -131,21 +131,42 @@ npm run qa:serve            # 检索服务 :8318（/healthz /v1/retrieve）
 | src/gateway（MG1） | 红线模块 | 9/9 | 角色路由、cache/openai_compat 双 provider、令牌桶、熔断、降级链、token 计量 |
 | src/ingest（Y 线） | 首期 | 29/29 | 6 源登记、4 连接器（KEV/NVD/OSV/cve.org）、fixture 回放、Y3 强标识去重、DQ1 四档闸门（10 条脏样本全捕获） |
 | src/enrich（F 线） | 最小闭环 | 50/50 | F1 arXiv 关联、F4 CVSS v3.1 规范计分 + EPSS + 多源仲裁、F6 冲突仲裁 |
-| src/qa（Q 线） | 最小闭环 | 36/36 | Q1 规则意图、Q2 BM25-lite + Qdrant REST；Qdrant 当前写入 hash-256 占位向量，非真实语义 embedding；Q4 四段式带引用答案、CLI + HTTP |
+| src/qa（Q 线） | 最小闭环 | 36/36 | Q1 规则意图、Q2 BM25-lite + MG1/Qdrant dense RRF（默认 BM25，拒绝 cache/hash 向量）；Q4 四段式带引用答案、CLI + HTTP |
 | ops/ | compose 就位待验 | 脚本自测过 | qdrant + postgres + langfuse 全家桶（Docker 未装，装好后 `bash ops/scripts/wait-healthy.sh`） |
 
-**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 是确定性占位，未配云端 key 时没有真实 LLM 推理；② Qdrant REST 已接线但点向量由 `hash-256` 生成，不是语义 embedding；P-10 正在补 MG1 embedding 与 BM25+dense 混合检索；③ main 上没有 Firecrawl crawler，现有 ingest 是结构化源连接器 + 重试/显式 fixture 降级；P-10 只计划对允许列表内官方公告 URL 抓取，不做开放式全网爬取；④ A-03/A-04 未完成前，不可信网页不得进入真实云 LLM；⑤ Firecrawl/云 LLM/云 embedding 默认关闭，Firecrawl 云 API 按页消耗 credits；⑥ Compose/Qdrant 真服务验收受 Docker 环境限制；⑦ `published_after`、完整 Langfuse Trace 和前端真实 API 仍按任务台账推进，不得宣称已完成。
+**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 是确定性占位，未配真实模型时没有 LLM 推理；② Q2 已接 MG1 真实 embedding 接口，但默认 cache 向量会被拒绝写入/查询语义集合，显式退回 BM25-lite；只有配置真实 embedder、Qdrant 和数据索引后才有 dense 召回；③ 新增单页 allowlist crawler 与规则抽取模块，但尚未接 ingest 定时任务、DQ1 持久化入库或可恢复 last-good 存储；④ A-03/A-04 完成前，不可信网页不会送进真实云 LLM，当前只留安全门接口；⑤ Firecrawl / 云 LLM / embedding 默认关闭，Firecrawl 按页消耗 credits；⑥ Docker/Qdrant/本地模型环境尚未完成真实运行验收；⑦ `published_after`、完整 Langfuse Trace 和前端真实 API 仍按任务台账推进，不得宣称已完成。
 
 **D3 分工与新增方向**：李念负责 MG1/Q/编排/契约/ops，D6 前收口 C-01~C-06，D8 前完成 R-04/R-05/R-03/A-02；KKK9747human 主责前端及端到端演示；XueXuhang 在方案 A（第 7 源+时效看板）与方案 B（F2 被动信号）中认领。P-10 受控 Firecrawl + 规则/受控 LLM/人工复核 + Qdrant 语义向量小切片见 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) 与 [`docs/TASKS.md`](docs/TASKS.md)。A-03/A-04 未完成前，真实 LLM 网页抽取保持关闭。
 
 ## 8. P-10：受控采集与可审计语义证据库
 
-这是一项正在做的小切片，不是现有 main 已交付功能：
+本地工作树已实现可单测的小切片，但还不是接入 ingest 的端到端生产功能：
 
-- 优先使用官方 API/RSS；Firecrawl 只处理人工允许列表中的安全公告 URL，首版单页抓取，不做全站无边界爬取。
-- 采集异常按直连重试、成功快照、source parser、Firecrawl 逐层尝试；结构化抽取不确定时才考虑 MG1 LLM，校验失败或低置信度进入人工复核，不得伪装成正式 IntelItem。
-- 公网页面统一视为不可信输入；A-03/A-04 安全边界完成前，不把原始页面交给真实云 LLM。CVSS、版本范围等确定字段始终由规则/权威来源给出。
-- 结构化记录与 RawDoc 是事实主库；Qdrant 是可重建的证据向量索引，目标是 BM25 + 真实 embedding 混合召回并保留 chunk/source 引用。`hash-256` 目前只是占位，不代表语义检索。
-- Firecrawl、LLM、embedding 云服务默认关闭；Firecrawl 按页消耗 credits。无真实配置时只跑 fixture/stub，并显式标记降级。
+- `src/ingest/src/firecrawl.ts` 提供单 URL 精确 host allowlist、HTTPS/同 host 重定向与 `robots.txt` 校验、直连重试 → Firecrawl（须 API key）→ last-good 快照兜底；默认 `enabled=false`，不爬链接、不执行脚本、不回放 fixture。
+- `scripts/crawl-page.ts` 提供单页手动入口，只输出不可信页面预览，不入库、不发问答。可用 `FIRECRAWL_ENABLED=true FIRECRAWL_ALLOWED_HOSTS=vendor.example npm run crawl:page -- https://vendor.example/advisory` 做授权域名的试跑；若需 Firecrawl，设置 API key 前请注意按页计费。
+- `src/ingest/src/extraction-fallback.ts` 先做 CVE/原文规则抽取；规则不完整才可走注入的安全门与 LLM adapter，输出还需通过原文引用验证，否则返回 `needs_human_review`。A-03/A-04 未完成，当前没有生产 MG1 LLM adapter，也没有持久化/前端人工复核队列。
+- Q2 通过 `ModelGateway.embed` 接真实 embedding，拒绝 `cache`/降级/模型 ID 或维度不符的向量；有 Qdrant 时使用 dense + BM25-lite RRF，分数分别标为 `score_dense` / `score_sparse`，不伪装成 reranker 分数。
+- 默认 embedder 仍为 cache，因此 QA 服务默认显式回退到 BM25-lite。需配置真实模型服务、准确 `model_id` / `capability_flags.dim` 和 Qdrant 才可测语义召回；`QDRANT_SEED_FIXTURES=true` 仅用于向新集合写入演示 fixtures，不代表真实知识源 ingestion。
+- 结构化记录与 RawDoc 仍是事实主库；Qdrant 是可重建证据索引。真实来源到 DQ1、RawDoc 持久化及 Qdrant 的生产索引桥接仍未完成；不得编造来源/引用。
+- 网页是不可信输入；A-03/A-04 安全边界通过前，真实 LLM 网页抽取保持关闭。Firecrawl / 云 LLM / embedding 默认关闭。
+
+本地体验 BM25 演示链（PowerShell；不需要 Qdrant 或云 key）：
+
+```powershell
+$env:PORT = "8318"
+$env:OFFLINE_FIXTURES = "true"
+npm run qa:serve
+```
+
+另开一个终端请求：
+
+```powershell
+$body = @{ query_id = "manual"; query_text = "Log4Shell 影响哪些版本？"; top_k = 3; trace_id = "manual"; schema_version = "1.0" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8318/v1/retrieve" -ContentType "application/json" -Body $body
+```
+
+这只验证 fixture + BM25-lite HTTP 链路，不代表真实 embedding/Qdrant 已运行。
+
+自动化检查：`npm test`、`npm run typecheck`、`npm run validate:contracts`。真实 Qdrant/模型服务是否可运行取决于本机部署，当前没有实际联网或付费调用记录。
 
 实施状态、负责人、依赖和验收以 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) / [`docs/TASKS.md`](docs/TASKS.md) 为准。

@@ -44,7 +44,7 @@ test("POST /v1/retrieve → RetrievalResponse 契约形状", async () => {
   assert.equal(res.status, 200);
   const body = (await res.json()) as {
     query_id: string;
-    chunks: Array<{ chunk_id: string; doc_type: string; text: string; score_rerank: number; provenance: { url: string; section: string } }>;
+    chunks: Array<{ chunk_id: string; doc_type: string; text: string; score_dense?: number; score_sparse?: number; score_rerank?: number; provenance: { url: string; section: string } }>;
     retrieval_ms: number;
     embedder_model_id: string;
     trace_id: string;
@@ -56,11 +56,11 @@ test("POST /v1/retrieve → RetrievalResponse 契约形状", async () => {
   for (const c of body.chunks) {
     assert.ok(c.chunk_id.length > 0);
     assert.ok(c.text.length > 0);
-    assert.equal(typeof c.score_rerank, "number");
+    assert.ok(typeof c.score_sparse === "number" || typeof c.score_dense === "number" || typeof c.score_rerank === "number");
     assert.match(c.provenance.url, /^https:\/\//);
     assert.ok(c.provenance.section.length > 0);
   }
-  assert.equal(body.embedder_model_id, "hash-256");
+  assert.equal(body.embedder_model_id, "bm25-lite-v1");
   assert.ok(Number.isInteger(body.retrieval_ms) && body.retrieval_ms >= 0);
   assert.equal(body.trace_id, "tr_http");
   assert.equal(body.schema_version, "1.0");
