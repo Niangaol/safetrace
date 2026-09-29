@@ -28,7 +28,7 @@
 | 成员 | 主要产出 |
 |---|---|
 | **李念** | 上述除 web 外全部（契约 / 基座 / MG1 / S2 / Y / F / Q / ops / 冒烟 / 台账 / 门禁修复） |
-| **KKK9747human** | 前端全量重设计（PR #3）、台账计数修订（PR #2） |
+| **KKK9747human** | 前端全量重设计（PR #3）、台账计数修订（PR #2）；**D3 夜**：前端真实接线与诚实降级标识、一次性问答演示页（执行轨迹/证据可点开/答案关键内容高亮）、KEV·EPSS 排序依据外发与展示、`SystemFactory` 数字接真实指标；**并修掉 5 个真 bug**（流水线阶段缺口、引用 URL 缺失、`max_tokens` 截断致正文为空、模型 ID 写错、测试依赖本机 `.env`）。详见 §3.4（载体：fork 的 `demo-v1-python` 分支） |
 | **XueXuhang** | main 上暂无提交——**待认领，见下文** |
 
 ---
@@ -99,12 +99,44 @@ D6（10/3）契约冻结后：**只允许新字段追加 + 旧字段标 `depreca
 
 ### 3.4 KKK9747human（D3–D8 必做）
 
-| 任务 | 验收口径 |
-|---|---|
-| 前端对接 Q 线 HTTP 接口，问答页用真数据 | 页面能真实发起一次问答并渲染四段式答案 |
-| **「一次完整问答」演示页**（答辩核心） | 输入问题 → 显示检索到的证据 → 显示推理链（可点开每步）→ 显示带引用答案；一屏看完 |
-| 降级状态可视化 | 系统处于降级时，页面有明确标识（配合 FB1，不许静默） |
-| 演示环境跑在 compose 上 | `docker compose up` 后前端可访问 |
+> **进度更新（2026-09-29 夜，KKK9747human 本人填报）**
+> 本轮工作的**载体是 fork 上的 `demo-v1-python` 分支**（`github.com/KKK9747human/safetrace`）：
+> 那是 `-demo-v1` 目录对应的独立仓（Python 后端 + 前端，含本机演示所需的演示库与脚本）。
+> 之所以推分支而非直接推 main：该仓是 `git init` 新建的、与 upstream **无共同祖先**
+> （upstream 已是 TS 单体仓，含本仓全部源码）。直接推 main 需要 force-push，
+> **会抹掉团队现有提交**，所以按分支推送、不碰 main。下面的验收口径均已在该分支上实测。
+
+| 任务 | 状态 | 实测证据 / 说明 |
+|---|---|---|
+| 前端对接 Q 线 HTTP 接口，问答页用真数据 | ✅ **已完成** | `/api/v1/qa/chat` 真 SSE；实测 `model=deepseek-v4-pro`、8 条引用、四段式答案（¥0.0316/次）。数据来源规则：默认**先请求真实后端**，仅"不可达/未实现(404/5xx)"才回退预置数据并全站标注（业务错误 401/422 一律如实报错、不回退）。可复跑：`npm run probe:live-wiring` 判定 `dataSource=live` |
+| **「一次完整问答」演示页**（答辩核心） | ✅ **已完成** | 一屏形态：提问 → **执行轨迹**（8 步，带工具名/入参/结果/每步耗时）→ 检索证据（可点开原始出处）→ 推理链（可展开）→ 带引用答案（关键内容高亮）。深链 `/qa?q=…` 可直接跑；`/qa?demo=1` 用固定样例秒级渲染便于验收排版 |
+| 降级状态可视化 | ✅ **已完成** | ① 数据来源降级：全站横幅 + 导航栏「实时数据/预置数据」；② 答案降级：`degraded=true` 时显式提示；③ 占位答案（无 LLM 凭据走 cache provider）明示"不是模型分析结果"，并标注 `cost_cny=0`；④ 无证据时如实答"知识库中暂无可支撑该问题的证据"并标 `ok=false` |
+| 演示环境跑在 compose 上 | ⛔ **阻塞** | 本机**未安装 Docker**（`docker` 命令不存在），无法验证 `docker compose up`。前端侧已就绪（`web/Dockerfile` + `nginx.conf` 在库内，`npm run build` exit 0），待有 Docker 的机器验证；这与台账 `E-05` 是同一个阻塞项 |
+
+**本轮顺带修掉的用户可见缺陷与真 bug**（都在上面那个分支里，含可复跑验收）：
+
+1. **检索流水线"走不到头"**：后端当时只发 `rewrite`/`retrieve` 两种 stage，而前端进度条画了五步。
+   已在 `qa/agent.py` 的实际执行点补齐 `generate`/`reasoning`/`check`/`done`，两侧对齐。
+2. **引用来源点不开**：`Vuln.references` 全为 `[]`，而 `citation.url` 取的是内部切片标识
+   （`CVE-2026-31001`）。已补 NVD 出处链接（实测 200）+ 前端渲染为可点链接；
+   **不拼 GitHub Advisory 链接**——演示 GHSA 编号是编的，实测 404，
+   且格式校验（三段各 4 位）拦不住，故宁可少一条也不给死链。
+3. **模型正文恒为空**：`max_tokens=500` 被**强制思维链**吃满（`finish_reason=length`、
+   `reasoning_tokens=500`、`content=""`），HTTP 仍 200 → 规划/自检静默失败。
+   已提到 2500/3000，并给 `LLMResult` 加 `truncated`/`reasoning_tokens` 以便诊断。
+4. **模型 ID 写错**：`deepseek-v4-flash` 不存在，服务端实际是 `deepseek-flash`（配好 key 就 400）。
+5. **测试依赖本机 `.env`**：本机把 `REDIS_URL` 写成空 / `LLM_LOCAL_ENABLED=false`
+   会让 15 条既有用例失败（事件总线"已禁用"会丢弃全部事件）。已在 `conftest.py` 固定测试默认值。
+
+**可复跑验收命令**（在 `demo-v1-python` 分支）：
+
+```bash
+python -m ruff check . && python -m ruff format --check . && python -m mypy src
+python -m pytest -q --no-cov          # 469 passed / 8 skipped / 0 failed
+cd web && npm run build                # vue-tsc + vite build，exit 0
+cd web && npm run smoke:data-source    # 6/6：先真后假 / 显式标注 / 业务错误不掩盖
+cd web && npm run check:answer-format  # 关键内容标注正确且不吞字
+```
 
 ### 3.5 共同事项
 
@@ -149,4 +181,10 @@ D6（10/3）契约冻结后：**只允许新字段追加 + 旧字段标 `depreca
 - [ ] 🔴 **急：XueXuhang 认领方案 A 或 B**（阻塞：Y 线第 7 源与时效看板是监测 15 分主要证据，且他至今 main 上无提交）
 - [ ] D6 契约冻结的三线 sign-off（今晚或明早 20 分钟会）
 - [ ] 确认日报/周会的固定时间（建议每晚 22:00 群里同步三句话：今天完成 / 明天要做 / 阻塞）
+- [ ] **KKK9747human 夜间工作的落库方式需要拍板**：本轮前端工作在 fork 的 `demo-v1-python` 分支
+      （`-demo-v1` 目录对应的独立仓，Python 后端 + 前端），**尚未进入 upstream/main**。
+      原因是该仓与 upstream **无共同祖先**（upstream 是 TS 单体仓且已含本仓全部源码），
+      直接推 main 需 force-push、会抹掉团队提交。
+      **需要李念确认**：是把前端改动单独摘成补丁提到 upstream（推荐），还是保留为独立演示仓。
+      在确认前，main 上的前端仍是旧行为（`IS_DEMO_MODE` 硬编码、界面不请求后端）。
 - [x] KKK9747human 主责方向已确认：**专注前端**（D3 本人确认）
