@@ -20,6 +20,8 @@ from typing import Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+from scripts.demo_derive import derive, derive_asset_or_abstain
+
 SEED = 20260928
 NOW = dt.datetime(2026, 9, 28, 12, 0, tzinfo=dt.UTC)
 
@@ -271,9 +273,21 @@ def _references_for(spec: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-# 演示数据严格对齐 `services/enrich/dimensions.py::DIMENSIONS`（6 个计划维度 F1–F6 + AI 安全专项）。
-# 每条都带 source / evidence_id / mock / degraded_to —— 与真实富化输出同结构，
-# 这样前端、评测、指标看到的形状一致，不会出现"演示能跑、真实一大屏空白"。
+#: 这几个维度**没有**逐条真实数据，灌的是 `DIMENSIONS` 里的同一条示例值。
+#: 逐条产生它们需要真实联网检索（GitHub / arXiv / OpenAlex）或 LLM 调用，
+#: 本机网络下都不可达。既然造不出真实值，就必须把"这是示例值"标出来
+#: （`degraded_to="fixture"`），不能让它看起来像该条漏洞的真实结论。
+_TEMPLATE_DIMS = {"poc", "paper", "fix", "consistency", "ai_risk"}
+
+_TEMPLATE_REASON = (
+    "本条为该维度的**示例值**（同一条内容用于多条漏洞），非该漏洞的真实富化结论。"
+    "逐条产生需真实联网检索或 LLM 调用，本机网环境下不可达；"
+    "演示时请据此说明，勿当作逐条结论引用。"
+)
+
+#: 演示数据严格对齐 `services/enrich/dimensions.py::DIMENSIONS`（6 个计划维度 F1–F6 + AI 安全专项）。
+#: 每条都带 source / evidence_id / mock / degraded_to —— 与真实富化输出同结构，
+#: 这样前端、评测、指标看到的形状一致，不会出现"演示能跑、真实一大屏空白"。
 DIMENSIONS: dict[str, dict[str, Any]] = {
     "paper": {
         "value": {
@@ -888,6 +902,29 @@ def seed(db_path: str) -> dict[str, int]:
             dims = list(DIMENSIONS) if idx < 8 else list(DIMENSIONS)[: 2 + idx % 3]
             for dim in dims:
                 spec_dim = DIMENSIONS[dim]
+                # ⚠️ `cvss` 与 `asset` **不能套模板**：DIMENSIONS 是按
+                # CVE-2026-31001 一条写死的，套给全部 13 条会让
+                # `cvss.base_score` 恒为 9.8（与各自向量矛盾 8/11 条）、
+                # `asset` 恒为 vllm/vllm。
+                #   - cvss：由该条向量本地算出（可复核）
+                #   - asset：由该条 CPE 解析；**没有 CPE 就如实给空**，
+                #     不回落到模板（否则等于凭空说"影响 vLLM"）
+                # 见 scripts/demo_derive.py。
+                if dim == "asset":
+                    spec_dim = derive_asset_or_abstain(spec)
+                else:
+                    derived = derive(dim, spec)
+                    if derived is not None:
+                        spec_dim = derived
+
+                # 剩下 5 个维度（poc / paper / fix / consistency / ai_risk）仍是
+                # `DIMENSIONS` 里的**同一条示例值**，逐条产生它们需要真实检索或
+                # LLM 调用，本机网络下不可达（实测 GitHub 搜索、arXiv/OpenAlex
+                # 均无结果）。既然造不出真实值，就必须**把"这是示例值"标出来**，
+                # 不能让它看起来像该条漏洞的真实富化结论。
+                # 标记方式：degraded_to="fixture"（该枚举值本就表示"预置数据"）
+                # + reason 写清，前端会据此显示降级徽标。
+                templated = dim in _TEMPLATE_DIMS
                 session.add(
                     Enrichment(
                         vuln_id=vuln.id,
@@ -898,9 +935,11 @@ def seed(db_path: str) -> dict[str, int]:
                         confidence=spec_dim["confidence"],
                         model=spec_dim.get("model", "deepseek-v4-pro"),
                         agent="EnrichAgent",
-                        mock=bool(spec_dim.get("mock")),
-                        degraded_to=spec_dim.get("degraded_to"),
-                        degraded_reason=spec_dim.get("degraded_reason", ""),
+                        mock=bool(spec_dim.get("mock")) or templated,
+                        degraded_to="fixture" if templated else spec_dim.get("degraded_to"),
+                        degraded_reason=(
+                            _TEMPLATE_REASON if templated else spec_dim.get("degraded_reason", "")
+                        ),
                         quality_score=spec_dim.get("quality_score"),
                         trace_id=f"trace_demo_{idx:03d}",
                     )
