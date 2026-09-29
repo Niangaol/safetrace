@@ -1,13 +1,13 @@
 # SafeTrace · 落地项目指导（内部版 · 照着就能开工）
 
 > 本目录是**真实工程骨架**：契约已定义、目录已分好、compose 已写好。
-> 参赛人：李念（队长，问答线+编排+底座）｜甲（监测线+运维）｜乙（富化线）
+> 参赛人：李念（队长，MG1/Q/编排/契约/ops）｜KKK9747human（web 前端/演示）｜XueXuhang（第 7 源/时效或 F2 被动信号，待最终认领）
 > 学校/专业：杭州电子科技大学 · 2026 级 智能科学与技术
-> **作品截止：2026 年 10 月 19 日 24:00**｜今天 9/28，剩 21 天
+> **作品截止：2026 年 10 月 19 日 24:00**｜D3 当前基线见 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md)
 
 ## 0. 先读这五条
 
-1. **契约先行**：`contracts/` 是唯一接口真相来源。任何人改契约必须走 `contract:` PR 并 @三线负责人，**D8 后冻结**。谁的实现没跟上，谁用 `fixtures/` 顶。
+1. **契约先行**：`contracts/` 是唯一接口真相来源；D6（10/3）形式化冻结，届时三线 sign-off；之后只追加字段或标 deprecated，须另两人同意并更新 CHANGELOG。按 D3 `TEAM-PLAN.md` 单线制在 `main` 工作，不新建 feature/contract/docs 分支。谁的实现没跟上，谁用 `fixtures/` 顶。
 2. **禁止 import provider SDK**：所有模型调用走 `src/gateway`（MG1），本地/云端切换只改 `.env` 与 `config/models.yml`。
 3. **兜底必须显式**：任何降级响应必须带 `degraded_to` 与用户可见标记，禁止静默兜底。
 4. **脏数据不进底座**：进 Qdrant 前必过 DQ1 质量闸门，宁可少一条，不可错一条。
@@ -18,7 +18,7 @@
 ```
 safetrace/
 ├── contracts/            # D6 冻结的接口契约（全员只读）
-│   ├── schemas/*.json    # 7 个 JSON Schema：RawDoc / IntelItem / Decision* / Retrieval* / ToolRegistration
+│   ├── schemas/*.json    # 8 个 JSON Schema：RawDoc / IntelItem / Enrichment / Decision* / Retrieval* / ToolRegistration
 │   ├── openapi.yaml      # MG1 与检索服务的 HTTP 接口
 │   └── events.md         # S2 情报总线事件清单（主题名 + payload）
 ├── fixtures/             # 假数据：不依赖真实源即可开发自测
@@ -31,7 +31,7 @@ safetrace/
 └── scripts/validate_contracts.py   # 契约校验（CI 里跑）
 ```
 
-**七个契约文件**（D6 冻结件）：
+**8 个 JSON Schema**（D6 冻结件；事件清单和 OpenAPI 另计）：
 
 | 文件 | 定义 | 生产者 → 消费者 |
 |---|---|---|
@@ -46,7 +46,7 @@ safetrace/
 |---|---|---|
 | P0 | Y1/Y2/Y3 + DQ1 | ≥7 类源接入；24h 连续运行截图；脏数据隔离区有实例 |
 | P0 | Q1/Q2/Q4 + S1 | 20 条黄金问答全过，答案带引用与推理链展开 |
-| P0 | MG1 + S2 | 一键起 compose；provider 切换不改代码；Trace 全落 Langfuse |
+| P0 | MG1 + S2 | 一键起 compose；provider 切换不改代码；trace_id 全链贯穿，Langfuse 外发按 A-06 验收 |
 | P1 | Y4/Y5 + F1/F4/F6 | 时效看板有真实数字；论文关联与 CVSS 带来源 |
 | P1 | A1（自愈） | L1/L2 自愈演练录像；降级状态显式可见 |
 | P2 | F2/F3/F5、D1-D4、Q3 | Mock/演示态即可，决赛做实 |
@@ -126,14 +126,26 @@ npm run qa:serve            # 检索服务 :8318（/healthz /v1/retrieve）
 
 | 模块 | 状态 | 测试 | 说明 |
 |---|---|---|---|
-| contracts/ | **D1 冻结 v1** | 校验器全绿 | 8 schema + events.md + openapi.yaml；改契约走 `contract/` PR 三线 sign-off |
+| contracts/ | **v1.1 冻结待 D6** | 校验器当前全绿 | 8 schemas + events.md + openapi.yaml；C-01 待三线 sign-off，C-02~C-06 待完成；D3 起 main 单线，D6 后只追加/标 deprecated并经另两人同意 |
 | src/shared | S2 总线 v0 | 8/8 | Envelope/幂等总线/SQLite+内存双存储/降级统一出口 |
 | src/gateway（MG1） | 红线模块 | 9/9 | 角色路由、cache/openai_compat 双 provider、令牌桶、熔断、降级链、token 计量 |
 | src/ingest（Y 线） | 首期 | 29/29 | 6 源登记、4 连接器（KEV/NVD/OSV/cve.org）、fixture 回放、Y3 强标识去重、DQ1 四档闸门（10 条脏样本全捕获） |
 | src/enrich（F 线） | 最小闭环 | 50/50 | F1 arXiv 关联、F4 CVSS v3.1 规范计分 + EPSS + 多源仲裁、F6 冲突仲裁 |
-| src/qa（Q 线） | 最小闭环 | 36/36 | Q1 规则意图、Q2 BM25 内存索引 + Qdrant REST、Q4 四段式带引用答案（四条件 abstain）、四 Agent 任务图、CLI + HTTP |
+| src/qa（Q 线） | 最小闭环 | 36/36 | Q1 规则意图、Q2 BM25-lite + Qdrant REST；Qdrant 当前写入 hash-256 占位向量，非真实语义 embedding；Q4 四段式带引用答案、CLI + HTTP |
 | ops/ | compose 就位待验 | 脚本自测过 | qdrant + postgres + langfuse 全家桶（Docker 未装，装好后 `bash ops/scripts/wait-healthy.sh`） |
 
-**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 为确定性占位，真实 LLM 合成待配 key；② Embed 为 `hash-256` 占位向量，Qdrant 接入后换 BGE-M3（S3 绑定已留 `model_id` 校验）；③ 无独立 rerank 通道（MemoryIndex 的 `score_rerank` 为查询内归一分）；④ F2 仅新增 20 条纯合成演示资产的本地版本匹配原型，未接真实清单/API/界面/问答链；F3/F5、Q3、D1–D4 仍只留契约位；⑤ `published_after` 在 chunk 级暂不生效（EvidenceChunk 契约无时间字段，需走 contract PR）；⑥ `web/` 页面当前固定展示预置样例（含统计、漏洞、引用和问答），已显式标记演示模式，真实 API 与 Trace 页待接。
+**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 是确定性占位，未配云端 key 时没有真实 LLM 推理；② Qdrant REST 已接线但点向量由 `hash-256` 生成，不是语义 embedding；P-10 正在补 MG1 embedding 与 BM25+dense 混合检索；③ main 上没有 Firecrawl crawler，现有 ingest 是结构化源连接器 + 重试/显式 fixture 降级；P-10 只计划对允许列表内官方公告 URL 抓取，不做开放式全网爬取；④ A-03/A-04 未完成前，不可信网页不得进入真实云 LLM；⑤ Firecrawl/云 LLM/云 embedding 默认关闭，Firecrawl 云 API 按页消耗 credits；⑥ Compose/Qdrant 真服务验收受 Docker 环境限制；⑦ `published_after`、完整 Langfuse Trace 和前端真实 API 仍按任务台账推进，不得宣称已完成。
 
-**D2 起任务单**：甲——cvelistV5 git 差分补第 5 源、72h 挂机；乙——F1 真跑调参（recall@5 基线）、黄金集 200 条启动；丙（队长）——pi-agent-core 实测决定是否替换自研 TaskGraph、Langfuse 接入、20 条黄金问答扩量。全员：今天申请 NVD API key。
+**D3 分工与新增方向**：李念负责 MG1/Q/编排/契约/ops，D6 前收口 C-01~C-06，D8 前完成 R-04/R-05/R-03/A-02；KKK9747human 主责前端及端到端演示；XueXuhang 在方案 A（第 7 源+时效看板）与方案 B（F2 被动信号）中认领。P-10 受控 Firecrawl + 规则/受控 LLM/人工复核 + Qdrant 语义向量小切片见 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) 与 [`docs/TASKS.md`](docs/TASKS.md)。A-03/A-04 未完成前，真实 LLM 网页抽取保持关闭。
+
+## 8. P-10：受控采集与可审计语义证据库
+
+这是一项正在做的小切片，不是现有 main 已交付功能：
+
+- 优先使用官方 API/RSS；Firecrawl 只处理人工允许列表中的安全公告 URL，首版单页抓取，不做全站无边界爬取。
+- 采集异常按直连重试、成功快照、source parser、Firecrawl 逐层尝试；结构化抽取不确定时才考虑 MG1 LLM，校验失败或低置信度进入人工复核，不得伪装成正式 IntelItem。
+- 公网页面统一视为不可信输入；A-03/A-04 安全边界完成前，不把原始页面交给真实云 LLM。CVSS、版本范围等确定字段始终由规则/权威来源给出。
+- 结构化记录与 RawDoc 是事实主库；Qdrant 是可重建的证据向量索引，目标是 BM25 + 真实 embedding 混合召回并保留 chunk/source 引用。`hash-256` 目前只是占位，不代表语义检索。
+- Firecrawl、LLM、embedding 云服务默认关闭；Firecrawl 按页消耗 credits。无真实配置时只跑 fixture/stub，并显式标记降级。
+
+实施状态、负责人、依赖和验收以 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) / [`docs/TASKS.md`](docs/TASKS.md) 为准。
