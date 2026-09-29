@@ -1,51 +1,60 @@
 @echo off
-chcp 65001 >nul 2>&1
 setlocal
 set "DEMO_DIR=E:\code\ai-threat-intel-demo-v1"
 set "PORT=5180"
 
 echo ============================================
-echo   SafeTrace Demo  (最新版: -demo-v1)
+echo   SafeTrace Demo  (latest: -demo-v1)
 echo   URL: http://localhost:%PORT%/
 echo ============================================
 echo.
 
-rem ── 1) 清掉占着端口的旧实例 ──────────────────────────────
-rem 否则浏览器打开的会是**上一个目录**起的服务（本机曾同时存在 -demo 与 -demo-v1，
-rem 旧实例占着 5180，看起来"改了没生效"）。
+rem -- 1) Kill whatever already holds the port -------------------
+rem Otherwise the browser opens a server started from an OLD directory
+rem (both -demo and -demo-v1 have existed on this machine; the stale one
+rem held 5180, which looked like "my change did not take effect").
+rem
+rem NOTE: this file is deliberately ASCII-only.
+rem A .bat file's *body* is parsed with the system ANSI codepage, NOT with the
+rem codepage set by `chcp`. So non-ASCII text here is a portability hazard:
+rem with UTF-8 it mojibakes, and mixing it with `chcp 65001` corrupts compound
+rem statements (seen in practice as bogus "is not recognized as an internal
+rem or external command" errors). Keep this file ASCII.
 set "KILLED="
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%PORT%" ^| findstr "LISTENING"') do (
-    echo [清理] 端口 %PORT% 被 PID %%p 占用，正在结束...
+    echo [cleanup] port %PORT% held by PID %%p, killing...
     taskkill /PID %%p /F >nul 2>&1
     set "KILLED=1"
 )
 if defined KILLED (
-    rem 给 Windows 一点时间真正释放端口
+    rem give Windows a moment to actually release the port
     ping -n 3 127.0.0.1 >nul 2>&1
 )
 
-rem ── 2) 进最新目录 ────────────────────────────────────────
+rem -- 2) Enter the latest directory -----------------------------
 cd /d "%DEMO_DIR%\web" || (
-    echo [错误] 找不到 %DEMO_DIR%\web
+    echo [error] not found: %DEMO_DIR%\web
     pause
     exit /b 1
 )
 
 if not exist "node_modules" (
-    echo [安装] 首次运行，安装前端依赖...
+    echo [setup] first run, installing frontend deps...
     call npm install
     echo.
 )
 
-rem ── 3) 提示后端 ─────────────────────────────────────────
-rem 前端默认"先连真实后端"（api.ts 的 auto 模式）。后端没起时会自动回退到预置数据
-rem 并在页面顶部标注「预置数据」——这是诚实降级，不是故障。
-rem 想要真实数据，另开一个窗口起后端：
+rem -- 3) Backend hint -------------------------------------------
+rem The frontend tries the real backend first (api.ts "auto" mode). If the
+rem backend is down it falls back to preset data and shows a banner saying so.
+rem That is an explicit degradation, not a failure.
+rem To get live data, start the backend in another window:
 rem   cd /d %DEMO_DIR%
 rem   set PYTHONPATH=%DEMO_DIR%\src
 rem   set POSTGRES_DSN=sqlite:///%DEMO_DIR:\=/%/data/demo.db
 rem   python -m uvicorn aiintel.api.main:app --host 127.0.0.1 --port 8000
-echo [提示] 后端未启动时页面会显示「预置数据」横幅；启动后端(:8000)后自动转为真实数据。
+echo [hint] With no backend on :8000 the page shows a "preset data" banner;
+echo        start the backend and it switches to live data automatically.
 echo.
 
 call npx vite --port %PORT% --host
