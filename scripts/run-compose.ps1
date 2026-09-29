@@ -114,10 +114,11 @@ if ($Down) {
 
 # ── 4. 起全栈 ─────────────────────────────────────────────────
 Log '--- docker compose up -d --build（首次会构建镜像，较慢）---'
-$args = @()
-if ($compose.Count -gt 1) { $args += $compose[1..($compose.Count-1)] }
-$args += @('-p', $ProjectName, '-f', 'docker-compose.yml', '-f', $override, 'up', '-d', '--build')
-& $compose[0] @args 2>&1 | ForEach-Object { Log ("  " + $_) }
+# 注意：**别用 `$args` 做变量名** —— 它在 PowerShell 里是自动变量（未绑定参数数组），赋值会冲突。
+$composeArgs = @()
+if ($compose.Count -gt 1) { $composeArgs += $compose[1..($compose.Count-1)] }
+$composeArgs += @('-p', $ProjectName, '-f', 'docker-compose.yml', '-f', $override, 'up', '-d', '--build')
+& $compose[0] @composeArgs 2>&1 | ForEach-Object { Log ("  " + $_) }
 $upExit = $LASTEXITCODE
 Log "compose up 退出码: $upExit"
 

@@ -102,7 +102,12 @@ def _upsert_env(updates: dict[str, str]) -> None:
     """
 
     if ENV_PATH.exists():
-        shutil.copy2(ENV_PATH, ENV_PATH.with_suffix(".env.bak"))
+        # ⚠️ **不能用 `with_suffix(".env.bak")`**：`.env` 会被 Path 解析成
+        # "无 stem + 后缀 .env"，结果变成 **`.env.env.bak`** —— 一个
+        # **不被 `.gitignore` 的 `.env` 规则覆盖**的新文件，里面同样有真实密钥。
+        # 实测踩过：含密钥的备份被误提交并推送。用字符串拼接更可靠。
+        backup = ENV_PATH.parent / (ENV_PATH.name + ".bak")
+        shutil.copy2(ENV_PATH, backup)
 
     lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
     remaining = dict(updates)
@@ -118,7 +123,8 @@ def _upsert_env(updates: dict[str, str]) -> None:
     for key, val in remaining.items():
         out.append(f"{key}={val}")
 
-    tmp = ENV_PATH.with_suffix(".env.tmp")
+    # 同样别用 with_suffix：会得到 `.env.env.tmp`（不影响正确性，但要多忽略一类文件名）
+    tmp = ENV_PATH.parent / (ENV_PATH.name + ".tmp")
     tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
     os.replace(tmp, ENV_PATH)
 

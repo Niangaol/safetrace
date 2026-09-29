@@ -11,8 +11,18 @@ venv/
 htmlcov/
 
 # 环境与密钥
-.env
-.env.local
+# ⚠️ 只写 `.env` / `.env.local` 会漏掉 `.env.bak`、`.env.env.bak`、`.env.tmp`
+#    这类**备份/临时文件**，而备份里同样有真实密钥。
+#    实测踩过：配置界面写 .env 时生成的备份被误提交并推送了。
+#    注意 `.env.*` 这个 glob **匹配不到 `.env.env.bak`**（`*` 跨不过中间那个 `.`），
+#    所以必须用 `.env*` 整类挡掉。
+.env*
+# 需要入库的例外（顺序必须在上面那条之后，否则会被吃掉）
+!.env.example
+!web/.env.example
+
+# 运行日志（含本机路径与配置回显，不入库）
+*.log
 
 # 运行数据
 data/
