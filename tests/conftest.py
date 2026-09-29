@@ -123,12 +123,22 @@ def stub_llm(monkeypatch, fake_result):
     所以必须逐个模块打补丁，只改 core.llm 不生效。
     """
 
-    def _install(text: str = '{"ok": true}', model: str = "fake-model"):
+    def _install(
+        text: str = '{"ok": true}', model: str = "fake-model", degrade_in_stream: bool = False
+    ):
+        """安装桩路由。
+
+        `degrade_in_stream=True` 模拟"流式调用中途失败 → 内部降级本地模型"：
+        此时 `stream()` 仍是 `AsyncIterator[str]`（契约不变），但会把
+        `degrade_count` 加一 —— 调用方据此发现自己这次被降级了。
+        这正是 `QAAgent` 用来避免**静默降级**的机制（红线 3）。
+        """
         import aiintel.core.llm as llm_module
 
         class StubRouter:
             def __init__(self) -> None:
                 self.calls: list[dict] = []
+                self.degrade_count: int = 0
 
             def route(self, task):
                 return "flash", model, False
@@ -139,8 +149,13 @@ def stub_llm(monkeypatch, fake_result):
 
             async def stream(self, messages, **kwargs):
                 # 必须是 async generator：调用方直接 `async for ... in stream(...)`
+                if degrade_in_stream:
+                    self.degrade_count += 1
                 for ch in text:
                     yield ch
+
+            def note_degraded(self, *, node: str, reason: str) -> None:
+                self.degrade_count += 1
 
             async def aclose(self) -> None:
                 return None

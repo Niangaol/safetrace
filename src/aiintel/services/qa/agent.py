@@ -102,6 +102,9 @@ class QAAgent:
         citations: list[dict] = []
         reasoning: list[dict] = []
         degraded = False
+        #: 生成答案这一路是否发生了 **LLM 降级**（与"答案质量分低"是两回事）。
+        #: 见下方 stream 调用处的说明：流式契约只给文本，必须另行捕获降级。
+        answer_degraded = False
         # 无证据路径不会走 check_answer()，如实给 0 分（对应权威 Answer.abstained），
         # 而不是让下游拿到一个不存在的 verdict。
         verdict: dict[str, Any] = {"passed": True, "score": 0.0}
@@ -252,12 +255,23 @@ class QAAgent:
                     "message": f"基于 {len(evidence[:top_k])} 条证据生成答案…",
                 }
                 buffer: list[str] = []
-                async for piece in get_llm().stream(
+                # ⚠️ 流式路径的降级必须**显式捕获**：
+                # `get_llm().stream()` 的契约是 `AsyncIterator[str]`，只 yield 文本；
+                # 流中途失败时它内部会降级本地模型（`_local_result`），
+                # 而"降级了"这件事只体现在被丢弃的 `LLMResult.degraded` 上 ——
+                # 调用方拿不到，于是变成**静默降级**（违反红线 3）。
+                # 用 gateway 的单调降级计数做前后快照，确保任何路径的降级都能被发现。
+                _llm = get_llm()
+                # getattr 兜底：测试注入的替身路由未必实现该属性，
+                # 缺它就当作"没有降级信息"（0），不要让整个问答挂掉。
+                degrade_before = getattr(_llm, "degrade_count", 0)
+                async for piece in _llm.stream(
                     messages, task="reason", max_tokens=3000, node="qa.answer"
                 ):
                     buffer.append(piece)
                     yield {"event": "token", "text": piece}
                 answer = "".join(buffer)
+                answer_degraded = getattr(_llm, "degrade_count", 0) > degrade_before
 
                 yield _trace(
                     "generate",
@@ -316,13 +330,21 @@ class QAAgent:
                     )
                     # 重写前清空已发 token：非流式聚合不应把两版答案拼在一起
                     buffer.clear()
-                    async for piece in get_llm().stream(
+                    _rw = get_llm()
+                    rw_before = getattr(_rw, "degrade_count", 0)
+                    async for piece in _rw.stream(
                         messages, task="reason", max_tokens=3000, node="qa.rewrite"
                     ):
                         buffer.append(piece)
                         yield {"event": "token", "text": piece}
                     answer = "".join(buffer)
-                degraded = bool(verdict.get("score", 1.0) < 0.5)
+                    answer_degraded = answer_degraded or (
+                        getattr(_rw, "degrade_count", 0) > rw_before
+                    )
+                # 降级 = **模型降级**（走了本地/占位）**或** 自检质量分过低。
+                # 早先只判后者，于是"云端不可达→回退本地模型"时 done.degraded 仍是 false，
+                # 用户看不到任何降级提示（红线 3：禁止静默兜底）。
+                degraded = answer_degraded or bool(verdict.get("score", 1.0) < 0.5)
 
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             qa_latency.observe(elapsed_ms / 1000)
@@ -367,6 +389,14 @@ class QAAgent:
                     + ("（降级）" if degraded else "")
                 ),
             }
+            # 降级原因必须给出来（红线 3：降级要显式）。两种来源分开说，
+            # 否则用户看到 degraded=true 也不知道是"模型降级"还是"答案质量低"。
+            degraded_reasons: list[str] = []
+            if answer_degraded:
+                degraded_reasons.append("LLM 降级（云端不可用或预算耗尽，答案由本地/占位模型生成）")
+            if verdict.get("score", 1.0) < 0.5:
+                degraded_reasons.append("自检质量分偏低（证据支撑不足）")
+
             yield {
                 "event": "done",
                 "session_id": session_id,
@@ -376,6 +406,9 @@ class QAAgent:
                 "model": model,
                 "cost_cny": round(cost, 6),
                 "degraded": degraded,
+                "degraded_reason": "；".join(degraded_reasons),
+                #: 单独暴露"模型是否降级"，便于前端区分徽标文案
+                "llm_degraded": answer_degraded,
                 "reasoning": reasoning,
             }
         except Exception as exc:  # noqa: BLE001 - SSE 端点需要结构化错误

@@ -87,6 +87,22 @@ class LLMRouter:
         self.settings = get_settings()
         self.guard = guard or get_cost_guard()
         self._client: httpx.AsyncClient | None = None
+        #: 单调递增的"降级发生次数"。**为什么要这个**：
+        #: `stream()` 的契约是 `AsyncIterator[str]`（只 yield 文本），
+        #: 于是流式路径上"本次调用是否降级"的信息拿不到 ——
+        #: 而项目红线第 3 条要求降级必须**显式可见**，不能静默兜底。
+        #: 调用方在 before/after 比较该计数来判断自己这次是否被降级：
+        #:     before = get_llm().degrade_count
+        #:     async for piece in get_llm().stream(...): ...
+        #:     degraded = get_llm().degrade_count > before
+        #: 用计数而非布尔：并发场景下不会被互相覆盖成"没降级"。
+        self.degrade_count: int = 0
+
+    def note_degraded(self, *, node: str, reason: str) -> None:
+        """记录一次降级（流式与非流式路径都调用），并打日志。"""
+
+        self.degrade_count += 1
+        logger.warning("LLM 降级 node=%s 累计=%d 原因: %s", node, self.degrade_count, reason)
 
     # ---------- 内部工具 ----------
 
@@ -237,6 +253,7 @@ class LLMRouter:
         s = self.settings
         if not s.llm_local_enabled:
             if s.demo_mode:
+                self.note_degraded(node=node, reason="DEMO_MODE 占位回答（无可用 LLM 后端）")
                 return _demo_result(messages, max_tokens)
             raise LLMError(
                 "没有可用的 LLM 后端：未配置 LLM_API_KEY，且 LLM_LOCAL_ENABLED=false。"
@@ -246,8 +263,10 @@ class LLMRouter:
             text, usage = await self._call_local(s.llm_local_model, messages, thinking, max_tokens)
         except httpx.HTTPError as exc:
             if s.demo_mode:
+                self.note_degraded(node=node, reason=f"本地模型不可用且 DEMO_MODE 兜底: {exc}")
                 return _demo_result(messages, max_tokens)
             raise LLMError(f"本地模型不可用: {exc}") from exc
+        self.note_degraded(node=node, reason=f"降级本地模型 {s.llm_local_model}")
         return LLMResult(
             text=text,
             usage=usage,
