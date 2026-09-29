@@ -187,5 +187,5 @@ def test_read_config_does_not_leak_key_value(env_file: Path, monkeypatch) -> Non
     dumped = json.dumps(body, ensure_ascii=False, default=str)
     assert "sk-fake0123456789abcdefghijklmnopqrst" not in dumped, "明文密钥泄漏到响应里"
     assert "secretpw" not in dumped, "DSN 里的密码泄漏到响应里"
-    # 但脱敏预览要在
-    assert "sk-71a7" in dumped
+    # 但脱敏预览要在（_mask 保留前 7 位）
+    assert "sk-fake" in dumped

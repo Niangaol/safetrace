@@ -31,9 +31,7 @@ SKIP_PARTS = ("node_modules", ".git", "__pycache__", ".venv", "venv", "dist", ".
 
 
 def _tracked_files() -> list[str]:
-    r = subprocess.run(
-        ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, timeout=60
-    )
+    r = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         return []
     return [line.strip() for line in r.stdout.splitlines() if line.strip()]
@@ -55,8 +53,8 @@ def test_no_real_api_key_in_tracked_files() -> None:
             if match not in ALLOWED:
                 offenders.append(f"{rel}: {match[:12]}…（长度 {len(match)}）")
 
-    assert not offenders, (
-        "检测到疑似真实密钥被跟踪，必须移除并把该 key 轮换：\n  " + "\n  ".join(offenders)
+    assert not offenders, "检测到疑似真实密钥被跟踪，必须移除并把该 key 轮换：\n  " + "\n  ".join(
+        offenders
     )
 
 
@@ -74,7 +72,10 @@ def test_env_example_still_tracked() -> None:
     """但不能把示例文件也忽略掉——那是给人照抄的。"""
 
     r = subprocess.run(
-        ["git", "check-ignore", ".env.example"], cwd=REPO, capture_output=True, text=True,
+        ["git", "check-ignore", ".env.example"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
         timeout=20,
     )
     assert r.returncode != 0, ".env.example 被忽略了，示例文件应当入库"
