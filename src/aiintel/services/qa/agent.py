@@ -391,8 +391,17 @@ class QAAgent:
             yield {"event": "error", "code": "QA_FAILED", "message": str(exc)[:300]}
 
     async def answer(self, question: str, **kwargs: Any) -> dict[str, Any]:
-        """非流式版本（评测脚本用）。"""
+        """非流式版本（评测脚本用）。
 
+        `**kwargs` 直接透传给 `answer_stream`，但 `stream` 是个**例外**：
+        它对调用方有意义（`QAAgent` 的调用方习惯带 `stream=False`），
+        对 `answer_stream` 却不存在，直接透传会抛
+        `TypeError: answer_stream() got an unexpected keyword argument 'stream'`
+        —— 实测就是这条把 `eval/qa_accuracy.py` 整个跑挂了（该指标此前**从未跑通过**）。
+        这里显式吞掉 `stream`，让"非流式"这个语义与调用方保持一致。
+        """
+
+        kwargs.pop("stream", None)
         chunks: list[str] = []
         meta: dict[str, Any] = {}
         citations: list[dict] = []
