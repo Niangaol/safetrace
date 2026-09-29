@@ -162,9 +162,62 @@ def check_redis() -> None:
         record("Redis", False, f"{type(exc).__name__}: {str(exc)[:70]}")
 
 
+def check_web() -> None:
+    """前端 nginx 是否可用，**并且能反代 /api**（只测首页 200 不够）。"""
+
+    base = os.environ.get("SMOKE_WEB_URL", "http://localhost:5173")
+    try:
+        with urllib.request.urlopen(f"{base}/", timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        ok_index = resp.status == 200 and 'id="app"' in html
+        record("web 首页", ok_index, f"HTTP {resp.status}, {len(html)} 字节")
+    except Exception as exc:  # noqa: BLE001
+        record("web 首页", False, f"{type(exc).__name__}: {str(exc)[:70]}")
+        return
+
+    # nginx 反代：这是"前端能不能真连上后端"的关键，首页 200 不代表反代通
+    try:
+        with urllib.request.urlopen(f"{base}/api/v1/vulns?page_size=1", timeout=20) as resp:
+            body = json.loads(resp.read().decode("utf-8", errors="replace"))
+        record(
+            "web 反代 /api",
+            resp.status == 200 and "total" in body,
+            f"HTTP {resp.status}, total={body.get('total')}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        record("web 反代 /api", False, f"{type(exc).__name__}: {str(exc)[:70]}")
+
+
+def check_prometheus() -> None:
+    """Prometheus 健康 **且** 抓取目标 up（只测 /-/healthy 不够）。"""
+
+    base = os.environ.get("SMOKE_PROM_URL", "http://localhost:9090")
+    try:
+        with urllib.request.urlopen(f"{base}/-/healthy", timeout=15) as resp:
+            record("prometheus 健康", resp.status == 200, f"HTTP {resp.status}")
+    except Exception as exc:  # noqa: BLE001
+        record("prometheus 健康", False, f"{type(exc).__name__}: {str(exc)[:70]}")
+        return
+
+    try:
+        with urllib.request.urlopen(f"{base}/api/v1/targets", timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        targets = (data.get("data") or {}).get("activeTargets") or []
+        if not targets:
+            record("prometheus 抓取", False, "没有活动抓取目标")
+            return
+        ups = [t for t in targets if t.get("health") == "up"]
+        detail = "; ".join(f"{t.get('labels', {}).get('job')}={t.get('health')}" for t in targets)
+        record("prometheus 抓取", len(ups) == len(targets), detail)
+    except Exception as exc:  # noqa: BLE001
+        record("prometheus 抓取", False, f"{type(exc).__name__}: {str(exc)[:70]}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="运行期冒烟检查")
     parser.add_argument("--base", default=None, help="覆盖 BASE URL")
+    parser.add_argument("--no-web", action="store_true", help="跳过 web（未起时）")
+    parser.add_argument("--no-prom", action="store_true", help="跳过 prometheus（未起时）")
     args = parser.parse_args()
     global BASE, API
     if args.base:
@@ -177,6 +230,10 @@ def main() -> int:
     check_vulns()
     check_metrics()
     check_redis()
+    if not args.no_web:
+        check_web()
+    if not args.no_prom:
+        check_prometheus()
     check_qa_sse()
 
     failed = [r for r in results if not r[1]]

@@ -37,6 +37,10 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile
+      args:
+        # 嵌入依赖默认不装（torch 约 2.5GB，且本机 HF 不可达、装了也用不上）。
+        # 需要语义检索：INSTALL_EMBED=1 docker compose build api
+        INSTALL_EMBED: "${INSTALL_EMBED:-}"
     env_file: [.env]
     environment:
       POSTGRES_DSN: postgresql+psycopg://intel:intel@postgres:5432/intel

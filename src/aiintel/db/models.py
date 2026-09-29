@@ -9,6 +9,7 @@ from typing import Any
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -63,7 +64,11 @@ class RawItem(Base, TimestampMixin):
     )
     etag: Mapped[str | None] = mapped_column(String(128))
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
-    simhash: Mapped[int | None] = mapped_column(Integer, index=True)
+    # ⚠️ 必须是 BigInteger：simhash 是 **64 位**指纹，实测取值到 8.99e18，
+    # 而 Integer 在 PostgreSQL 上是 int4（上限 2147483647）→
+    # 往 PG 灌数据时 22/22 行全部 `NumericValueOutOfRange`。
+    # SQLite 不校验整型宽度，所以这个问题只在 PG 上暴露（演示库一直是 SQLite，掩盖了它）。
+    simhash: Mapped[int | None] = mapped_column(BigInteger, index=True)
     raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     __table_args__ = (
