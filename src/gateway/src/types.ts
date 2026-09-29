@@ -23,6 +23,8 @@ export interface Embedding {
   vectors: number[][];
   model_id: string;
   provider: string;
+  latency_ms: number;
+  cached: boolean;
   degraded_to: string;
 }
 
@@ -35,6 +37,8 @@ export interface RankedDocs {
   ranked: RankedDoc[];
   model_id: string;
   provider: string;
+  latency_ms: number;
+  cached: boolean;
   degraded_to: string;
 }
 

@@ -73,6 +73,47 @@ test("计量：usage 记录与 totals", async () => {
   assert.ok(totals.prompt_tokens > 0);
 });
 
+test("计量：latency_ms/cached 如实落库（R-03，修复前写死 0/false）", async () => {
+  const usage = new MemoryUsageStore();
+  const gw = new ModelGateway({ usageStore: usage });
+
+  // ① 缓存命中路径：同 prompt 二次调用，cached 必须从 false 翻成 true
+  await gw.chat("planner", [{ role: "user", content: "R03 缓存命中" }], {}, "tr_r3a");
+  await gw.chat("planner", [{ role: "user", content: "R03 缓存命中" }], {}, "tr_r3a");
+  const cachedRows = await usage.query({ role: "planner" });
+  assert.equal(cachedRows.length, 2, "两次调用应各落一行");
+  assert.equal(cachedRows[0]!.cached, false, "首次调用不是缓存命中");
+  assert.equal(cachedRows[1]!.cached, true, "二次相同 prompt 应命中缓存，cached 必须如实落库");
+  assert.ok(
+    cachedRows.every((r) => typeof r.latency_ms === "number" && r.latency_ms >= 0),
+    "latency_ms 必须是真实测量值",
+  );
+
+  // ② 真实延迟路径：注入约 20ms 延迟的 fetch（openai-compat 走全局 fetch），
+  //    latency_ms 必须如实反映这段耗时（修复前恒为 0，延迟统计完全失真）
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    await new Promise((r) => setTimeout(r, 20));
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { content: "pong" } }],
+        usage: { prompt_tokens: 3, completion_tokens: 1 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const gw2 = new ModelGateway({ forceProvider: "deepseek", usageStore: usage });
+    await gw2.chat("planner", [{ role: "user", content: "R03 真实延迟" }], {}, "tr_r3b");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const all = await usage.query({ role: "planner" });
+  assert.equal(all.length, 3);
+  assert.ok(all[2]!.latency_ms >= 15, "注入约 20ms 延迟，usage.latency_ms 必须 >=15ms（修复前恒为 0）");
+  assert.equal(all[2]!.provider, "deepseek");
+});
+
 test("熔断器：阈值→OPEN→半开恢复", () => {
   let t = 1000;
   const br = new CircuitBreaker("test/p", { failureThreshold: 2, openMs: 500, now: () => t });

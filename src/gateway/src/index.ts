@@ -30,6 +30,18 @@ interface RoleRuntime {
   breakers: Map<string, CircuitBreaker>;
 }
 
+/**
+ * 计量所需公共字段：latency_ms / cached 必须随调用结果一起回传，
+ * 由 record() 原样落库——禁止在 record 层写死（R-03：写死 0/false 会丢失真实值，
+ * "降级与缓存统计"直接失真）。usage 仅 chat 有，embed/rerank 记为 0。
+ */
+interface MeteredResult {
+  degraded_to: string;
+  latency_ms: number;
+  cached: boolean;
+  usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
 export class ModelGateway {
   private cfg: ModelsConfig;
   private runtime = new Map<RoleName, RoleRuntime>();
@@ -108,17 +120,18 @@ export class ModelGateway {
     const rt = this.mustRole(role);
     await rt.bucket.take(1);
     const release = await rt.semaphore.acquire();
+    const t0 = Date.now();
     try {
       return await this.withFallback<Embedding>(role, "embed", async (providerName, modelId) => {
         if (providerName === "cache") {
           const dim = Number(rt.profile.capability_flags.dim ?? 256);
-          return { vectors: texts.map((t) => hashEmbedding(t, dim)), model_id: modelId, provider: providerName, degraded_to: "" };
+          return { vectors: texts.map((t) => hashEmbedding(t, dim)), model_id: modelId, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
         }
         const def = this.cfg.providers[providerName];
         if (!def) throw new Error("未知 provider: " + providerName);
         const cfg = resolveConfig(def, modelId, rt.profile.timeout_ms);
         const vectors = await compatEmbed(cfg, texts);
-        return { vectors, model_id: modelId, provider: providerName, degraded_to: "" };
+        return { vectors, model_id: modelId, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
       }, traceId);
     } finally {
       release();
@@ -129,10 +142,11 @@ export class ModelGateway {
     const rt = this.mustRole(role);
     await rt.bucket.take(1);
     const release = await rt.semaphore.acquire();
+    const t0 = Date.now();
     try {
       return await this.withFallback<RankedDocs>(role, "rerank", async (providerName, modelId) => {
         if (providerName === "cache") {
-          return { ranked: hashRerank(query, docs), model_id: modelId, provider: providerName, degraded_to: "" };
+          return { ranked: hashRerank(query, docs), model_id: modelId, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
         }
         const def = this.cfg.providers[providerName];
         if (!def) throw new Error("未知 provider: " + providerName);
@@ -172,7 +186,7 @@ export class ModelGateway {
    * - 全部失败 → 最后一级强制 cache（L3）并登记 FallbackEvent；
    * - 非首选 provider 成功 → degraded_to 显式标注（禁静默）。
    */
-  private async withFallback<T extends { degraded_to: string; provider: string }>(
+  private async withFallback<T extends MeteredResult & { provider: string }>(
     role: RoleName,
     call: "chat" | "embed" | "rerank",
     fn: (providerName: string, modelId: string) => Promise<T>,
@@ -234,7 +248,7 @@ export class ModelGateway {
     return { ...result, degraded_to: d.degraded_to };
   }
 
-  private async record(role: RoleName, call: "chat" | "embed" | "rerank", provider: string, modelId: string, result: { usage?: { prompt_tokens: number; completion_tokens: number }; degraded_to: string }, traceId: string): Promise<void> {
+  private async record(role: RoleName, call: "chat" | "embed" | "rerank", provider: string, modelId: string, result: MeteredResult, traceId: string): Promise<void> {
     await this.usage.record({
       ts: new Date().toISOString(),
       role,
@@ -243,8 +257,8 @@ export class ModelGateway {
       call,
       prompt_tokens: result.usage?.prompt_tokens ?? 0,
       completion_tokens: result.usage?.completion_tokens ?? 0,
-      latency_ms: 0,
-      cached: false,
+      latency_ms: result.latency_ms,
+      cached: result.cached,
       degraded_to: result.degraded_to,
       trace_id: traceId,
     });
