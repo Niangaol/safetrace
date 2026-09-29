@@ -7,19 +7,19 @@
 import sys
 from pathlib import Path
 
-BOM = b'\xef\xbb\xbf'
+BOM = b"\xef\xbb\xbf"
 changed = 0
 for arg in sys.argv[1:]:
     p = Path(arg)
     if not p.exists():
-        print(f'  不存在: {p}')
+        print(f"  不存在: {p}")
         continue
     raw = p.read_bytes()
     if raw.startswith(BOM):
-        print(f'  已有 BOM: {p.name}')
+        print(f"  已有 BOM: {p.name}")
         continue
-    text = raw.decode('utf-8')  # 先确认本身是合法 UTF-8
-    p.write_bytes(BOM + text.encode('utf-8'))
-    print(f'  已加 BOM: {p.name}  ({len(raw)} -> {p.stat().st_size} 字节)')
+    text = raw.decode("utf-8")  # 先确认本身是合法 UTF-8
+    p.write_bytes(BOM + text.encode("utf-8"))
+    print(f"  已加 BOM: {p.name}  ({len(raw)} -> {p.stat().st_size} 字节)")
     changed += 1
-print(f'改动 {changed} 个文件')
+print(f"改动 {changed} 个文件")

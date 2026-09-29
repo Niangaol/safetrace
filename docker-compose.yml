@@ -42,6 +42,15 @@ services:
       POSTGRES_DSN: postgresql+psycopg://intel:intel@postgres:5432/intel
       REDIS_URL: redis://redis:6379/0
       LLM_LOCAL_BASE_URL: http://ollama:11434
+      # ⚠️ 实测：本机网络下 huggingface.co **不可达**（容器里连它、ollama registry、
+      # hf-mirror 全部失败；能通的是 PyPI / npm 镜像 / ModelScope）。
+      # 不限制的话 SentenceTransformer 首次加载会重试到超时，实测单次问答卡 3.5 分钟。
+      # 这两个是 HF 官方支持的调优变量，把单次尝试压到秒级，
+      # 配合 embedder 的失败熔断一起用（见 services/knowledge/embedder.py）。
+      HF_HUB_DOWNLOAD_TIMEOUT: "15"
+      HF_HUB_ETAG_TIMEOUT: "10"
+      # 若要启用语义检索：在有网的环境先跑一次把 bge-m3 拉进下面的 hfcache 卷，
+      # 之后本 compose 可直接离线加载（卷挂在 /root/.cache/huggingface）。
     ports: ["8000:8000"]
     volumes:
       # ⚠️ 必须给 HF 缓存挂卷：api 镜像里装了 sentence-transformers，
@@ -64,6 +73,10 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      args:
+        # 实测本机容器连不上 registry.npmjs.org，镜像源可用。
+        # 能直连的环境可把下面这行注释掉（或改成空串）以走官方源。
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
     ports: ["5173:80"]
     depends_on: [api]
 

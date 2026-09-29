@@ -1,4 +1,4 @@
-﻿# SafeTrace: 起全栈 compose（Docker 装好并**重启之后**再跑这个）
+# SafeTrace: 起全栈 compose（Docker 装好并**重启之后**再跑这个）
 #
 # 为什么单独一个脚本：装 Docker 与"起全栈"是两件事，
 # 中间隔一次**重启**（WSL2 组件启用后必须重启才生效）。所以拆开，
@@ -142,13 +142,24 @@ for ($i = 0; $i -lt 40; $i++) {
 }
 if (-not $healthy) { Log '  WARN: 40 次轮询内 /health 未就绪，请查看 docker compose logs api' }
 
-# ── 6. 在容器里跑 accept.py（这才是 E-05 真正要的"全栈验证"）──
-Log '--- 在容器内跑 python -m scripts.accept ---'
-$execArgs = @()
-if ($compose.Count -gt 1) { $execArgs += $compose[1..($compose.Count-1)] }
-$execArgs += @('-p', $ProjectName, '-f', 'docker-compose.yml', '-f', $override, 'exec', '-T', 'api', 'python', '-m', 'scripts.accept')
-& $compose[0] @execArgs 2>&1 | ForEach-Object { Log ("  " + $_) }
-Log "accept 退出码: $LASTEXITCODE"
+# ── 6. 运行期冒烟（这才是"全栈验证"该测的）────────────────────
+#
+# ⚠️ 这里**不能**跑 `scripts/accept.py`：它是**开发门禁**（ruff/mypy/pytest/前端构建），
+# 需要 dev 依赖；生产镜像按设计只装运行期依赖。实测在容器里跑会报
+# `No module named 'scripts'`（scripts/ 没 COPY 进镜像），
+# 即便拷进去也没有 dev 工具 —— 把 dev 依赖塞进生产镜像只为跑冒烟，得不偿失。
+#
+# 正确分工：
+#   - `scripts/accept.py`      -> 在**开发机**上跑（代码门禁）
+#   - `scripts/smoke_runtime.py` -> 对着**已起的栈**跑（服务是否真的在干活）
+Log '--- 运行期冒烟（对着已起的栈）---'
+$env:POSTGRES_DSN = 'postgresql+psycopg://intel:intel@localhost:5432/intel'
+$env:REDIS_URL = 'redis://localhost:6379/0'
+$py = (Get-Command python -ErrorAction SilentlyContinue).Source
+if (-not $py) { $py = 'python' }
+$smokeArgs = @('-m', 'scripts.smoke_runtime', '--base', 'http://localhost:8000')
+& $py @smokeArgs 2>&1 | ForEach-Object { Log ("  " + $_) }
+Log "冒烟退出码: $LASTEXITCODE"
 
 Log '=== 完成 ==='
 Log "  前端: http://localhost:$WebPort"
