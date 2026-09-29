@@ -7,8 +7,8 @@
 from pathlib import Path
 
 DIR = Path(
-    r'C:\Users\kkk97\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent'
-    r'\work-mode-projects\6abb26ff17b11b4656d447f2'
+    r"C:\Users\kkk97\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent"
+    r"\work-mode-projects\6abb26ff17b11b4656d447f2"
 )
 
 START_MARK = "'Docker Compose一键启动"
@@ -26,24 +26,24 @@ NEW_LINES = [
 
 
 def main() -> int:
-    for name in ('generate_report.py', 'generate_word.py'):
+    for name in ("generate_report.py", "generate_word.py"):
         p = DIR / name
         if not p.exists():
             continue
-        lines = p.read_text(encoding='utf-8').splitlines(keepends=True)
+        lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
         idx = None
         for i, line in enumerate(lines):
             if START_MARK in line:
                 idx = i
                 break
         if idx is None:
-            print(f'  {name}: 未找到起始行')
+            print(f"  {name}: 未找到起始行")
             continue
-        print(f'  {name}: 命中 L{idx + 1}，替换 {SPAN} 行')
-        lines[idx:idx + SPAN] = NEW_LINES
-        p.write_text(''.join(lines), encoding='utf-8')
+        print(f"  {name}: 命中 L{idx + 1}，替换 {SPAN} 行")
+        lines[idx : idx + SPAN] = NEW_LINES
+        p.write_text("".join(lines), encoding="utf-8")
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     raise SystemExit(main())
