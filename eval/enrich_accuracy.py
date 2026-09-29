@@ -201,6 +201,15 @@ def score_cases(cases: list[dict], actuals: dict[str, dict]) -> dict[str, Any]:
             f"{result['unmatched_cases']} 条标注在库中找不到对应 (vuln_id, dimension)，已跳过；"
             "这些不计入准确率分母。"
         )
+    # ⚠️ 口径警告：`enrich_cases.jsonl` 的 expected 是**由当前产出固化**生成的
+    # （见 `scripts/build_eval_datasets.py`），与 `load_actuals()` 读的是同一张表。
+    # 因此准确率必然接近 1.0 —— 它证明的是"输出没变"，**不是"输出正确"**。
+    # 真准确率请用 `eval/datasets/enrich_annotation.jsonl`（独立于系统产出，见
+    # `scripts/build_enrich_annotation.py`）与 `docs/评测实测结果.md`。
+    result["caveat"] = (
+        "本指标是**回归基线**：expected 由当前产出固化而来，与 actual 同源，"
+        "准确率恒接近 1.0。**不可读作「富化准确率」**。"
+    )
     return result
 
 

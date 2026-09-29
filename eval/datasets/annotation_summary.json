@@ -1,0 +1,32 @@
+{
+  "vuln": {
+    "total": 13,
+    "track_a": 13,
+    "track_b": 0,
+    "a_correct": 10,
+    "a_wrong": 3,
+    "a_accuracy": 0.769
+  },
+  "enrich_real_pipeline": {
+    "total": 84,
+    "track_a": 24,
+    "track_b": 60,
+    "a_correct": 24,
+    "a_wrong": 0,
+    "a_accuracy": 1.0
+  },
+  "enrich_demo_template": {
+    "total": 76,
+    "track_a": 21,
+    "track_b": 55,
+    "a_correct": 2,
+    "a_wrong": 19,
+    "a_accuracy": 0.095
+  },
+  "qa": {
+    "total": 20,
+    "accuracy": 0.575,
+    "target": 0.85
+  },
+  "grand_total_rows": 117
+}
