@@ -75,12 +75,66 @@ def test_upsert_env_no_duplicate_keys(env_file: Path) -> None:
     assert "# 注释应保留" in text
 
 
-def test_upsert_env_is_atomic_and_backs_up(env_file: Path) -> None:
+def test_upsert_env_is_atomic_and_leaves_no_temp(env_file: Path) -> None:
     cfg._upsert_env({"A": "1"})
     # 不留临时文件（半截文件会让服务起不来）
     assert not list(env_file.parent.glob(".env.tmp")), "残留了 .env.tmp"
-    # 有备份
-    assert (env_file.parent / ".env.bak").exists() or True  # 首次可能无备份，不强制
+    # 也别留下"错名字"的临时文件
+    assert not list(env_file.parent.glob(".env.env.tmp")), "残留了 .env.env.tmp"
+
+
+def test_backup_filename_is_gitignore_safe(env_file: Path) -> None:
+    """回归：备份文件名必须是 `.env.bak`，**不能是 `.env.env.bak`**。
+
+    这条测试存在的理由：`Path('.env').with_suffix('.env.bak')` 会得到
+    `.env.env.bak`，而它**不被 `.gitignore` 的 `.env` 规则覆盖** ——
+    结果含真实密钥的备份被 `git add -A` 一起提交并推送了（真实事故）。
+
+    注意：断言必须写**精确文件名**。早先这里写的是
+    `assert (… / '.env.bak').exists() or True`，`or True` 让断言永远成立，
+    等于没测 —— 所以 bug 没被拦住。
+    """
+
+    from pathlib import Path as _Path
+
+    cfg._upsert_env({"A": "1"})
+    names = sorted(p.name for p in env_file.parent.iterdir())
+    assert ".env.bak" in names, f"没有生成 .env.bak，实际文件: {names}"
+    assert ".env.env.bak" not in names, f"生成了错名字的备份 .env.env.bak: {names}"
+
+    # 备份内容应与写入前的 .env 一致（确认确实备份到了那个时刻）
+    backup_text = (_Path(env_file.parent) / ".env.bak").read_text(encoding="utf-8")
+    assert "LLM_API_KEY=sk-existing-key-1234567890" in backup_text
+
+
+def test_gitignore_covers_env_variants() -> None:
+    """`.gitignore` 必须挡住 .env 的全部变体（含 .bak / .tmp），但放行示例文件。
+
+    这条是"事故复盘"型测试：光写 `.env` 一条规则是不够的。
+    """
+
+    import subprocess
+
+    repo = Path(__file__).resolve().parent.parent
+    gitignore = repo / ".gitignore"
+    if not gitignore.exists():  # pragma: no cover - 正常仓库都有
+        pytest.skip("无 .gitignore")
+
+    def ignored(rel: str) -> bool:
+        r = subprocess.run(
+            ["git", "check-ignore", rel],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return r.returncode == 0
+
+    for dangerous in (".env", ".env.bak", ".env.env.bak", ".env.tmp", ".env.local"):
+        assert ignored(dangerous), f"{dangerous} 未被忽略，可能被误提交（含密钥）"
+
+    for allowed in (".env.example", "web/.env.example"):
+        assert not ignored(allowed), f"{allowed} 被忽略了，示例文件应当入库"
 
 
 def test_read_config_marks_dsn_as_requires_restart(monkeypatch, env_file: Path) -> None:
