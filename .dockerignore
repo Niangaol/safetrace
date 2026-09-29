@@ -1,0 +1,55 @@
+# Docker 构建上下文排除清单
+#
+# 为什么要这个文件：没有它时，`docker build` 会把**整个仓库目录**打包发给 daemon。
+# 本机实测：`web/node_modules` 128.8MB + `.git` 4.7MB + data/ 等一起被发送，
+# 构建长时间卡在 "Pulling fs layer" 之后不动（Build Cache 有 500MB 但容器数为 0），
+# 看起来像"网络慢"，实际是 context 传输 + 过滤开销。
+#
+# 排除原则：容器里需要的是**源码 + 依赖声明**，
+# 不需要任何本机生成物（依赖目录、缓存、数据、日志、虚拟环境）。
+
+# ---- 依赖目录（容器内会重新装）----
+web/node_modules/
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 本机数据与产物（绝不进镜像：可能含密钥/隐私）----
+data/
+*.sqlite3
+eval/artifacts/
+reports/
+*.log
+
+# ---- 安装包与二进制（体积大，容器内不需要）----
+*.msi
+*.msix
+*.msixbundle
+*.exe
+*.dll
+
+# ---- 版本控制与编辑器 ----
+.git/
+.gitignore
+.dockerignore
+.vscode/
+.idea/
+
+# ---- 交付物与文档（镜像里不需要，减小体积）----
+docs/技术报告-修正版/
+*.docx
+*.pptx
+*.pdf
+
+# ---- 前端构建产物（由容器内重新构建）----
+web/dist/
+
+# ---- 环境文件：**只允许 .env 由 compose 的 env_file 注入，不进镜像** ----
+.env
+.env.*
+!.env.example

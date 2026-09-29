@@ -43,6 +43,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       LLM_LOCAL_BASE_URL: http://ollama:11434
     ports: ["8000:8000"]
+    volumes:
+      # ⚠️ 必须给 HF 缓存挂卷：api 镜像里装了 sentence-transformers，
+      # 首次加载 bge-m3 会下载约 2.2GB 权重。不挂卷的话每次重建容器都要重下，
+      # 演示前那一轮会卡很久（且外网不稳时直接失败）。
+      - hfcache:/root/.cache/huggingface
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -73,3 +78,4 @@ services:
 volumes:
   pgdata:
   ollamadata:
+  hfcache:

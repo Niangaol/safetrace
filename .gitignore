@@ -24,6 +24,14 @@ htmlcov/
 # 运行日志（含本机路径与配置回显，不入库）
 *.log
 
+# 安装包（体积大、可从上游重下，绝不入库）
+# 实测踩过：wsl.2.7.14.0.x64.msi 有 247MB，差点被 git add -A 带进去
+*.msi
+*.msix
+*.msixbundle
+*.exe
+*.dll
+
 # 运行数据
 data/
 *.sqlite3
