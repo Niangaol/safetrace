@@ -18,7 +18,7 @@
   "scripts": {
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json",
-    "validate:contracts": "PY=$(command -v python3 || command -v python) && \"$PY\" scripts/validate_contracts.py",
+    "validate:contracts": "node scripts/validate-contracts.mjs",
     "check": "npm run typecheck && npm run test && npm run validate:contracts",
     "smoke": "tsx scripts/smoke.ts",
     "gateway:serve": "tsx src/gateway/src/server.ts",
