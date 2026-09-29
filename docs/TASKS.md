@@ -39,13 +39,13 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 
 | 阶段 | 任务数 | 待办 | 进行中 | 已完成 | 阻塞 |
 |---|---|---|---|---|---|
-| 第 0 阶段 根因修复（D2–D5） | 6 | 4 | 0 | 2 | 0 |
+| 第 0 阶段 根因修复（D2–D5） | 6 | 3 | 1 | 2 | 0 |
 | 第 1 阶段 契约扩展（**必须 D6 前**） | 6 | 6 | 0 | 0 | 0 |
 | 第 2 阶段 架构改造（D13–D18） | 6 | 6 | 0 | 0 | 0 |
 | 第 3 阶段 证据链（D7–D18） | 7 | 5 | 0 | 0 | 2 |
 | 第 4 阶段 文档口径同步 | 13 | 13 | 0 | 0 | 0 |
 | 第 5 阶段 冻结与交件（D19–D22） | 4 | 4 | 0 | 0 | 0 |
-| **合计** | **42** | **38** | **0** | **2** | **2** |
+| **合计** | **42** | **37** | **1** | **2** | **2** |
 
 > 本表随 PR 更新。任何一项转 `已砍` 必须在 PR 描述里写清「保留下什么证据」。
 
@@ -59,7 +59,7 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 | R-02 | 丙 | `.githooks` 接线：`git config core.hooksPath .githooks` + `chmod +x .githooks/*`（**已做**，待随本 PR 提交模式变更）+ 修 `docs/GITHUB-FLOW.md:91` 的假陈述「本仓库已配置」（已随本 PR 修正，并补 `chmod +x` 要求） | — | 已完成 | 基础 | 试提交 `bad message` 被拒；`npm run hooks:install` 可复现  ✅ 本 PR #1 已完成：`core.hooksPath` 已配置 + 补 `chmod +x` + GITHUB-FLOW:91 假陈述已改 + 新增 `npm run hooks:install`|
 | R-03 | 丙 | MG1 usage 表丢两字段：`src/gateway/src/index.ts:246-247` 把 `latency_ms:0`/`cached:false` 写死，丢了 reply 里正确的值（`record()` 入参只收 `{usage, degraded_to}`） | — | 待办 | 基础 | 新增断言：同 prompt 二次调用 → usage 新增一行且 `cached=true`、`latency_ms>0` |
 | R-04 | 丙 | 黄金问答口径做实 + 契约校验覆盖：仅 10 条（目标 20）；无期望答案文本；`scripts/smoke.ts:121-127` 不传 `cve_ids`；`:139` 只断言「带引用或拒答」且**不用 `expected_intent`**；`scripts/validate_contracts.py:34-46` 的 `FIXTURE_SCHEMA_MAP` 不含 golden-qa | R-01 | 待办 | 基础 | 扩到 20 条（覆盖 8 类意图，≥3 条 `expect_abstain`）；smoke 改硬断言 `expected_intent` + `expected_cve_ids` + `expected_answer_must_include`；校验器加 golden-qa 条目 |
-| R-05 | 丙 | `.gitignore:32` 是 ` recordings/`（**行首有空格**），对 `recordings/` 目录无效 | — | 待办 | 基础 | `git check-ignore -v recordings/x.mp4` 命中 |
+| R-05 | 丙 | `.gitignore:32` 是 ` recordings/`（**行首有空格**），对 `recordings/` 目录无效 | — | 进行中 | 基础 | `git check-ignore -v recordings/x.mp4` 命中 ✅ 本地已删行首空格并验证 rc=0（普通路径不受影响）；本地 commit 待验收，PR 编号合并后回填 |
 | R-06 | 丙 | 建本台账（原先 `find -iname "*todo*"` 仓库内零命中；Taskwarrior 已装但 `project:safetrace` 零任务） | — | 已完成 | 基础 | 本文件存在且随 PR 更新  ✅ 本 PR #1 已建：本文件|
 
 ## 4. 第 1 阶段：契约扩展（**必须赶在 D6 = 10/3 前**）
