@@ -110,10 +110,58 @@ class QAAgent:
         model = get_llm().route("reason")[1]
 
         try:
-            yield {"event": "stage", "stage": "rewrite", "message": "正在理解问题意图…"}
+            # ── 轨迹（trace）事件 ──────────────────────────────────────
+            # 目的有两个：
+            #   ① **先有什么发什么**：第一帧立刻把"收到问题"发出去，
+            #      用户不必盯着空白等 25s（感知等待时间远小于实际等待时间）；
+            #   ② **过程可视化**：每一步都带 工具名 / 入参 / 结果 / 耗时，
+            #      前端可以像 agent 轨迹那样逐步展开，而不是只看到一个转圈。
+            # 这是一条**与答案正文并行**的流：token 照旧边走边发，
+            # trace 只描述"我正在做什么、做完了得到什么"。
+            def _trace(
+                step: str,
+                tool: str,
+                *,
+                tool_input: dict[str, Any] | None = None,
+                ok: bool | None = None,
+                output: str | None = None,
+                extra: dict[str, Any] | None = None,
+            ) -> dict[str, Any]:
+                payload: dict[str, Any] = {
+                    "event": "trace",
+                    "step": step,
+                    "tool": tool,
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                }
+                if tool_input:
+                    payload["input"] = tool_input
+                if ok is not None:
+                    payload["ok"] = ok
+                if output:
+                    payload["output"] = output
+                if extra:
+                    payload.update(extra)
+                return payload
+
+            yield _trace("recv", "chat", tool_input={"question": question, "top_k": top_k})
+            yield {
+                "event": "stage",
+                "stage": "rewrite",
+                "message": "正在理解问题意图…",
+            }
             plan = await self.plan(question)
             for idx, sub in enumerate(plan["sub_questions"][:3], start=1):
                 reasoning.append({"step": idx, "sub_question": sub, "finding": ""})
+            yield _trace(
+                "plan",
+                "QAAgent.plan",
+                ok=True,
+                output=f"拆出 {len(plan['sub_questions'])} 个子问题 / {len(plan['queries'])} 条检索式",
+                extra={
+                    "sub_questions": plan["sub_questions"][:3],
+                    "queries": plan["queries"][:5],
+                },
+            )
 
             evidence: list[dict] = []
             for round_no in range(1, MAX_ITERATIONS + 1):
@@ -123,12 +171,30 @@ class QAAgent:
                     "round": round_no,
                     "hit": len(evidence),
                 }
+                queries = plan["queries"][:5]
+                yield _trace(
+                    f"retrieve.{round_no}",
+                    "hybrid_search",
+                    tool_input={"queries": queries, "top_k": top_k, "round": round_no},
+                )
                 fetched = await self.retrieve(plan["queries"], top_k=top_k)
                 known = {e["chunk_key"] for e in evidence}
                 new = [e for e in fetched if e["chunk_key"] not in known]
+                evidence.extend(new)
+                yield _trace(
+                    f"retrieve.{round_no}",
+                    "hybrid_search",
+                    ok=True,
+                    output=f"合并后 {len(fetched)} 条，其中新增 {len(new)} 条",
+                    extra={
+                        "round": round_no,
+                        "fetched": len(fetched),
+                        "new": len(new),
+                        "total": len(evidence),
+                    },
+                )
                 if not new and round_no > 1:
                     break
-                evidence.extend(new)
                 if round_no == 1:
                     # 首轮用"最少证据"反馈补一轮查询，模拟多跳
                     gap_hint = ", ".join(plan["sub_questions"])
@@ -152,9 +218,22 @@ class QAAgent:
                     }
                 )
                 yield {"event": "citation", **citations[-1]}
+            yield _trace(
+                "citations",
+                "build_evidence",
+                ok=True,
+                output=f"整理出 {len(citations)} 条可引用证据",
+                extra={"citations": len(citations)},
+            )
 
             if not evidence:
                 answer = "知识库中暂无可支撑该问题的证据，建议先执行一次采集与富化。"
+                yield _trace(
+                    "no_evidence",
+                    "check_answer",
+                    ok=False,
+                    output="知识库中没有可支撑该问题的证据，如实告知而不编造",
+                )
                 yield {"event": "token", "text": answer}
             else:
                 context = "\n\n".join(
@@ -180,9 +259,23 @@ class QAAgent:
                     yield {"event": "token", "text": piece}
                 answer = "".join(buffer)
 
+                yield _trace(
+                    "generate",
+                    "LLM.stream",
+                    ok=True,
+                    output=f"生成 {len(answer)} 字",
+                    extra={"chars": len(answer), "model": model},
+                )
+
                 yield {"event": "stage", "stage": "reasoning", "message": "汇总推理链…"}
                 for item in reasoning:
                     yield {"event": "reasoning", **item}
+                yield _trace(
+                    "reasoning",
+                    "build_chain",
+                    ok=True,
+                    output=f"{len(reasoning)} 步推理",
+                )
 
                 yield {"event": "stage", "stage": "check", "message": "自检答案是否被证据支持…"}
                 verdict = await check_answer(question, answer, citations + evidence)
@@ -190,6 +283,17 @@ class QAAgent:
                     item["finding"] = (
                         verdict.get("gaps", [""])[0] if verdict.get("gaps") else "证据支持"
                     )
+                yield _trace(
+                    "check",
+                    "check_answer",
+                    ok=bool(verdict.get("passed", True)),
+                    output=(
+                        "自检通过（证据支持）"
+                        if verdict.get("passed", True)
+                        else f"自检未通过：{'; '.join(verdict.get('gaps') or ['证据不足'])}"
+                    ),
+                    extra={"score": round(float(verdict.get("score", 0.0)), 3)},
+                )
                 if not verdict.get("passed", True):
                     logger.info("自检未通过，重生成一次: %s", verdict.get("gaps"))
                     yield {
@@ -199,6 +303,12 @@ class QAAgent:
                             verdict.get("gaps") or verdict.get("hallucination") or ["证据不足"]
                         ),
                     }
+                    yield _trace(
+                        "regenerate",
+                        "LLM.stream",
+                        tool_input={"reason": "自检未通过"},
+                        ok=True,
+                    )
                     messages[0]["content"] = FORCE_REWRITE_HINT.format(
                         reason="; ".join(
                             verdict.get("gaps") or verdict.get("hallucination") or ["证据不足"]
@@ -270,6 +380,14 @@ class QAAgent:
             }
         except Exception as exc:  # noqa: BLE001 - SSE 端点需要结构化错误
             logger.exception("问答失败")
+            yield {
+                "event": "trace",
+                "step": "failed",
+                "tool": "chat",
+                "ok": False,
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "output": str(exc)[:200],
+            }
             yield {"event": "error", "code": "QA_FAILED", "message": str(exc)[:300]}
 
     async def answer(self, question: str, **kwargs: Any) -> dict[str, Any]:

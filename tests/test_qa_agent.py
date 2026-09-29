@@ -42,11 +42,42 @@ def patched_agent(monkeypatch, stub_llm, fake_bus):
 async def test_answer_stream_event_sequence(patched_agent):
     events = [e async for e in patched_agent.answer_stream("最近有哪些高危漏洞？")]
     kinds = [e["event"] for e in events]
-    assert kinds[0] == "stage"
-    assert events[0]["stage"] == "rewrite"
-    assert "citation" in kinds
-    assert "token" in kinds
+
+    # 第一帧必须是 trace：**先有什么发什么**，让用户在 0ms 就看到反馈，
+    # 而不是盯着空白等 20 多秒（感知等待时间远小于实际等待时间）。
+    assert kinds[0] == "trace", f"第一帧应为 trace，实际 {kinds[:3]}"
+    assert events[0]["step"] == "recv"
+    assert events[0]["elapsed_ms"] == 0
+
+    # 第一个 stage 进入正式流程
+    first_stage = next(e for e in events if e["event"] == "stage")
+    assert first_stage["stage"] == "rewrite"
+
+    for kind in ("citation", "token", "reasoning", "trace", "stage"):
+        assert kind in kinds, f"缺少 {kind} 事件"
     assert kinds[-1] == "done"
+
+
+async def test_trace_events_cover_every_pipeline_step(patched_agent):
+    """轨迹要能把"做了什么"讲清楚：每步带工具名与耗时，且有开始与结束两帧。"""
+
+    events = [e async for e in patched_agent.answer_stream("问题")]
+    traces = [e for e in events if e["event"] == "trace"]
+    steps = [t["step"] for t in traces]
+
+    # 收到问题 → 规划 → 检索 → 整理证据 → 生成 → 推理链 → 自检
+    for expected in ("recv", "plan", "retrieve.1", "citations", "generate", "reasoning", "check"):
+        assert expected in steps, f"轨迹缺少步骤 {expected}（实际 {steps}）"
+
+    # 每一步都必须带工具名与累计耗时，否则前端无法展示"哪一步慢"
+    for t in traces:
+        assert t.get("tool"), f"{t['step']} 缺 tool"
+        assert isinstance(t.get("elapsed_ms"), int)
+
+    # 有开始帧（带 input）也有结束帧（带 ok/output），否则界面上会一直转圈
+    finished = [t for t in traces if "ok" in t]
+    assert finished, "没有任何结束帧（ok/output）"
+    assert any("output" in t for t in finished), "结束帧应带结果摘要"
 
 
 async def test_answer_stream_emits_refs_for_citations(patched_agent):

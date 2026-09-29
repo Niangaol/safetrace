@@ -11,6 +11,7 @@ import {
   SAMPLE_QUESTION,
   SAMPLE_REASONING,
   SAMPLE_STAGES,
+  SAMPLE_TRACES,
 } from '../qaSample'
 import { useQaStore } from '../stores/qa'
 import type { MetricsOverview } from '../types'
@@ -79,6 +80,64 @@ const activeRef = ref<string | null>(null)
 /** 是否处于「样例渲染」模式（`/qa?demo=1`），页面上要如实标注 */
 const isSample = ref(false)
 
+/**
+ * 轨迹（trajectory）：把后端的 `trace` 事件渲染成"过程可视化"。
+ *
+ * 设计取向与 agent 工具链的轨迹视图一致：
+ *   - **干到哪一步就显示到哪一步**（先有什么发什么），没有"等全部完成再展开"；
+ *   - 每步显示 工具名 / 入参摘要 / 结果 / **该步耗时**（由相邻两步时间差算出）；
+ *   - 正在执行的那步有活动指示，失败的步标红，不隐藏。
+ */
+const showTrace = ref(true)
+
+/** 每步耗时：用"下一步开始"或"自身结束"减去"自身开始" */
+const traceRows = computed(() =>
+  qa.traces.map((t, i) => {
+    const next = qa.traces[i + 1]
+    const end = t.finishedAt ?? next?.startedAt ?? null
+    return {
+      ...t,
+      durationMs: end != null ? Math.max(0, end - t.startedAt) : null,
+      running: t.finishedAt == null && t.ok == null,
+    }
+  }),
+)
+
+/** 轨迹里入参过长时截断展示（完整内容放在 title 里） */
+function inputSummary(input?: Record<string, unknown>): string {
+  if (!input) return ''
+  const parts: string[] = []
+  for (const [k, v] of Object.entries(input)) {
+    if (Array.isArray(v)) {
+      parts.push(`${k}=[${v.length} 项]`)
+    } else if (typeof v === 'string') {
+      parts.push(`${k}=${v.length > 40 ? `${v.slice(0, 40)}…` : v}`)
+    } else {
+      parts.push(`${k}=${String(v)}`)
+    }
+  }
+  return parts.join(' · ')
+}
+
+/** 轨迹步骤的中文标签（未知步骤原样显示，不猜） */
+const TRACE_LABEL: Record<string, string> = {
+  recv: '收到问题',
+  plan: '规划子问题与检索式',
+  citations: '整理可引用证据',
+  generate: '生成答案',
+  reasoning: '汇总推理链',
+  check: '自检',
+  regenerate: '自检未通过，重生成',
+  no_evidence: '无证据，如实告知',
+  failed: '失败',
+}
+function traceLabel(step: string): string {
+  if (TRACE_LABEL[step]) return TRACE_LABEL[step]
+  const m = /^retrieve\.(\d+)$/.exec(step)
+  if (m) return `第 ${m[1]} 轮检索`
+  return step
+}
+
 function focusRef(ref: string) {
   activeRef.value = activeRef.value === ref ? null : ref
   document.getElementById(`evidence-${ref}`)?.scrollIntoView({
@@ -125,6 +184,8 @@ onMounted(async () => {
     qa.citations = SAMPLE_CITATIONS
     qa.reasoning = SAMPLE_REASONING
     qa.stages = SAMPLE_STAGES
+    qa.traces = SAMPLE_TRACES
+    qa.started = true
     qa.stage = 'done'
     qa.meta = SAMPLE_META
     qa.thinking = false
@@ -217,6 +278,58 @@ onMounted(async () => {
     <strong>本次回答处于降级状态</strong>（后端 <code>degraded=true</code>），请对照下方证据判断可信度。
   </div>
   <div v-if="qa.error" class="notice error" style="margin-bottom: 14px">{{ qa.error }}</div>
+
+  <!-- 轨迹：过程可视化（干到哪一步显示到哪一步） -->
+  <div v-if="qa.traces.length" class="panel fade-in" style="margin-bottom: 14px">
+    <div class="panel-header">
+      <h3>执行轨迹</h3>
+      <div style="display: flex; align-items: center; gap: 8px">
+        <span class="badge-count">
+          {{ traceRows.length }} 步
+          <template v-if="qa.meta?.elapsedMs != null"> · 共 {{ qa.meta.elapsedMs }}ms</template>
+        </span>
+        <button
+          class="secondary"
+          style="font-size: 11px; padding: 3px 10px"
+          @click="showTrace = !showTrace"
+        >
+          {{ showTrace ? '收起' : '展开' }}
+        </button>
+      </div>
+    </div>
+    <div v-if="showTrace" class="trace-list">
+      <div
+        v-for="(t, i) in traceRows"
+        :key="`${t.step}-${i}`"
+        class="trace-row"
+        :class="{ running: t.running, failed: t.ok === false }"
+      >
+        <span class="trace-icon">
+          <span v-if="t.running" class="spinner"></span>
+          <span v-else-if="t.ok === false">✕</span>
+          <span v-else>✓</span>
+        </span>
+        <span class="trace-main">
+          <span class="trace-title">
+            {{ traceLabel(t.step) }}
+            <code class="trace-tool">{{ t.tool }}</code>
+          </span>
+          <span v-if="t.output" class="trace-output">{{ t.output }}</span>
+          <span v-else-if="t.input" class="trace-input" :title="JSON.stringify(t.input)">
+            {{ inputSummary(t.input) }}
+          </span>
+        </span>
+        <span class="trace-time">
+          <template v-if="t.durationMs != null">{{ t.durationMs }}ms</template>
+          <template v-else>…</template>
+          <span class="trace-at">@{{ t.startedAt }}ms</span>
+        </span>
+      </div>
+    </div>
+    <p v-else class="muted" style="font-size: 12px; margin: 0">
+      已收起 {{ traceRows.length }} 步（点右上角展开）
+    </p>
+  </div>
 
   <!-- 三栏：证据 / 推理链 / 答案 -->
   <div class="qa-grid">
@@ -538,6 +651,83 @@ onMounted(async () => {
   word-break: break-all;
 }
 .src-link:hover { color: #bae6fd; border-bottom-style: solid; }
+
+/* ── 执行轨迹（过程可视化）────────────────────────────────── */
+
+.trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 2px solid rgba(56, 189, 248, 0.25);
+  padding-left: 0;
+  margin-left: 6px;
+}
+
+.trace-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  position: relative;
+}
+.trace-row:hover { background: rgba(56, 189, 248, 0.06); }
+.trace-row.running { background: rgba(56, 189, 248, 0.08); }
+.trace-row.failed { background: rgba(244, 63, 94, 0.08); }
+
+/* 时间线节点 */
+.trace-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #4ade80;
+  background: #0f1623;
+  border: 1px solid rgba(74, 222, 128, 0.4);
+  border-radius: 50%;
+  margin-left: -11px;
+}
+.trace-row.running .trace-icon {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.5);
+}
+.trace-row.failed .trace-icon {
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, 0.5);
+}
+
+.trace-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.trace-title { color: var(--text); }
+.trace-tool {
+  margin-left: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+}
+.trace-output { color: #94a3b8; font-size: 11px; }
+.trace-input {
+  color: #64748b;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-time {
+  flex-shrink: 0;
+  text-align: right;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #7dd3fc;
+  display: flex;
+  flex-direction: column;
+}
+.trace-at { color: #475569; font-size: 10px; }
 
 .meta-grid {
   display: grid;

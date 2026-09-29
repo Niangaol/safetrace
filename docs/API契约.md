@@ -193,8 +193,23 @@ GitHub webhook 接收端（实时链路）。需校验 `X-Hub-Signature-256`。
 > 也必须按"逐行找 `data:`"来做 —— 早期实现只取每帧第一行，会把这类多行帧整帧丢掉。
 
 ```
+event: trace
+data: {"event":"trace","step":"recv","tool":"chat","elapsed_ms":0,
+       "input":{"question":"CVE-2026-31001 怎么修复？","top_k":8}}
+
 event: stage
 data: {"event":"stage","stage":"rewrite","message":"正在理解问题意图…"}
+
+event: trace
+data: {"event":"trace","step":"plan","tool":"QAAgent.plan","elapsed_ms":3950,"ok":true,
+       "output":"拆出 3 个子问题 / 4 条检索式","sub_questions":["…"],"queries":["…"]}
+
+event: trace
+data: {"event":"trace","step":"retrieve.1","tool":"hybrid_search","elapsed_ms":3950,
+       "input":{"queries":["CVE-2026-31001"],"top_k":8,"round":1}}
+event: trace
+data: {"event":"trace","step":"retrieve.1","tool":"hybrid_search","elapsed_ms":3981,"ok":true,
+       "output":"合并后 3 条，其中新增 3 条","round":1,"fetched":3,"new":3,"total":3}
 
 event: stage
 data: {"event":"stage","stage":"retrieve","round":1,"hit":0}      ← hit 是**当前累计**命中数
@@ -203,7 +218,7 @@ event: stage
 data: {"event":"stage","stage":"retrieve","round":3,"hit":1}
 
 event: citation
-data: {"event":"citation","id":"S1","title":"vuln:CVE-2026-31001","url":"CVE-2026-31001","score":0.0}
+data: {"event":"citation","id":"S1","title":"vuln:CVE-2026-31001","url":"https://nvd.nist.gov/vuln/detail/CVE-2026-31001","owner_type":"vuln","owner_id":"CVE-2026-31001","score":0.0}
 
 event: token
 data: {"event":"token","text":"结论：…"}      ← 增量文本，前端累加
@@ -220,7 +235,28 @@ data: {"event":"done","session_id":"sess_…","elapsed_ms":25190,"citations":3,
        "degraded":false,"reasoning":[{"step":1,"sub_question":"…","finding":"证据支持"}]}
 ```
 
-三条**容易被误读**的地方：
+### `trace` 事件（轨迹 / 过程可视化）
+
+**每个关键步骤发两帧**：开始帧（只有 `input`）与结束帧（带 `ok`/`output`），
+前端按 `step` 合并即可画出"哪一步在跑、拿到什么、花多久"。
+
+| 字段 | 说明 |
+| --- | --- |
+| `step` | 步骤标识：`recv` / `plan` / `retrieve.<n>` / `citations` / `generate` / `reasoning` / `check` / `regenerate` / `no_evidence` / `failed` |
+| `tool` | 该步实际调用的工具或函数名（如 `hybrid_search`、`LLM.stream`、`check_answer`） |
+| `input` | 工具入参（开始帧） |
+| `ok` / `output` | 是否成功 / 结果摘要（结束帧） |
+| `elapsed_ms` | **自请求开始**的累计耗时（不是单步耗时）。单步耗时 = 本步耗时 − 上一步耗时 |
+| 其余键 | 步骤特有信息（`fetched`/`new`/`total`、`chars`/`model`、`score` 等），原样透传 |
+
+**两条设计约束**：
+
+1. **第一帧必须是 `trace:recv`（`elapsed_ms=0`）** —— 让用户在 0ms 就看到反馈，
+   而不是盯空白等 20 多秒；有测试 `test_answer_stream_event_sequence` 钉住。
+2. **`trace` 与答案正文是两条并行的流**：`token` 照旧边走边发，`trace` 只描述过程。
+   不要为了等轨迹而缓冲正文 —— 那会把"先有什么发什么"的意义抵消掉。
+
+多条**容易被误读**的地方：
 
 1. **`reasoning` 事件会发两轮**：先在 `token` 段之后发一遍（`finding` 通常为空），
    自检完成后再发一遍**补全 `finding`**。前端应按 `step` 覆盖而非追加，否则会看到重复步骤。

@@ -8,7 +8,7 @@
  * 注意：这只是**渲染样例**，不代表系统当前状态；
  * 页面上会明确标注"演示样例"，避免被误当成真实运行结果（红线⑤ Mock 要说出口）。
  */
-import type { ReasoningStep, StageStep } from './stores/qa'
+import type { ReasoningStep, StageStep, TraceStep } from './stores/qa'
 import type { Citation } from './types'
 
 export const SAMPLE_QUESTION = 'CVE-2026-31001 怎么修复？请给出具体版本和缓解措施。'
@@ -76,3 +76,80 @@ export const SAMPLE_META = {
   degraded: false,
   citationCount: 3,
 }
+
+/** 样例轨迹（时序与一次真实问答一致，便于验收"过程可视化"的排版） */
+export const SAMPLE_TRACES: TraceStep[] = [
+  {
+    step: 'recv',
+    tool: 'chat',
+    input: { question: SAMPLE_QUESTION, top_k: 8 },
+    startedAt: 0,
+  },
+  {
+    step: 'plan',
+    tool: 'QAAgent.plan',
+    ok: true,
+    output: '拆出 3 个子问题 / 4 条检索式',
+    startedAt: 0,
+    finishedAt: 3950,
+    extra: {
+      sub_questions: ['CVE-2026-31001 是否真实存在？', '其漏洞类型与受影响产品', '官方修复版本与缓解措施'],
+      queries: ['CVE-2026-31001', 'CVE-2026-31001 patch fix security advisory'],
+    },
+  },
+  {
+    step: 'retrieve.1',
+    tool: 'hybrid_search',
+    input: { queries: ['CVE-2026-31001', 'CVE-2026-31001 patch fix'], top_k: 8, round: 1 },
+    ok: true,
+    output: '合并后 3 条，其中新增 3 条',
+    startedAt: 3950,
+    finishedAt: 3981,
+    extra: { round: 1, fetched: 3, new: 3, total: 3 },
+  },
+  {
+    step: 'retrieve.2',
+    tool: 'hybrid_search',
+    input: { queries: ['CVE-2026-31001', '混合检索补一轮'], top_k: 8, round: 2 },
+    ok: true,
+    output: '合并后 3 条，其中新增 0 条',
+    startedAt: 3981,
+    finishedAt: 3992,
+    extra: { round: 2, fetched: 3, new: 0, total: 3 },
+  },
+  {
+    step: 'citations',
+    tool: 'build_evidence',
+    ok: true,
+    output: '整理出 3 条可引用证据',
+    startedAt: 3992,
+    finishedAt: 3992,
+    extra: { citations: 3 },
+  },
+  {
+    step: 'generate',
+    tool: 'LLM.stream',
+    ok: true,
+    output: '生成 677 字',
+    startedAt: 3992,
+    finishedAt: 20869,
+    extra: { chars: 677, model: 'deepseek-v4-pro' },
+  },
+  {
+    step: 'reasoning',
+    tool: 'build_chain',
+    ok: true,
+    output: '2 步推理',
+    startedAt: 20869,
+    finishedAt: 20869,
+  },
+  {
+    step: 'check',
+    tool: 'check_answer',
+    ok: true,
+    output: '自检通过（证据支持）',
+    startedAt: 20869,
+    finishedAt: 23926,
+    extra: { score: 0.95 },
+  },
+]

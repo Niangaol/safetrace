@@ -30,6 +30,29 @@ export interface RunMeta {
   citationCount: number
 }
 
+/**
+ * 一条轨迹（后端 `trace` 事件）—— 对应"正在做什么 / 用什么 / 拿到什么 / 花了多久"。
+ *
+ * 后端对**每个关键步骤发两条**：开始（只有 `input`）与结束（带 `ok`/`output`）。
+ * 这里按 `step` 合并成一条，保留 `startedAt` 与 `finishedAt`，
+ * 于是界面上能看出"哪一步最慢"，而不是只看到一个总耗时。
+ */
+export interface TraceStep {
+  step: string
+  tool: string
+  /** 工具入参（开始帧） */
+  input?: Record<string, unknown>
+  /** 是否成功（结束帧；未结束为 undefined） */
+  ok?: boolean
+  /** 结果摘要（结束帧） */
+  output?: string
+  /** 开始/结束时的累计耗时（毫秒），来自后端，便于判断哪一步耗时最长 */
+  startedAt: number
+  finishedAt?: number
+  /** 结束帧可能带的补充字段（新增条数、模型名、自检分数等） */
+  extra?: Record<string, unknown>
+}
+
 export const useQaStore = defineStore('qa', () => {
   const answer = ref('')
   const citations = ref<Citation[]>([])
@@ -38,6 +61,10 @@ export const useQaStore = defineStore('qa', () => {
   const stages = ref<StageStep[]>([])
   /** 推理链。**原实现把 `reasoning` 事件丢掉了**，等于把后端唯一的可解释性输出浪费掉 */
   const reasoning = ref<ReasoningStep[]>([])
+  /** 轨迹：每一步在做什么、拿到什么、花了多久（后端的 trace 事件） */
+  const traces = ref<TraceStep[]>([])
+  /** 是否已经收到第一帧（用于"先有什么显示什么"：立刻给出可见反馈） */
+  const started = ref(false)
   const thinking = ref(false)
   const degraded = ref(false)
   const error = ref('')
@@ -54,6 +81,8 @@ export const useQaStore = defineStore('qa', () => {
     stage.value = ''
     stages.value = []
     reasoning.value = []
+    traces.value = []
+    started.value = false
     thinking.value = true
     degraded.value = false
     error.value = ''
@@ -69,7 +98,51 @@ export const useQaStore = defineStore('qa', () => {
     abort = streamChat(
       { question: q, stream: true },
       (event) => {
+        // 收到任何一帧就说明请求已被受理：立刻结束"纯空白等待"
+        started.value = true
         switch (event.event) {
+          case 'trace': {
+            // 同一步的发/收两帧合并：开始帧带 input，结束帧带 ok/output
+            const step = String(event.step ?? '')
+            const at = Number(event.elapsed_ms ?? 0)
+            const idx = traces.value.findIndex((t) => t.step === step)
+            const base: TraceStep =
+              idx >= 0
+                ? traces.value[idx]
+                : { step, tool: String(event.tool ?? ''), startedAt: at }
+            const merged: TraceStep = {
+              ...base,
+              tool: String(event.tool ?? base.tool),
+              input: (event.input as Record<string, unknown>) ?? base.input,
+              startedAt: base.startedAt ?? at,
+            }
+            if (event.ok !== undefined || event.output !== undefined) {
+              merged.ok = Boolean(event.ok)
+              merged.output = event.output ? String(event.output) : merged.output
+              merged.finishedAt = at
+            }
+            // 其余字段（新增条数 / 模型名 / 自检分数…）原样保留，便于展开查看
+            const skip = new Set([
+              'event',
+              'step',
+              'tool',
+              'input',
+              'ok',
+              'output',
+              'elapsed_ms',
+            ])
+            const extra: Record<string, unknown> = { ...(base.extra ?? {}) }
+            for (const [k, v] of Object.entries(event)) {
+              if (!skip.has(k)) extra[k] = v
+            }
+            if (Object.keys(extra).length) merged.extra = extra
+
+            traces.value =
+              idx >= 0
+                ? traces.value.map((t, i) => (i === idx ? merged : t))
+                : [...traces.value, merged]
+            break
+          }
           case 'stage':
             stage.value = event.stage
             stages.value = [
@@ -156,6 +229,8 @@ export const useQaStore = defineStore('qa', () => {
     stage,
     stages,
     reasoning,
+    traces,
+    started,
     thinking,
     degraded,
     error,
