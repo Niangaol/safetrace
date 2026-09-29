@@ -352,7 +352,7 @@ API 正握着 data/demo.db（/health 200）时：
 | 1 | 降级统一出口接线：富化链路改调 `degrade()` | 框架 | ✅ **已完成** | `evidence.py:162` / `contracts.py:423,500-507` 均已走 `degrade()`，重复映射已删 |
 | 2 | `enrich.papers` / `enrich.evidence` 接生产者 | F | ✅ **已完成** | `nodes.py:306,336` + `s2_events.py:35,36` |
 | 3 | 生产代码真正从 `raw_refs` 回读原始 payload | Y/F | **确认不做** | 入向适配仅在 `tests/conftest.py` 验证过，本轮未动。后续接 F 线入向契约时再做 |
-| 4 | 在真实 PostgreSQL 上重跑 `accept.py`，`[SKIP]` → `[OK]` | 全局 | **待做** | 本机无 PG。前置 §3.5 **已修**，现在开着服务也能跑 |
+| 4 | 在真实 PostgreSQL 上重跑 `accept.py`，`[SKIP]` → `[OK]` | 全局 | ✅ **已完成（2026-09-29 夜）** | 实测 **9 passed / 0 failed / 2 skipped**，`[OK] 数据库迁移` + `[OK] 评测脚本`。**原文写"本机无 PG"是错的**：本机有 PostgreSQL 16.15 在运行（库 `intel`、19 张表、`alembic_version=0002_kev_due_date`）。命令：`$env:POSTGRES_DSN='postgresql+psycopg://intel:intel@localhost:5432/intel'; python -m scripts.accept` |
 | 5 | S6 QA 拒答 / S7 检索投影 | Q | **确认不做** | 按 §0.2 划给 Q 线。副作用：`Answer.abstained` 第 1 条（证据为空）已实现，剩 3 条，**不要动** |
 | 6 | 把 `data/check_real_data.py` 移入 `scripts/` | 全局 | ✅ **已完成** | 已移到 `scripts/check_real_data.py`（`python -m scripts.check_real_data`） |
 | 7 | 收尾：停掉遗留 Demo 进程 | 全局 | **确认不做** | 服务当前在用，交接完成后自行停即可 |
@@ -392,9 +392,17 @@ python -m scripts.check_real_data
    有测试 `test_every_topic_is_declared_in_the_envelope_schema` 强制一致，漏一处就红。
 8. **改富化维度列表要同步 7 处**（§0.3 红线 4 同源），最易漏的是 `tests/test_imports.py` 的维度断言
    和 `core/contracts.py::DIMENSION_TO_CONTRACT`。
-9. **本机无 Docker / 无 PostgreSQL 服务 / 无 LLM API Key / 无 redis-server** ——
-   数据库迁移脚本在真实 PG 上没跑过、真实 LLM 路径没验证过、Redis 传输没验证过。
-   **别在"本机能不能起 PG"上浪费时间**（笔记本免提权安装试过，backend 一连就崩：DLL 初始化失败）。
+9. **环境事实要实测，别靠线索推断**（2026-09-29 夜更正）——
+   - ✅ **本机有 PostgreSQL 16.15 且在运行**（库 `intel`、19 张表、alembic 到 `0002`）。
+     曾有结论写"本机无 PG"，**错**：起因是 `psql` 不在 PATH，被误读成"没装"。
+   - ❌ 本机 PG **服务器上没有 pgvector 扩展文件**（官方无 Windows 预编译包），
+     `chunk` 表因此缺 `embedding` 列 → 检索退化为关键词模式（迁移脚本已设计为合法降级）。
+   - ❌ 无 Docker（安装脚本已就绪，需人工点 UAC + 重启）。
+   - ❌ **无 redis-server**（6379 无监听）→ 事件总线走"已禁用"分支。
+   - ✅ **LLM API Key 已配置**（DeepSeek，见 `.env`，不入库）→ 真实 LLM 路径已验证。
+   - ❌ 未装 Ollama。
+   **别在"本机能不能起 PG"上浪费时间**——它已经能起。
+
 10. **不要在持有 session 时用 `inspect(engine)` 反射表结构** —— 它会另开一条连接；
     `StaticPool`（测试/演示全池一条连接）下这条连接会抢占并归还 session 正在用的那条，
     **触发隐式回滚**。症状极隐蔽：`commit()` 成功但数据没了（见 §10.2 第 2 条）。
@@ -430,13 +438,15 @@ python -m scripts.validate_contracts            # 当前 10 schema / 12 fixture
 | 项目 | 证据强度 | 说明 |
 | --- | --- | --- |
 | 构建、导入、静态类型 | ✅ 已验证 | ruff / mypy |
-| 单元逻辑（契约映射、载荷投影、去重、DQ1 评分、事件信封、因果链） | ✅ 已验证 | 434 个测试，含 21 个载荷门禁 |
+| 单元逻辑（契约映射、载荷投影、去重、DQ1 评分、事件信封、因果链） | ✅ 已验证 | 470 个测试，含 21 个载荷门禁 |
 | **服务能启动、能出页面** | ✅ 已验证 | 见下方活进程实测 |
 | **采集→富化→落库→告警→日报 全链跑通（真实库）** | ✅ **已验证（第三轮）** | `scripts/check_e2e_cycle.py`：9 个节点全 `[ ok ]`，33 条事件载荷过契约，因果链 12/12 挂上 |
-| **事件总线在真 Redis 上跑通** | ❌ **未验证** | **无 redis-server / Docker / fakeredis**（复核于 2026-09-29 第三轮） |
+| **事件总线在真 Redis 上跑通** | ❌ **未验证** | **无 redis-server**（6379 无监听）→ 总线走"已禁用"分支并丢弃事件 |
 | **真实采集源联调** | ❌ **未验证** | E2E 里 NVD 网络不可达，用 demo.db 已落库条目兜底 |
-| 真实 PostgreSQL 上的迁移 | ❌ 未验证 | 本机无 PG |
-| 真实 LLM 路径 | ❌ 未验证 | 无 API Key |
+| **真实 PostgreSQL 上的迁移** | ✅ **已验证（2026-09-29 夜）** | `alembic upgrade head` exit 0；`accept.py` 9 passed / 0 failed，`[OK] 数据库迁移`。**原文"本机无 PG"是错的** |
+| **真实 LLM 路径** | ✅ **已验证（2026-09-29 夜）** | DeepSeek `deepseek-v4-pro`，一次问答 8 条引用、¥0.03、四段式答案带 `[S1][S2]` 回指 |
+| pgvector 向量检索 | ❌ **未验证** | 服务器无 `vector` 扩展文件（无 Windows 预编译包）→ `chunk` 缺 `embedding` 列 → 退化为关键词模式 |
+| `eval/run_all.py` 的真实指标数字 | ⚠️ **跑得通但没有数字** | exit 0，但 `collect.samples=0`、`enrich`/`qa` 标注集不存在（`E-03`/`E-04`）——**不可写成"评测通过"** |
 
 **活进程实测（2026-09-29 复核）**：
 
