@@ -85,11 +85,19 @@ GitHub 网页设置（Settings → Branches → Add rule，分支 `main`）：
 
 > **仓库可见性：private**。源码按「公开层（文档/契约/评测/脱敏样例）+ 核心层（实现代码）」两域管理，交件只走企业平台审阅（02-report 硬规则 3）。
 
-## 七、本地钩子（随仓库分发，无需每人配）
+## 七、本地钩子（随仓库分发，clone 后每人执行一次）
+
+> **2026-09-29（D2）实测修正**：原文写「本仓库已配置，clone 后执行一次即可」，与实际不符——
+> `core.hooksPath` 是**每 clone 一次的本地 git config，不随仓库分发**，且 `.githooks/` 下两个脚本
+> 入库时**没有可执行位**（`100644`），即使配了 `hooksPath` 也不会执行。此前 20+ 个提交是在
+> 无本地门禁状态下进入 main 的。现按下面两步走，缺一不可：
 
 ```bash
-git config core.hooksPath .githooks   # 本仓库已配置，clone 后执行一次即可
+git config core.hooksPath .githooks   # 1) 每 clone 一次；或 npm run hooks:install
+chmod +x .githooks/commit-msg .githooks/pre-push   # 2) 补可执行位（已在入库版本中修正为 100755）
 ```
+
+验证钩子真的生效：故意提交一条不合规信息，应被 `commit-msg` 拒绝并返回 exit 1。
 
 | 钩子 | 时机 | 行为 |
 |---|---|---|
