@@ -16,7 +16,10 @@ onMounted(() => {
   <TopNav />
   <main>
     <div v-if="IS_DEMO_MODE" class="demo-banner" role="status">
-      <strong>演示模式</strong>｜来源状态、统计、漏洞、引用和问答均为预置样例，不能用于实际风险判断。
+      <strong>静态演示模式</strong>｜所有页面和问答均来自前端预置样例，不请求后端。
+    </div>
+    <div v-else class="demo-banner" role="status">
+      <strong>本地实链模式（fixture）</strong>｜采集 / DQ1 / 富化 / 问答代码均实际运行；输入为仓库 fixture，问答索引独立于采集结果，不联网、不代表实时态势。
     </div>
     <RouterView />
   </main>

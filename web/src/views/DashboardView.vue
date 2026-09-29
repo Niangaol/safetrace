@@ -22,60 +22,46 @@ const trendRange = ref<'7d' | '30d' | '90d' | '1y'>('7d')
 
 type RangeData = { labels: string[]; vulns: number[]; enrich: number[] }
 
-function genTrendData(range: string): RangeData {
-  const now = new Date('2026-09-29')
-  if (range === '7d') {
-    return {
-      labels: ['9/23', '9/24', '9/25', '9/26', '9/27', '9/28', '9/29'],
-      vulns: [42, 38, 55, 67, 48, 73, 29],
-      enrich: [38, 35, 51, 62, 45, 68, 26],
+function genTrendData(range: string, items: VulnItem[]): RangeData {
+  const dates = items.map((item) => item.published_at ? new Date(item.published_at) : null)
+    .filter((date): date is Date => date !== null && Number.isFinite(date.getTime()))
+  const anchor = dates.length ? new Date(Math.max(...dates.map((date) => date.getTime()))) : new Date()
+  const monthly = range === '1y'
+  const stepDays = range === '90d' ? 7 : 1
+  const periods = monthly ? 12 : range === '90d' ? 13 : range === '30d' ? 30 : 7
+  const labels: string[] = []
+  const vulns = Array<number>(periods).fill(0)
+  const enrich = Array<number>(periods).fill(0)
+  const start = new Date(anchor)
+  if (monthly) start.setMonth(start.getMonth() - periods + 1, 1)
+  else start.setDate(start.getDate() - (periods - 1) * stepDays)
+  for (let index = 0; index < periods; index++) {
+    const bucket = new Date(start)
+    if (monthly) bucket.setMonth(bucket.getMonth() + index)
+    else bucket.setDate(bucket.getDate() + index * stepDays)
+    labels.push(monthly
+      ? bucket.toLocaleDateString('zh-CN', { year: '2-digit', month: 'numeric' })
+      : (bucket.getMonth() + 1) + '/' + bucket.getDate())
+  }
+  for (const item of items) {
+    if (!item.published_at) continue
+    const date = new Date(item.published_at)
+    if (!Number.isFinite(date.getTime())) continue
+    const index = monthly
+      ? (date.getFullYear() - start.getFullYear()) * 12 + date.getMonth() - start.getMonth()
+      : Math.floor((date.getTime() - start.getTime()) / (stepDays * 86_400_000))
+    if (index >= 0 && index < periods) {
+      vulns[index] = (vulns[index] ?? 0) + 1
+      if (item.enriched) enrich[index] = (enrich[index] ?? 0) + 1
     }
   }
-  if (range === '30d') {
-    const labels: string[] = []
-    const vulns: number[] = []
-    const enrich: number[] = []
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now)
-      d.setDate(d.getDate() - i)
-      labels.push(`${d.getMonth() + 1}/${d.getDate()}`)
-      const base = 30 + Math.sin(i / 3) * 20 + Math.random() * 15
-      vulns.push(Math.round(base))
-      enrich.push(Math.round(base * 0.85))
-    }
-    return { labels, vulns, enrich }
-  }
-  if (range === '90d') {
-    const labels: string[] = []
-    const vulns: number[] = []
-    const enrich: number[] = []
-    for (let i = 89; i >= 0; i -= 3) {
-      const d = new Date(now)
-      d.setDate(d.getDate() - i)
-      labels.push(`${d.getMonth() + 1}/${d.getDate()}`)
-      const base = 25 + Math.sin(i / 8) * 30 + Math.random() * 20
-      vulns.push(Math.round(base))
-      enrich.push(Math.round(base * 0.82))
-    }
-    return { labels, vulns, enrich }
-  }
-  // 1y — monthly aggregation
-  const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月']
-  return {
-    labels: months,
-    vulns: [180, 165, 210, 245, 190, 280, 320, 290, 352],
-    enrich: [150, 140, 180, 220, 168, 250, 290, 260, 320],
-  }
+  return { labels, vulns, enrich }
 }
 
 function fmtLatency(s: number | null): string {
   if (s === null) return '—'
   if (s < 3600) return `${Math.round(s)}s`
   return `${(s / 3600).toFixed(1)}h`
-}
-
-function fmtCny(c: number): string {
-  return `¥${c.toFixed(2)}`
 }
 
 function initSevChart() {
@@ -85,7 +71,7 @@ function initSevChart() {
   const dims = metrics.value.enrich.per_dimension ?? {}
   const names = Object.keys(dims)
   const coverage = names.map(n => ((dims[n]?.coverage_ratio ?? 0) * 100).toFixed(0))
-  const confidence = names.map(n => ((dims[n]?.confidence_avg ?? 0) * 100).toFixed(0))
+  const confidence = names.map(n => dims[n]?.confidence_avg == null ? null : Number((dims[n].confidence_avg * 100).toFixed(0)))
   sevChartInst.setOption({
     tooltip: { trigger: 'axis', backgroundColor: '#0a0f1a', borderColor: '#1e2d44', textStyle: { color: '#e2e8f0' } },
     legend: { data: ['覆盖率', '平均置信度'], textStyle: { color: '#64748b' }, top: 0 },
@@ -124,7 +110,7 @@ function initTrendChart() {
   if (!trendChart.value) return
   if (trendChartInst) trendChartInst.dispose()
   trendChartInst = echarts.init(trendChart.value)
-  const data = genTrendData(trendRange.value)
+  const data = genTrendData(trendRange.value, latest.value?.items ?? [])
   const isLongRange = trendRange.value === '90d' || trendRange.value === '1y'
   trendChartInst.setOption({
     tooltip: { trigger: 'axis', backgroundColor: '#0a0f1a', borderColor: '#1e2d44', textStyle: { color: '#e2e8f0' } },
@@ -181,7 +167,7 @@ onMounted(async () => {
     const [m, s, l] = await Promise.all([
       getJson<MetricsOverview>('/metrics/overview'),
       getJson<CollectStatus>('/collect/status'),
-      getJson<Paged<VulnItem>>('/vulns', { page_size: 8, sort: 'published_at' }),
+      getJson<Paged<VulnItem>>('/vulns', { page_size: 100, sort: 'published_at' }),
     ])
     metrics.value = m
     status.value = s
@@ -210,7 +196,7 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
 
   <template v-else>
     <h1 class="page-title">态势大屏</h1>
-    <p class="page-subtitle">实时监控威胁情报采集、富化与成本指标</p>
+    <p class="page-subtitle">本机离线 fixture 执行结果：情报数、富化结果与来源记录；非实时漏洞监控。</p>
 
     <StatCards
       :items="[
@@ -220,7 +206,7 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
         { label: '采集延迟 P50', value: fmtLatency(metrics?.latency.p50_seconds ?? null), icon: 'clock' },
         { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : null, icon: 'zap', variant: 'ok' },
         { label: '知识库切片', value: metrics?.knowledge.chunks ?? null, icon: 'box' },
-        { label: '今日 LLM 花费', value: metrics ? fmtCny(metrics.cost.total_cny) : null, hint: metrics?.cost.degraded ? '已降级本地模型' : `预算 ${fmtCny(metrics?.cost.daily_budget_cny ?? 0)}`, icon: 'yen', variant: metrics?.cost.degraded ? 'critical' : 'ok' },
+        { label: '模型调用费用', value: '—', hint: '本链路未调用 LLM', icon: 'yen' },
         { label: '在跑任务', value: status?.queue_depth ?? null, icon: 'refresh' },
       ]"
     />
@@ -250,7 +236,7 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
     <div class="panel fade-in">
       <div class="panel-header">
         <h3>采集源水位线</h3>
-        <span class="badge-count">{{ status?.watermarks?.filter(w => w.success).length ?? 0 }}/{{ status?.watermarks?.length ?? 0 }} 正常</span>
+        <span class="badge-count">{{ status?.watermarks?.filter(w => w.success).length ?? 0 }}/{{ status?.watermarks?.length ?? 0 }} {{ status?.data_mode === 'fixture' ? '回放成功' : '正常' }}</span>
       </div>
       <table>
         <thead>
@@ -272,7 +258,7 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
             <td style="font-family: 'JetBrains Mono', monospace">{{ w.items_last_run }}</td>
             <td>
               <span class="badge" :class="w.success ? 'low' : 'critical'">
-                {{ w.success ? '正常' : w.error ?? '失败' }}
+                {{ w.success ? (status?.data_mode === 'fixture' ? '回放成功' : '正常') : w.error ?? '失败' }}
               </span>
             </td>
           </tr>

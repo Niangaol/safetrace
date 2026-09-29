@@ -13,15 +13,15 @@ const STAGE_LABEL: Record<string, string> = {
   plan: '拆解问题',
   rewrite: '改写检索式',
   retrieve: '混合检索',
-  generate: '生成答案',
+  generate: '规则合成答案',
   check: '自检',
 }
 
 const SUGGESTIONS = [
-  '最近有哪些影响 vLLM 的高危漏洞？',
-  'CVE-2026-12345 的攻击条件是什么？',
-  '哪些 AI 框架存在模型投毒风险？',
-  '如何缓解 PyTorch torch.load 的安全风险？',
+  'Log4Shell 影响哪些版本？怎么修复？',
+  'CVE-2021-44228 有哪些证据来源？',
+  'CVE-2099-4321 影响哪些版本？',
+  '嗯',
 ]
 
 async function submit(q?: string) {
@@ -52,11 +52,11 @@ watch(() => qa.citations.length, scrollToBottom)
 
 <template>
   <h1 class="page-title">情报问答</h1>
-  <p class="page-subtitle">基于知识库的 AI 安全情报智能问答，答案带可溯源引用</p>
+  <p class="page-subtitle">Q1 意图识别 → Q2（独立 fixture 证据索引）→ Q4 规则合成；显示实际检索引用，索引外 CVE 会拒答。</p>
 
   <div v-if="qa.metrics" class="muted" style="margin-bottom: 12px; font-size: 12px; display: flex; align-items: center; gap: 12px">
-    <span>今日 LLM 花费 <strong style="color: var(--text)">¥{{ qa.metrics.cost.total_cny.toFixed(2) }}</strong> / 预算 ¥{{ qa.metrics.cost.daily_budget_cny }}</span>
-    <span v-if="qa.metrics.cost.degraded" class="badge warn">已超预算 · 降级本地模型</span>
+    <span>离线采集 fixture：{{ qa.metrics.collect.vulns }} 条情报 / {{ qa.metrics.knowledge.chunks }} 个检索块</span>
+    <span>问答使用 Q1→Q2→Q4 规则与本地检索；不调用 LLM，不产生模型费用。</span>
   </div>
 
   <div class="panel" style="min-height: 400px; display: flex; flex-direction: column">
@@ -101,7 +101,7 @@ watch(() => qa.citations.length, scrollToBottom)
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; flex-shrink: 0">
           <path d="M12 9v4 M12 17h.01 M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
         </svg>
-        本次回答由本地模型兜底生成（当日前端预算已超）。
+        本次答案由本地规则模板根据检索证据生成；输入为 fixture，不调用外部模型。
       </div>
 
       <!-- 错误 -->

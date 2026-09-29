@@ -128,8 +128,11 @@ onMounted(async () => {
         <h3>富化证据链</h3>
         <span class="badge-count">{{ chain?.enrichments?.length ?? 0 }} 维度</span>
       </div>
-      <p class="muted" style="font-size: 12px; margin-top: 0">
-        每个字段都记录来源 URL、原文片段与抓取时间，可逐条溯源核对。
+      <p v-if="chain?.data_mode === 'fixture'" class="muted" style="font-size: 12px; margin-top: 0">
+        fixture 模式：URL / 时间来自 RawDoc 记录；展示文字是多源归并摘要，不是逐源原文片段。请点击来源链接核对上游内容。
+      </p>
+      <p v-else class="muted" style="font-size: 12px; margin-top: 0">
+        每个字段均显示其来源信息与证据状态。
       </p>
 
       <div v-for="e in chain?.enrichments ?? []" :key="e.dimension" style="margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden">
@@ -138,7 +141,7 @@ onMounted(async () => {
             <path :d="DIM_ICON[e.dimension] || 'M12 2L2 7v10l10 5 10-5V7L12 2z'" />
           </svg>
           <strong style="min-width: 100px">{{ DIM_LABEL[e.dimension] ?? e.dimension }}</strong>
-          <span class="badge info">置信度 {{ (e.confidence * 100).toFixed(0) }}%</span>
+          <span v-if="e.confidence != null" class="badge info">置信度 {{ (e.confidence * 100).toFixed(0) }}%</span>
           <span v-if="e.mock" class="badge warn">预置数据</span>
           <span v-if="e.degraded_to" class="badge warn">降级：{{ e.degraded_to }}</span>
           <span v-if="e.quality_score != null" class="badge info">质量分 {{ (e.quality_score * 100).toFixed(0) }}%</span>

@@ -1,8 +1,8 @@
 import { mockCollectStatus, mockEvidence, mockMetrics, mockVuln, mockVulnsPage, mockQaResponse } from './mock'
 
 const BASE = '/api/v1'
-// 当前版本固定使用预置样例；真实接口接线完成后才切换此开关。
-export const IS_DEMO_MODE = true
+// VITE_DEMO_MODE=true 时才使用前端内置静态 mock；默认请求本地实链 API。
+export const IS_DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('api_token')

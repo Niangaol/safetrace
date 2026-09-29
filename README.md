@@ -134,9 +134,13 @@ npm run qa:serve            # 检索服务 :8318（/healthz /v1/retrieve）
 | src/qa（Q 线） | 最小闭环 | 36/36 | Q1 规则意图、Q2 BM25-lite + MG1/Qdrant dense RRF（默认 BM25，拒绝 cache/hash 向量）；Q4 四段式带引用答案、CLI + HTTP |
 | ops/ | compose 就位待验 | 脚本自测过 | qdrant + postgres + langfuse 全家桶（Docker 未装，装好后 `bash ops/scripts/wait-healthy.sh`） |
 
-**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 是确定性占位，未配真实模型时没有 LLM 推理；② Q2 已接 MG1 embedding 接口，但默认 cache 向量会被拒绝写入/查询语义集合，显式退回 BM25-lite；只有真实 embedder、Qdrant 和来源索引均配置后才有实际 dense 召回；③ 受控页面工具已有 SQLite last-good 和人工复核队列，已有需操作方显式来源元数据的网页→DQ1 API，但尚未接正式 SourceRegistry 调度；复核决定也不会自动产生 IntelItem；④ `runIngestOnce` / `runEnrichment` 的持久入口是 `ingest:once`，离线 smoke 使用的内存 store 不代表重启持久；⑤ A-03/A-04 完成前，不可信网页不会送真实云 LLM；⑥ Firecrawl / 云 LLM / embedding 默认关闭，Firecrawl 按页计费；⑦ Docker/Qdrant/本地模型未真实运行验收，来源 Qdrant 入库入口已接线但未实跑；`published_after`、Langfuse 完整 Trace 与前端真实 API 仍待办。
+**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 是确定性占位，未配真实模型时没有 LLM 推理；② Q2 已接 MG1 embedding 接口，但默认 cache 向量会被拒绝写入/查询语义集合，显式退回 BM25-lite；只有真实 embedder、Qdrant 和来源索引均配置后才有实际 dense 召回；③ 受控页面工具已有 SQLite last-good 和人工复核队列，已有需操作方显式来源元数据的网页→DQ1 API，但尚未接正式 SourceRegistry 调度；复核决定也不会自动产生 IntelItem；④ `runIngestOnce` / `runEnrichment` 的持久入口是 `ingest:once`，离线 smoke 使用的内存 store 不代表重启持久；⑤ A-03/A-04 完成前，不可信网页不会送真实云 LLM；⑥ Firecrawl / 云 LLM / embedding 默认关闭，Firecrawl 按页计费；⑦ 本地推理栈（llama.cpp + bge-m3 + Qdrant）D4 已验收（见 [`docs/LOCAL-STACK.md`](docs/LOCAL-STACK.md)），来源 Qdrant 生产入库仍未实跑；`published_after`、Langfuse 完整 Trace 与生产级前端 API 接线仍待办（本机演示 API 见 [`docs/LOCAL-DEMO.md`](docs/LOCAL-DEMO.md)）。
 
 **D3 分工与新增方向**：李念负责 MG1/Q/编排/契约/ops，D6 前收口 C-01~C-06，D8 前完成 R-04/R-05/R-03/A-02；KKK9747human 主责前端及端到端演示；XueXuhang 在方案 A（第 7 源+时效看板）与方案 B（F2 被动信号）中认领。P-10 受控 Firecrawl + 规则/受控 LLM/人工复核 + Qdrant 语义向量小切片见 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) 与 [`docs/TASKS.md`](docs/TASKS.md)。A-03/A-04 未完成前，真实 LLM 网页抽取保持关闭。
+
+**本机演示（2026-10-01 合入）**：`npm run demo:serve`（启动即实跑离线采集→DQ1→富化，问答实跑 Q1→Q2→Q4）+ `npm run dev --prefix web`，手测清单见 [`docs/LOCAL-DEMO.md`](docs/LOCAL-DEMO.md)；前端默认请求真实后端，仅 `VITE_DEMO_MODE=true` 时退回内置静态 mock。
+
+**D4 分工更新**：分工与优先级以 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) §3.7 为准——KKK9747human 先交付完整基础 demo（施工口径 `docs/P07-DEMO-PLAN.md`，本机直起），李念 review；A-04/E-04 安全核查顺延至 D9–D11 重启。
 
 ## 8. P-10：受控采集与可审计语义证据库
 

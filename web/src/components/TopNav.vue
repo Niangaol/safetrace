@@ -32,9 +32,9 @@ const links = [
         {{ link.label }}
       </RouterLink>
     </div>
-    <div class="nav-status" :class="{ demo: IS_DEMO_MODE }">
+    <div class="nav-status" :class="{ demo: true }">
       <span class="dot"></span>
-      {{ IS_DEMO_MODE ? '演示模式' : '系统运行中' }}
+      {{ IS_DEMO_MODE ? '静态演示' : '本地实链 · fixture' }}
     </div>
   </nav>
 </template>

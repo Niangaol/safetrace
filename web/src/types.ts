@@ -44,7 +44,7 @@ export interface Enrichment {
   /** 本结论实际依据的数据源（赛题硬要求"每条富化带 source"） */
   source?: string[]
   evidence: Evidence[]
-  confidence: number
+  confidence: number | null
   model: string
   agent: string
   version: number
@@ -73,6 +73,7 @@ export interface GraphEdge {
 }
 
 export interface EvidenceResponse {
+  data_mode?: 'fixture' | 'live'
   enrichments: Enrichment[]
   graph: { nodes: GraphNode[]; edges: GraphEdge[] }
 }
@@ -95,6 +96,7 @@ export interface Watermark {
 }
 
 export interface CollectStatus {
+  data_mode?: 'fixture' | 'live'
   watermarks: Watermark[]
   queue_depth: number
 }
@@ -122,7 +124,7 @@ export interface MetricsOverview {
       {
         records: number
         coverage_ratio: number
-        confidence_avg: number
+        confidence_avg: number | null
         degraded_ratio: number
         mock_ratio: number
       }
