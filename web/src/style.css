@@ -143,6 +143,14 @@ nav.top .nav-status .dot {
   box-shadow: 0 0 8px var(--low);
   animation: pulse 2s infinite;
 }
+nav.top .nav-status.demo {
+  color: var(--medium);
+}
+nav.top .nav-status.demo .dot {
+  background: var(--medium);
+  box-shadow: none;
+  animation: none;
+}
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -156,6 +164,17 @@ main {
   max-width: 1440px;
   margin: 0 auto;
 }
+
+.demo-banner {
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  border: 1px solid rgba(234, 179, 8, 0.5);
+  border-radius: var(--radius-sm);
+  background: var(--medium-bg);
+  color: var(--text-bright);
+  font-size: 13px;
+}
+.demo-banner strong { color: var(--medium); }
 
 .page-title {
   font-size: 22px; font-weight: 600;
