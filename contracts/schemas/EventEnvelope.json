@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/schemas/EventEnvelope.json",
+  "title": "EventEnvelope",
+  "description": "S2 情报总线统一事件信封。权威形状来自 SafeTrace contracts/events.md：Envelope{ event_id, topic, occurred_at, trace_id, causation_id, payload, schema_version }。本仓扩展主题见 contracts/events.md §3。",
+  "type": "object",
+  "required": ["event_id", "topic", "occurred_at", "trace_id", "payload", "schema_version"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^evt_[0-9a-f]{32}$",
+      "description": "内容派生的确定性 ID：evt_ + sha256(topic|dedup_key|schema_version)[:32]。同键重放得同 ID，消费者据此幂等去重。"
+    },
+    "topic": {
+      "type": "string",
+      "enum": [
+        "raw.docs",
+        "intel.items",
+        "dq.verdicts",
+        "enrich.triage",
+        "enrich.papers",
+        "enrich.items",
+        "qa.queries",
+        "qa.answers",
+        "decision.replies",
+        "fallback.events",
+        "intel.enrich.requested",
+        "enrich.evidence",
+        "intel.alert.raised",
+        "intel.report.daily",
+        "intel.budget.exceeded",
+        "intel.selfheal.action"
+      ],
+      "description": "前 10 个为 SafeTrace 权威主题；后 6 个为本仓扩展主题（enrich.evidence 承载 7 维明细证据，EnrichmentResult 因 additionalProperties:false 无法容纳）。"
+    },
+    "occurred_at": {
+      "type": "string",
+      "description": "事件发生时间，ISO-8601 带时区。对齐权威字段名 occurred_at。"
+    },
+    "ts": {
+      "type": "string",
+      "description": "DEPRECATED：occurred_at 的旧字段名，仅为存量消费者保留兼容，新代码禁止写入。"
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "贯穿一次请求的全链路标识，降级事件的 detail_ref 指向它。"
+    },
+    "causation_id": {
+      "type": "string",
+      "description": "触发本事件的上游 event_id，用于构建因果链 raw.docs -> intel.items -> enrich.items -> qa.answers。根事件省略此键。"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "payload": {
+      "type": "object",
+      "description": "按 topic 取对应契约：RawDoc/IntelItem/EnrichmentResult/DecisionReply，或 events.md 定义的内联契约。"
+    }
+  }
+}

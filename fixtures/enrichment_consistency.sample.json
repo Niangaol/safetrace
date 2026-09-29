@@ -1,0 +1,9 @@
+{
+  "intel_id": "intel_ghsa_GHSA_vllm_pickle_rce",
+  "dimensions_completed": ["cvss", "remediation", "triage"],
+  "dimensions_failed": ["paper", "asset", "poc"],
+  "artifacts": {},
+  "enrichment_score": 0.52,
+  "completed_at": "2026-09-30T21:00:12+08:00",
+  "schema_version": "1.0"
+}

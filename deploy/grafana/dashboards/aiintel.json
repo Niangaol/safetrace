@@ -1,0 +1,55 @@
+apiVersion: 1
+
+panels:
+  - title: 采集延迟 P50/P95
+    type: timeseries
+    gridPos: {h: 8, w: 12, x: 0, y: 0}
+    targets:
+      - expr: aiintel_collect_latency_seconds{quantile="0.5"}
+        legendFormat: P50
+      - expr: aiintel_collect_latency_seconds{quantile="0.95"}
+        legendFormat: P95
+
+  - title: 新增情报条数
+    type: timeseries
+    gridPos: {h: 8, w: 12, x: 12, y: 0}
+    targets:
+      - expr: rate(aiintel_items_collected_total[5m]) * 300
+
+  - title: LLM 花费（元/小时）
+    type: stat
+    gridPos: {h: 6, w: 6, x: 0, y: 8}
+    targets:
+      - expr: sum(rate(aiintel_cost_cny_total[10m]) * 3600)
+
+  - title: 今日累计花费 / 日预算
+    type: gauge
+    gridPos: {h: 6, w: 6, x: 6, y: 8}
+    targets:
+      - expr: sum(aiintel_cost_cny_total) / 100
+    fieldConfig:
+      defaults:
+        max: 100
+        thresholds:
+          steps:
+            - {color: green, value: 0}
+            - {color: yellow, value: 70}
+            - {color: red, value: 90}
+
+  - title: 降级模式命中
+    type: timeseries
+    gridPos: {h: 6, w: 12, x: 12, y: 8}
+    targets:
+      - expr: rate(aiintel_degraded_total[5m]) * 300
+
+  - title: Agent 运行结果
+    type: piechart
+    gridPos: {h: 8, w: 12, x: 0, y: 14}
+    targets:
+      - expr: sum by (state) (rate(aiintel_agent_runs_total[15m]) * 900)
+
+  - title: 告警等级分布
+    type: timeseries
+    gridPos: {h: 8, w: 12, x: 12, y: 14}
+    targets:
+      - expr: sum by (level) (aiintel_alerts_total)

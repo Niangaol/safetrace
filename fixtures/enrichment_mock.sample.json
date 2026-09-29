@@ -1,0 +1,17 @@
+{
+  "intel_id": "intel_community_freebuf_20260928",
+  "dimensions_completed": ["cvss", "triage"],
+  "dimensions_failed": ["paper", "asset", "poc", "remediation"],
+  "artifacts": {
+    "score_assessment": {
+      "cvss_v3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "cvss_v3_base": 5.3,
+      "source_of_score": "system_derived",
+      "derived_reason": "社区 RSS 无官方向量，按公开描述保守估算；证据仅一条社区来源，DQ1 判 degrade",
+      "confidence": 0.45
+    }
+  },
+  "enrichment_score": 0.31,
+  "completed_at": "2026-09-30T21:00:15+08:00",
+  "schema_version": "1.0"
+}

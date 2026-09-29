@@ -1,0 +1,94 @@
+[project]
+name = "ai-threat-intel"
+version = "0.1.0"
+description = "智能体驱动的 AI 安全知识情报系统（第三届高校 ICT 产教融合创新大赛 赛题九）"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "psycopg[binary,pool]>=3.2",
+    "pgvector>=0.3.6",
+    "redis>=5.2",
+    "httpx>=0.28",
+    "feedparser>=6.0.11",
+    "tenacity>=9.0",
+    "trafilatura>=1.12",
+    "beautifulsoup4>=4.12",
+    "langchain>=0.3",
+    "langchain-core>=0.3",
+    "langchain-community>=0.3",
+    "langgraph>=0.2.50",
+    "structlog>=24.4",
+    "prometheus-client>=0.21",
+    "python-dateutil>=2.9",
+    "python-multipart>=0.0.17",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+embed = [
+    "sentence-transformers>=3.2",
+    "torch>=2.4",
+]
+local = [
+    "ollama>=0.4",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "ipython>=8.18",
+]
+
+# 测试专用：API 冒烟测试需要 TestClient，跑批评测脚本需要 DB 驱动
+test = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+]
+
+[project.scripts]
+aiintel = "aiintel.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aiintel"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "eval", "tests", "scripts"]
+# data/ 是运行期产物目录（演示库、日志、临时复现脚本），不入库也不参与静态检查
+extend-exclude = ["data", "contracts", "fixtures"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "T20"]
+ignore = ["B008", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/aiintel/db/models.py" = ["E501"]
+# 这些脚本的产物就是 stdout，print 是正常用法
+"src/aiintel/cli.py" = ["T201"]
+"eval/*" = ["T201"]
+"scripts/*" = ["T201"]
+
+[tool.mypy]
+# 不锁死 3.11：部分依赖的 stub 已用 3.12+ 语法，锁 3.11 会让 mypy 直接失败
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = "-q --cov=aiintel --cov-report=term-missing"

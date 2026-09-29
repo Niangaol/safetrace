@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/DecisionReply.json",
+  "title": "DecisionReply",
+  "description": "D4 结构化决策回复（MG1 → 调用方）。S2 主题 decision.replies 的 payload。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision_id",
+    "kind",
+    "decision",
+    "calibrated_prob",
+    "decided_by",
+    "schema_version"
+  ],
+  "properties": {
+    "decision_id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "y5_triage",
+        "q1_route",
+        "q3_sufficiency",
+        "dq_verdict"
+      ]
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "choice": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number"
+        },
+        "abstain": {
+          "type": "boolean"
+        }
+      }
+    },
+    "calibrated_prob": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "decided_by": {
+      "type": "string",
+      "enum": [
+        "jev_api",
+        "llm_fallback",
+        "rule_fallback",
+        "cache"
+      ],
+      "description": "必须如实记录决策通道，禁止静默"
+    },
+    "fallback_reason": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    }
+  }
+}

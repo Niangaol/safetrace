@@ -1,0 +1,75 @@
+name: ai-threat-intel
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: intel
+      POSTGRES_PASSWORD: intel
+      POSTGRES_DB: intel
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U intel"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes:
+      - ollamadata:/root/.ollama
+    # 首次启动后执行：docker compose exec ollama ollama pull qwen2.5:7b-instruct
+    # 本地嵌入模型（bge-m3）可挂到 ollama，也可由 api 服务用 sentence-transformers 加载
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    env_file: [.env]
+    environment:
+      POSTGRES_DSN: postgresql+psycopg://intel:intel@postgres:5432/intel
+      REDIS_URL: redis://redis:6379/0
+      LLM_LOCAL_BASE_URL: http://ollama:11434
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn aiintel.api.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports: ["5173:80"]
+    depends_on: [api]
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["9090:9090"]
+    depends_on: [api]
+
+volumes:
+  pgdata:
+  ollamadata:

@@ -1,0 +1,36 @@
+{
+  "query_id": "q_20260930_2101",
+  "chunks": [
+    {
+      "chunk_id": "ck_vuln_CVE_2026_10001_impact",
+      "doc_type": "vuln_advisory",
+      "text": "vLLM through 0.6.1 does not validate pickle payloads when loading models, allowing remote code execution.",
+      "score_dense": 0.91,
+      "score_sparse": 0.84,
+      "score_rerank": 0.93,
+      "quality_score": 0.86,
+      "provenance": {
+        "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-10001",
+        "section": "Description",
+        "sha256": "9f2c4a1d8e7b6c5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0"
+      }
+    },
+    {
+      "chunk_id": "ck_enrich_CVE_2026_10001_remediation",
+      "doc_type": "enrichment",
+      "text": "升级 vLLM 至 0.6.2 或以上；0.6.2 起默认启用 safetensors 加载并拒绝 pickle 权重。",
+      "score_dense": 0.77,
+      "score_sparse": 0.81,
+      "score_rerank": 0.79,
+      "quality_score": 0.64,
+      "provenance": {
+        "url": "https://github.com/vllm-project/vllm/security/advisories/GHSA-vllm-pickle-rce",
+        "section": "Remediation"
+      }
+    }
+  ],
+  "retrieval_ms": 142,
+  "embedder_model_id": "bge-m3",
+  "trace_id": "trace_demo_0002",
+  "schema_version": "1.0"
+}

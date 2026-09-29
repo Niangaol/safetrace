@@ -1,0 +1,7 @@
+{"case_id": "e001", "vuln_id": "v_demo_poc", "dimension": "poc", "expected": {"poc": true}, "judge_by": "人工"}
+{"case_id": "e002", "vuln_id": "v_demo_poc", "dimension": "paper", "expected": ["2401.00001"], "judge_by": "人工"}
+{"case_id": "e003", "vuln_id": "v_demo_poc", "dimension": "ai_risk", "expected": {"category": "模型投毒"}, "judge_by": "人工"}
+{"case_id": "e004", "vuln_id": "v_demo_poc", "dimension": "cvss", "expected": {"base_score": 8.1}, "judge_by": "人工"}
+{"case_id": "e005", "vuln_id": "v_demo_vllm", "dimension": "asset", "expected": ["vllm"], "judge_by": "人工", "notes": "受影响产品名，不评资产画像（Mock）"}
+{"case_id": "e006", "vuln_id": "v_demo_vllm", "dimension": "fix", "expected": {"has_fix": true}, "judge_by": "人工", "notes": "是否定位到官方修复版本或给出缓解动作"}
+{"case_id": "e007", "vuln_id": "v_demo_vllm", "dimension": "consistency", "expected": ["cvss_score"], "judge_by": "人工", "notes": "该漏洞确实存在 NVD 与厂商评分不一致，冲突字段应被检出"}

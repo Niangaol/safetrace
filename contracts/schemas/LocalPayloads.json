@@ -1,0 +1,196 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/schemas/LocalPayloads.json",
+  "title": "LocalPayloads",
+  "description": "本仓扩展主题的**内联载荷契约**（非 SafeTrace 冻结集）。权威 10 主题的 payload 有独立 Schema 文件；其余主题的 payload 形状此前只写在 contracts/events.md 的散文里，没有任何机器校验。本文件把这些形状固化成可校验的 definitions，供 tests/test_event_payloads.py 逐条门禁。",
+  "definitions": {
+    "EnrichRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vuln_id", "dimensions"],
+      "properties": {
+        "vuln_id": {"type": "string"},
+        "dimensions": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+      }
+    },
+    "AlertRaised": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "title", "message", "vuln_id"],
+      "properties": {
+        "level": {"type": "string", "enum": ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]},
+        "title": {"type": "string", "minLength": 1},
+        "message": {"type": "string"},
+        "vuln_id": {"type": ["string", "null"]}
+      }
+    },
+    "DailyReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["markdown"],
+      "properties": {"markdown": {"type": "string", "minLength": 1}}
+    },
+    "BudgetExceeded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["day", "spent_cny", "budget_cny"],
+      "properties": {
+        "day": {"type": "string"},
+        "spent_cny": {"type": "number"},
+        "budget_cny": {"type": "number"}
+      }
+    },
+    "SelfHealAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "target", "reason"],
+      "properties": {
+        "action": {"type": "string", "minLength": 1},
+        "target": {"type": "string"},
+        "reason": {"type": "string"},
+        "detail": {"type": "string"}
+      }
+    },
+    "TriageOrder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vuln_id", "priority", "severity", "rank", "route", "score", "policy_version"],
+      "properties": {
+        "vuln_id": {"type": "string"},
+        "priority": {"type": "string", "enum": ["urgent", "high", "normal", "low"]},
+        "severity": {"type": "string"},
+        "cvss_score": {"type": ["number", "null"], "minimum": 0, "maximum": 10},
+        "epss": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "kev": {"type": "boolean"},
+        "score": {"type": "number", "minimum": 0, "maximum": 1},
+        "rank": {"type": "integer", "minimum": 1},
+        "route": {"type": "string", "enum": ["detail_enrich", "template_enrich"]},
+        "reasons": {"type": "array", "items": {"type": "string"}},
+        "policy_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}
+      }
+    },
+    "QualityVerdict": {
+      "additionalProperties": false,
+      "required": [
+        "item_id",
+        "item_kind",
+        "quality_score",
+        "dimension_scores",
+        "flags",
+        "verdict",
+        "gate_version"
+      ],
+      "properties": {
+        "item_id": {"type": "string", "minLength": 1},
+        "item_kind": {"type": "string", "enum": ["intel", "enriched"]},
+        "quality_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "dimension_scores": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["structure", "completeness", "consistency", "timeliness", "sourcing"],
+          "properties": {
+            "structure": {"type": "number", "minimum": 0, "maximum": 1},
+            "completeness": {"type": "number", "minimum": 0, "maximum": 1},
+            "consistency": {"type": "number", "minimum": 0, "maximum": 1},
+            "timeliness": {"type": "number", "minimum": 0, "maximum": 1},
+            "sourcing": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ts_no_tz",
+              "reject_status",
+              "poc_dead_link",
+              "key5_missing",
+              "boilerplate",
+              "multi_id_mismatch"
+            ]
+          }
+        },
+        "verdict": {"type": "string", "enum": ["pass", "degrade", "review", "quarantine"]},
+        "quarantine_ref": {"type": ["string", "null"]},
+        "reviewer": {"type": ["string", "null"]},
+        "reviewed_at": {"type": ["string", "null"]},
+        "gate_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}
+      }
+    },
+    "QueryTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "turn_id", "text"],
+      "properties": {
+        "session_id": {"type": "string", "minLength": 1},
+        "turn_id": {"type": "string", "minLength": 1},
+        "text": {"type": "string", "minLength": 1},
+        "history": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "Answer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "turn_id", "text_md", "citations", "confidence", "abstained"],
+      "properties": {
+        "session_id": {"type": "string", "minLength": 1},
+        "turn_id": {"type": "string", "minLength": 1},
+        "text_md": {"type": "string"},
+        "citations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["chunk_id", "url"],
+            "properties": {
+              "chunk_id": {"type": "string"},
+              "url": {"type": "string"}
+            }
+          }
+        },
+        "reasoning_chain": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "abstained": {"type": "boolean"},
+        "elapsed_ms": {"type": "number"},
+        "cost_cny": {"type": "number"}
+      }
+    },
+    "FallbackEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "layer",
+        "trigger",
+        "action_taken",
+        "degraded_of",
+        "user_visible",
+        "degraded_state",
+        "trace_id"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "description": "必须等于信封 event_id，否则消费者两边去重对不上"
+        },
+        "layer": {"type": "string", "enum": ["L1", "L2", "L3", "L4"]},
+        "trigger": {"type": "string", "minLength": 1},
+        "action_taken": {"type": "string", "minLength": 1},
+        "degraded_of": {"type": "string", "minLength": 1},
+        "user_visible": {"type": "boolean"},
+        "degraded_state": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "since", "detail_ref"],
+          "properties": {
+            "label": {"type": "string", "minLength": 1},
+            "since": {"type": "string"},
+            "detail_ref": {"type": "string"}
+          }
+        },
+        "recovery_hint": {"type": "string"},
+        "trace_id": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

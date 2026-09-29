@@ -1,0 +1,39 @@
+{
+  "intel_id": "intel_nvd_CVE_2026_10001",
+  "dimension": "paper",
+  "cve_id": "CVE-2026-10001",
+  "summary": "arXiv:2609.01234 系统研究了模型权重投毒，其中 pickle 反序列化是被利用面最大的一类，且与本情报的 CWE-502 完全对应。",
+  "confidence": 0.78,
+  "sources": ["arxiv", "openalex"],
+  "evidence": [
+    {
+      "url": "https://arxiv.org/abs/2609.01234",
+      "snippet": "We systematically study 41 model hub supply chain attack vectors and find pickle deserialization dominates exploitability.",
+      "fetched_at": "2026-09-30T20:59:51+08:00"
+    },
+    {
+      "url": "https://api.openalex.org/works/arxiv:2609.01234",
+      "snippet": "title=Poisoned Weights: Systematic Study of Model Hub Supply Chain Attacks; year=2026",
+      "fetched_at": "2026-09-30T20:59:52+08:00"
+    }
+  ],
+  "degraded_to": "template",
+  "degraded_state": {
+    "label": "论文关联已降级为关键词规则匹配，相关度可能偏低",
+    "since": "2026-09-30T20:59:50+08:00",
+    "detail_ref": "trace_demo_0002"
+  },
+  "recovery_hint": "配置 DEEPSEEK_API_KEY 后重跑 EnrichAgent 可恢复语义关联",
+  "degraded_detail": "rule",
+  "degraded_reason": "OpenAlex 限流，改用 arXiv 关键词规则匹配",
+  "mock": false,
+  "quality_score": 0.78,
+  "value": {
+    "match_method": "rule_keyword",
+    "relevance_score": 0.91,
+    "evidence_level": "summary",
+    "note": "摘要级证据，未下沉到章节级（已知限制 3）"
+  },
+  "completed_at": "2026-09-30T21:00:09+08:00",
+  "schema_version": "1.0"
+}

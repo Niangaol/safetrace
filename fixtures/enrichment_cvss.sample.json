@@ -1,0 +1,22 @@
+{
+  "intel_id": "intel_nvd_CVE_2026_10001",
+  "dimensions_completed": ["paper", "asset", "poc", "cvss", "remediation", "triage"],
+  "dimensions_failed": [],
+  "artifacts": {
+    "score_assessment": {
+      "cvss_v3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+      "cvss_v3_base": 9.8,
+      "source_of_score": "system_derived",
+      "derived_reason": "NVD 未给出可用向量，按 CVSS v3.1 规范本地计算 ISS->Impact->Exploitability->Roundup，可复核",
+      "epss_score": 0.31,
+      "epss_percentile": 0.87,
+      "kev_flag": false,
+      "exploit_maturity": "poc",
+      "impact_summary": "攻击者无需认证即可在模型加载阶段执行任意代码，导致推理服务被完全接管。",
+      "confidence": 0.9
+    }
+  },
+  "enrichment_score": 0.86,
+  "completed_at": "2026-09-30T21:00:06+08:00",
+  "schema_version": "1.0"
+}

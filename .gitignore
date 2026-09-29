@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 环境与密钥
+.env
+.env.local
+
+# 运行数据
+data/
+*.sqlite3
+var/
+
+# 前端
+web/node_modules/
+web/dist/
+
+# 评测产物（可重生成，不入库）
+eval/artifacts/
+reports/*.pdf
+reports/*.docx
+reports/*.pptx

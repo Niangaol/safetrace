@@ -1,0 +1,25 @@
+{
+  "intel_id": "intel_nvd_CVE_2026_10001",
+  "cve_ids": ["CVE-2026-10001"],
+  "ghsa_ids": [],
+  "osv_ids": [],
+  "aliases": ["GHSA-vllm-pickle-rce"],
+  "source_ids": ["nvd_cve", "ghsa"],
+  "title": "vLLM 未校验 pickle 权重导致远程代码执行",
+  "summary": "vLLM 0.6.1 及以前在加载模型权重时未校验 pickle 载荷，攻击者可在模型加载阶段执行任意代码。",
+  "published_at": "2026-09-12T08:00:00+00:00",
+  "first_seen_at": "2026-09-30T20:59:48+08:00",
+  "entities": {
+    "product": "vLLM",
+    "vendor": "vllm-project",
+    "version_range": ["<=0.6.1"],
+    "cwe": ["CWE-502"],
+    "cpes": ["cpe:2.3:a:vllm-project:vllm:*:*:*:*:*:*:*:*"]
+  },
+  "raw_refs": [
+    "payload://nvd/CVE-2026-10001/2026-09-30T20:59:48+08:00.json",
+    "payload://ghsa/GHSA-vllm-pickle-rce/2026-09-30T21:00:02+08:00.json"
+  ],
+  "source_reliability": 0.9,
+  "schema_version": "1.0"
+}

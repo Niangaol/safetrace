@@ -1,0 +1,11 @@
+{
+  "decision_id": "dq_intel_community_freebuf_20260928",
+  "kind": "dq_verdict",
+  "decision": {
+    "choice": "degrade"
+  },
+  "calibrated_prob": 0.31,
+  "decided_by": "rule_fallback",
+  "fallback_reason": "无 LLM 通道可用（DEEPSEEK_API_KEY 未配置），DQ1 五维打分与红线判定为确定性规则，可复算",
+  "schema_version": "1.0"
+}

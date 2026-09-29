@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/DecisionRequest.json",
+  "title": "DecisionRequest",
+  "description": "D4 结构化决策请求（Y5/Q1/Q3 → MG1）。typed question 封闭枚举/分值。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision_id",
+    "kind",
+    "state",
+    "questions",
+    "trace_id",
+    "schema_version"
+  ],
+  "properties": {
+    "decision_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "y5_triage",
+        "q1_route",
+        "q3_sufficiency",
+        "dq_verdict"
+      ]
+    },
+    "state": {
+      "type": "object",
+      "description": "冻结后的字段包；决策只依赖 state，D4 无状态"
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "q_id",
+          "type"
+        ],
+        "properties": {
+          "q_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "choice",
+              "score",
+              "noul"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rubric": {
+            "type": "string",
+            "description": "判定规则说明，保证结果可复算"
+          },
+          "cardinality_max": {
+            "type": "integer",
+            "maximum": 255
+          }
+        }
+      }
+    },
+    "trace_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    }
+  }
+}

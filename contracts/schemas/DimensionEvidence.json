@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://safetrace.local/contracts/schemas/DimensionEvidence.json",
+  "title": "DimensionEvidence",
+  "description": "本仓扩展契约（非 SafeTrace 冻结集）。承载 7 维富化的完整证据链，供 S1 知识底座、前端详情页与审计消费。权威契约 EnrichmentResult 因 additionalProperties:false 且维度枚举仅 6 值，只能承载 papers 与 score_assessment 两类明细，故明细走本契约，两者在 enrich.items / enrich.evidence 上用 intel_id 关联。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intel_id",
+    "dimension",
+    "summary",
+    "confidence",
+    "sources",
+    "evidence",
+    "completed_at",
+    "schema_version"
+  ],
+  "properties": {
+    "intel_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "与 IntelItem.intel_id / EnrichmentResult.intel_id 同键，用于三方关联"
+    },
+    "dimension": {
+      "type": "string",
+      "enum": [
+        "paper",
+        "asset",
+        "poc",
+        "cvss",
+        "remediation",
+        "triage",
+        "ai_risk"
+      ],
+      "description": "前 6 值与权威 EnrichmentResult 维度主键一致；ai_risk 为本仓第 7 维（赛题九 AI 安全专项），因权威契约 additionalProperties:false 不可入内，故在此扩展契约承载。"
+    },
+    "cve_id": {
+      "type": "string",
+      "pattern": "^CVE-[0-9]{4}-[0-9]{4,}$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "抽取式结论，不得引入证据之外的外部事实"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "降级通道下必须 <= 0.6（与本仓 evidence.build_result 不变式一致）"
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"},
+      "description": "全部来源 source_id；权威 EnrichmentResult 强制每维度带 source，此处不弱化"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url", "snippet", "fetched_at"],
+        "properties": {
+          "url": {"type": "string", "format": "uri"},
+          "snippet": {"type": "string", "minLength": 1},
+          "fetched_at": {"type": "string", "description": "ISO-8601 带时区"},
+          "sha256": {"type": "string"}
+        }
+      },
+      "description": "证据链。mock/degraded 通道的每条证据仍须可回溯到来源，不允许无源断言"
+    },
+    "degraded_to": {
+      "type": "string",
+      "enum": [
+        "cache",
+        "memory_index",
+        "template",
+        "fixture",
+        "source_switch",
+        "provider_switch"
+      ],
+      "description": "权威 6 值枚举。非空即显式降级，必须同时带 degraded_state"
+    },
+    "degraded_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "since", "detail_ref"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1, "description": "用户可见文案"},
+        "since": {"type": "string", "description": "ISO-8601 带时区"},
+        "detail_ref": {"type": "string", "description": "指向 trace_id"}
+      }
+    },
+    "recovery_hint": {
+      "type": "string",
+      "description": "人工恢复提示，可空"
+    },
+    "degraded_detail": {
+      "type": "string",
+      "description": "本仓内部通道细名（如 rule / mock），比权威 6 值枚举更精确；仅本仓与前端消费，不进 SafeTrace 冻结契约"
+    },
+    "degraded_reason": {
+      "type": "string",
+      "description": "降级原因原文"
+    },
+    "mock": {
+      "type": "boolean",
+      "description": "是否使用预置数据。诚实 Mock 是赛题要求，禁止隐藏"
+    },
+    "quality_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "DQ1 判定分（QualityVerdict.quality_score）"
+    },
+    "value": {
+      "type": "object",
+      "description": "维度载荷，结构由各维度设计决定（见 docs/富化线详细设计.md §3）"
+    },
+    "completed_at": {"type": "string", "description": "ISO-8601 带时区"},
+    "schema_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"}
+  }
+}

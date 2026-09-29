@@ -1,0 +1,12 @@
+"""Grafana 数据源与仪表盘自动加载。"""
+
+providers:
+  - name: aiintel
+    orgId: 1
+    folder: AIIntel
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

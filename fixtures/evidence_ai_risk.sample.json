@@ -1,0 +1,26 @@
+{
+  "intel_id": "intel_nvd_CVE_2026_10001",
+  "dimension": "ai_risk",
+  "cve_id": "CVE-2026-10001",
+  "summary": "模型资产投毒：以恶意权重文件在模型加载阶段建立持久化后门，属 AI 供应链攻击面。",
+  "confidence": 0.75,
+  "sources": ["mg1_decision", "attck_whitelist"],
+  "evidence": [
+    {
+      "url": "https://attack.mitre.org/techniques/T1195/002/",
+      "snippet": "Compromise Software Supply Chain: Compromise Software Supply Chain via Development Tools",
+      "fetched_at": "2026-09-30T21:00:04+08:00"
+    }
+  ],
+  "mock": false,
+  "quality_score": 0.78,
+  "value": {
+    "ai_risk_category": "model_artifact_poisoning",
+    "category_label": "模型资产投毒",
+    "attack_techniques": ["T1195.002"],
+    "rationale": "攻击者经公共模型仓库投放 pickle 载荷，落点在模型加载链路，符合供应链投毒子类。",
+    "decided_by": "llm_fallback"
+  },
+  "completed_at": "2026-09-30T21:00:05+08:00",
+  "schema_version": "1.0"
+}

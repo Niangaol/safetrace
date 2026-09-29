@@ -1,0 +1,11 @@
+{
+  "source_id": "nvd_cve",
+  "source_type": "nvd_cve",
+  "external_id": "CVE-2026-10001",
+  "url": "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=CVE-2026-10001",
+  "fetched_at": "2026-09-30T20:59:48+08:00",
+  "content_type": "json",
+  "payload_ref": "payload://nvd/CVE-2026-10001/2026-09-30T20:59:48+08:00.json",
+  "http_etag": "W/\"a41f-5c9e2b\"",
+  "parse_warnings": []
+}

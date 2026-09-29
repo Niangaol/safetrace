@@ -1,0 +1,81 @@
+{
+  "id": "CVE-2026-10001",
+  "sourceIdentifier": "security@example.com",
+  "published": "2026-09-20T00:00:00.000",
+  "lastModified": "2026-09-22T01:30:00.000",
+  "vulnStatus": "Analyzed",
+  "descriptions": [
+    {
+      "lang": "en",
+      "value": "vLLM through 0.6.1 does not validate pickle payloads when loading models, allowing remote code execution."
+    },
+    {
+      "lang": "zh",
+      "value": "vLLM 0.6.1 及以前版本在加载模型时未校验 pickle 载荷，可导致远程代码执行。"
+    }
+  ],
+  "metrics": {
+    "cvssMetricV31": [
+      {
+        "source": "nvd@nist.gov",
+        "type": "Primary",
+        "cvssData": {
+          "version": "3.1",
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+          "baseScore": 9.8,
+          "baseSeverity": "CRITICAL"
+        },
+        "exploitabilityScore": 3.9,
+        "impactScore": 5.9
+      }
+    ],
+    "cvssMetricV40": [
+      {
+        "source": "nvd@nist.gov",
+        "type": "Primary",
+        "cvssData": {
+          "version": "4.0",
+          "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+          "baseScore": 9.3,
+          "baseSeverity": "CRITICAL"
+        }
+      }
+    ]
+  },
+  "weaknesses": [
+    {
+      "source": "nvd@nist.gov",
+      "type": "Primary",
+      "description": [{"lang": "en", "value": "CWE-502"}]
+    }
+  ],
+  "configurations": [
+    {
+      "nodes": [
+        {
+          "operator": "OR",
+          "cpeMatch": [
+            {
+              "vulnerable": true,
+              "criteria": "cpe:2.3:a:vllm:vllm:*:*:*:*:*:*:*:*",
+              "versionStartIncluding": "0.6.0",
+              "versionEndExcluding": "0.6.2"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "references": [
+    {
+      "url": "https://github.com/vllm-project/vllm/security/advisories/GHSA-aaaa-bbbb-cccc",
+      "source": "security@example.com",
+      "tags": ["Vendor Advisory"]
+    },
+    {
+      "url": "https://github.com/vllm-project/vllm/pull/12345",
+      "source": "security@example.com",
+      "tags": ["Patch"]
+    }
+  ]
+}

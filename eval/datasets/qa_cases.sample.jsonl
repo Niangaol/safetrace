@@ -1,0 +1,3 @@
+{"case_id": "q001", "question": "最近 7 天影响 vLLM 推理框架的高危漏洞有哪些？", "expect_points": ["列出 CVE 编号", "给出 CVSS 分数", "说明影响版本"], "difficulty": "multi_hop"}
+{"case_id": "q002", "question": "哪些 RAG 组件存在提示注入导致的越权检索？", "expect_points": ["涉及模型投毒或提示注入", "列出受影响项目", "给出修复建议"], "difficulty": "single_hop"}
+{"case_id": "q003", "question": "PoisonedRAG 这篇论文对应的攻击属于哪类 AI 风险？", "expect_points": ["数据投毒", "检索污染"], "difficulty": "multi_hop"}

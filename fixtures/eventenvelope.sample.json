@@ -1,0 +1,23 @@
+{
+  "event_id": "evt_3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c",
+  "topic": "fallback.events",
+  "occurred_at": "2026-09-29T12:00:00+08:00",
+  "trace_id": "trace_20260929_120000",
+  "causation_id": "evt_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
+  "schema_version": "1.0",
+  "payload": {
+    "event_id": "evt_3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c",
+    "layer": "L3",
+    "trigger": "nvd_unreachable",
+    "action_taken": "切换到 fixture 通道继续服务",
+    "degraded_of": "cvss",
+    "user_visible": true,
+    "degraded_state": {
+      "label": "NVD 不可达，已用固定数据兜底",
+      "since": "2026-09-29T12:00:00+08:00",
+      "detail_ref": "trace_20260929_120000"
+    },
+    "recovery_hint": "NVD 恢复后自动回到实时数据",
+    "trace_id": "trace_20260929_120000"
+  }
+}

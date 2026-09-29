@@ -1,0 +1,32 @@
+{
+  "intel_id": "intel_arxiv_2609_01234",
+  "dimensions_completed": ["paper", "asset", "cvss", "triage"],
+  "dimensions_failed": ["poc", "remediation"],
+  "artifacts": {
+    "papers": [
+      {
+        "paper_id": "arXiv:2609.01234",
+        "source": "arxiv",
+        "title": "Poisoned Weights: Systematic Study of Model Hub Supply Chain Attacks",
+        "year": 2026,
+        "venue": "arXiv",
+        "relevance_score": 0.91,
+        "confidence": 0.78,
+        "evidence_terms": ["model hub", "pickle", "supply chain", "backdoor"]
+      },
+      {
+        "paper_id": "arXiv:2607.04421",
+        "source": "arxiv",
+        "title": "Sandboxing Inference Workers Against Untrusted Weights",
+        "year": 2026,
+        "venue": "arXiv",
+        "relevance_score": 0.74,
+        "confidence": 0.71,
+        "evidence_terms": ["sandbox", "untrusted weights"]
+      }
+    ]
+  },
+  "enrichment_score": 0.64,
+  "completed_at": "2026-09-30T21:00:09+08:00",
+  "schema_version": "1.0"
+}
