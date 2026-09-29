@@ -54,6 +54,25 @@ def collect_latency_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def derive_latency_seconds(stored: float | None, published: Any, fetched: Any) -> float | None:
+    """算单条采集延迟：优先用落库值，为空则由两个时间戳推导。
+
+    **为什么要有这个函数**：原实现只读 `RawItem.latency_seconds`，
+    而该列在演示库里恒为 NULL —— 于是评测报 `samples: 0`、`p50/p95 = null`、
+    `sla_tier = "fail"`。但 `published_at` / `fetched_at` 明明都有真值，
+    时效是**算得出来**的。这不是"没有数据"，是"没去算"，
+    会让报告里的时效指标无端变成 fail（实测踩过）。
+
+    抽成独立函数是为了能单测（`load_from_db` 依赖数据库，不好测）。
+    """
+
+    if stored is not None:
+        return float(stored)
+    if not published or not fetched:
+        return None
+    return (fetched - published).total_seconds()
+
+
 def load_from_db() -> list[dict[str, Any]]:
     from aiintel.db.base import get_sessionmaker
     from aiintel.db.models import RawItem
@@ -65,7 +84,9 @@ def load_from_db() -> list[dict[str, Any]]:
                 "source": r.source,
                 "published_at": r.published_at.isoformat() if r.published_at else None,
                 "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
-                "latency_seconds": r.latency_seconds,
+                "latency_seconds": derive_latency_seconds(
+                    r.latency_seconds, r.published_at, r.fetched_at
+                ),
             }
             for r in rows
         ]
