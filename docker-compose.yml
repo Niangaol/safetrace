@@ -78,9 +78,12 @@ services:
       context: ./web
       dockerfile: Dockerfile
       args:
-        # 实测本机容器连不上 registry.npmjs.org，镜像源可用。
-        # 能直连的环境可把下面这行注释掉（或改成空串）以走官方源。
-        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
+        # npm registry 覆盖：**默认留空 = 用官方源**（可移植）。
+        # 在本机实测过：容器连不上 registry.npmjs.org（`npm error network`，
+        # 782s 超时），此时设 NPM_REGISTRY 用可达的镜像即可：
+        #   NPM_REGISTRY=https://registry.npmmirror.com docker compose build web
+        # 不在仓库里写死某个镜像 —— 能直连的环境用它反而更慢。
+        NPM_REGISTRY: "${NPM_REGISTRY:-}"
     ports: ["5173:80"]
     depends_on: [api]
 
