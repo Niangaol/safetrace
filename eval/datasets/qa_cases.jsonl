@@ -1,0 +1,20 @@
+{"case_id": "q001", "question": "CVE-2026-31001 怎么修复？请给出具体版本和缓解措施。", "expect_points": ["升级到 0.9.3 或更高版本", "改用 SandboxedEnvironment 并禁用属性访问", "临时缓解：反向代理层校验 chat_template 字段，拒绝含双大括号且长度异常的请求"], "difficulty": "single_hop"}
+{"case_id": "q002", "question": "CVE-2026-31001 的攻击原理是什么？", "expect_points": ["未加沙箱的 Jinja2 环境渲染 chat_template 字段", "构造器链逃逸（cycler.__init__.__globals__）", "可逃逸到 os.popen 执行任意命令"], "difficulty": "single_hop"}
+{"case_id": "q003", "question": "哪些版本的 vLLM 受 CVE-2026-31001 影响？", "expect_points": ["0.9.2", "0.9.2 及更早版本"], "difficulty": "single_hop"}
+{"case_id": "q004", "question": "CVE-2026-31001 的 CVSS 和 EPSS 分别是多少？", "expect_points": ["CVSS 9.8", "EPSS 0.87"], "difficulty": "single_hop"}
+{"case_id": "q005", "question": "CVE-2026-28114 影响哪些版本，修复版本是哪个？", "expect_points": ["transformers 4.52 及更早版本", "4.53 起默认 weights_only 改为 True"], "difficulty": "single_hop"}
+{"case_id": "q006", "question": "CVE-2026-28114 的根因是什么？为什么升级后仍可能有风险？", "expect_points": ["from_pretrained 默认 weights_only=False", "加载恶意 pickle 权重会执行任意代码", "未升级的加载脚本仍会显式传回 False"], "difficulty": "multi_hop"}
+{"case_id": "q007", "question": "CVE-2026-29455 属于哪类漏洞？它的根因是什么？", "expect_points": ["表达式注入", "LCEL 表达式支持自定义 codec", "把外部输入拼接进 chain 定义而未做沙箱隔离"], "difficulty": "single_hop"}
+{"case_id": "q008", "question": "CVE-2026-30077 的漏洞类型和影响是什么？", "expect_points": ["Gradio /upload 接口 file_path 未规范化", "../ 路径穿越读取任意文件", "CVSS 8.6"], "difficulty": "single_hop"}
+{"case_id": "q009", "question": "CVE-2026-30112 的逃逸手法是什么？", "expect_points": ["Jinja2 沙箱逃逸", "__class__.__mro__ 链"], "difficulty": "single_hop"}
+{"case_id": "q010", "question": "CVE-2026-31890 有什么风险，应该怎么缓解？", "expect_points": ["torch.load 默认使用 pickle 反序列化", "加载第三方预训练权重存在远程代码执行风险", "建议改用 safetensors"], "difficulty": "single_hop"}
+{"case_id": "q011", "question": "CVE-2026-26633 的注入点在哪里？", "expect_points": ["LlamaIndex SimpleDirectoryReader", "解析文件名时拼接 shell 命令", "恶意文件名即可触发命令注入"], "difficulty": "single_hop"}
+{"case_id": "q012", "question": "CVE-2026-27410 的影响面为什么比较大？", "expect_points": ["Ray Dashboard 默认不开启认证", "可提交训练作业、读取训练数据", "多租户集群中影响面大"], "difficulty": "single_hop"}
+{"case_id": "q013", "question": "哪些漏洞与 Jinja2 模板渲染相关？", "expect_points": ["CVE-2026-31001", "CVE-2026-30112"], "difficulty": "multi_hop"}
+{"case_id": "q014", "question": "哪些漏洞涉及不安全的反序列化？", "expect_points": ["CVE-2026-31890", "CVE-2026-28114"], "difficulty": "multi_hop"}
+{"case_id": "q015", "question": "攻击者要执行任意代码，有哪些可用的漏洞路径？", "expect_points": ["CVE-2026-31001", "CVE-2026-28114", "CVE-2026-31890", "CVE-2026-29455"], "difficulty": "multi_hop"}
+{"case_id": "q016", "question": "如果只能先修三个漏洞，你建议修哪三个？给出理由。", "expect_points": ["CVE-2026-31001", "CVE-2026-28114", "理由与 CVSS 或 KEV 在野利用相关"], "difficulty": "multi_hop"}
+{"case_id": "q017", "question": "关于 LLM 服务基础设施漏洞，有哪些系统性研究？", "expect_points": ["arXiv 2609.01234", "该研究把服务栈缺陷分为模板注入、不安全反序列化、SSRF 等类别"], "difficulty": "multi_hop"}
+{"case_id": "q018", "question": "检索增强生成（RAG）系统面临哪类注入风险？", "expect_points": ["提示注入", "通过检索到的文档进行间接注入"], "difficulty": "multi_hop"}
+{"case_id": "q019", "question": "多云环境下 qwen2.5-72b 部署在 A100 上的已知漏洞有哪些？", "expect_points": ["知识库中没有可支撑该问题的证据"], "difficulty": "abstain"}
+{"case_id": "q020", "question": "CVE-2026-99999 的修复方案是什么？", "expect_points": ["知识库中没有可支撑该问题的证据"], "difficulty": "abstain"}
