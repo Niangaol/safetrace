@@ -11,15 +11,18 @@
 # 注意：本脚本**不自动重启**，由人决定何时重启（重启会中断正在演示的服务）。
 
 $ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
 $log = 'E:\code\ai-threat-intel-demo-v1\install-docker.log'
 
 function Log($msg) {
   $line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg
   Write-Host $line
-  Add-Content -Path $log -Value $line -Encoding UTF8
+  try { Add-Content -Path $log -Value $line -Encoding UTF8 -ErrorAction Stop } catch { }
 }
 
-Set-Content -Path $log -Value ("=== Docker 安装开始 {0} ===" -f (Get-Date)) -Encoding UTF8
+# 先把日志建起来：这样主会话能立刻确认"提权已成功、脚本已开始"
+Set-Content -Path $log -Value ("=== Docker 安装开始 {0} ===" -f (Get-Date)) -Encoding UTF8 -ErrorAction SilentlyContinue
+Log '脚本已启动（说明提权成功）'
 
 # ── 0. 确认是管理员 ────────────────────────────────────────────
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
