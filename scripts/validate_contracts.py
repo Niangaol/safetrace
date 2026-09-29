@@ -38,6 +38,7 @@ FIXTURE_SCHEMA_MAP = {
     "enrichmentresult.sample.json": "EnrichmentResult.json",
     "decisionrequest.sample.json": "DecisionRequest.json",
     "decisionreply.sample.json": "DecisionReply.json",
+    "decisionreply.human.sample.json": "DecisionReply.json",
     "retrievalrequest.sample.json": "RetrievalRequest.json",
     "retrievalresponse.sample.json": "RetrievalResponse.json",
     "toolregistration.sample.json": "ToolRegistration.json",

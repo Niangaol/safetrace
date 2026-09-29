@@ -184,7 +184,7 @@ components:
         kind: { type: string }
         decision: { type: object }
         calibrated_prob: { type: number }
-        decided_by: { type: string, enum: [jev_api, llm_fallback, rule_fallback, cache] }
+        decided_by: { type: string, enum: [jev_api, llm_fallback, rule_fallback, cache, human] }
         fallback_reason: { type: string }
         schema_version: { type: string }
     RetrievalRequest:

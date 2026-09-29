@@ -1,0 +1,9 @@
+{
+  "decision_id": "dec_q1_manual_0001",
+  "kind": "q1_route",
+  "decision": { "choice": "needs_review", "abstain": false },
+  "calibrated_prob": 0.8,
+  "decided_by": "human",
+  "fallback_reason": "自动决策通道弃权，转人工复核",
+  "schema_version": "1.1"
+}
