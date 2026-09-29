@@ -89,7 +89,7 @@ export interface EnrichmentResult {
 
 export type DecisionKind = "y5_triage" | "q1_route" | "q3_sufficiency" | "dq_verdict";
 export type QuestionType = "choice" | "score" | "noul";
-export type DecidedBy = "jev_api" | "llm_fallback" | "rule_fallback" | "cache";
+export type DecidedBy = "jev_api" | "llm_fallback" | "rule_fallback" | "cache" | "human";
 
 export interface TypedQuestion {
   q_id: string;

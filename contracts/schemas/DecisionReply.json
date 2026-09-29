@@ -52,7 +52,8 @@
         "jev_api",
         "llm_fallback",
         "rule_fallback",
-        "cache"
+        "cache",
+        "human"
       ],
       "description": "必须如实记录决策通道，禁止静默"
     },
