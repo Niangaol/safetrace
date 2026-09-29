@@ -43,9 +43,9 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 | 第 1 阶段 契约扩展（**必须 D6 前**） | 6 | 6 | 0 | 0 | 0 |
 | 第 2 阶段 架构改造（D13–D18） | 6 | 6 | 0 | 0 | 0 |
 | 第 3 阶段 证据链（D7–D18） | 7 | 5 | 0 | 0 | 2 |
-| 第 4 阶段 文档口径同步 | 13 | 13 | 0 | 0 | 0 |
+| 第 4 阶段 文档口径同步 | 13 | 12 | 0 | 1 | 0 |
 | 第 5 阶段 冻结与交件（D19–D22） | 4 | 4 | 0 | 0 | 0 |
-| **合计** | **42** | **34** | **0** | **6** | **2** |
+| **合计** | **42** | **33** | **0** | **7** | **2** |
 
 > 本表随 PR 更新。任何一项转 `已砍` 必须在 PR 描述里写清「保留下什么证据」。
 
@@ -58,7 +58,7 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 | R-01 | 丙 | `package.json` 的 `validate:contracts` 解释器探测。PR #1 改为 bash 双探 `PY=$(command -v python3 \|\| command -v python) && "$PY" ...`，但 Windows 上 npm 走 `cmd.exe`、`command -v` 不存在 → `npm run check` 实际 exit 1（「本机首次 exit 0」是假绿，正是本节要消灭的那类宣称）。已本地重建为 Node 跨平台入口 `scripts/validate-contracts.mjs`：SAFETRACE_PYTHON→python3→python→py 按序探测、每个候选真跑 `--version` 验证（防 Microsoft Store 占位别名）、无解释器显式 exit 1；`pre-push` 钩子第三步同步改走同一入口 | — | 已完成 | 基础 | `npm run check; echo $?` → 0（Windows 实测通过；已合入 main，commit 8d72d9d，队长批准直推免 PR，CI 与 pre-push 门禁双绿） |
 | R-02 | 丙 | `.githooks` 接线：`git config core.hooksPath .githooks` + `chmod +x .githooks/*`（**已做**，待随本 PR 提交模式变更）+ 修 `docs/GITHUB-FLOW.md:91` 的假陈述「本仓库已配置」（已随本 PR 修正，并补 `chmod +x` 要求） | — | 已完成 | 基础 | 试提交 `bad message` 被拒；`npm run hooks:install` 可复现  ✅ 本 PR #1 已完成：`core.hooksPath` 已配置 + 补 `chmod +x` + GITHUB-FLOW:91 假陈述已改 + 新增 `npm run hooks:install`|
 | R-03 | 丙 | MG1 usage 表丢两字段：`src/gateway/src/index.ts` 的 `record()` 把 `latency_ms:0`/`cached:false` 写死（入参只收 `{usage, degraded_to}`），chat 的缓存命中与真实延迟全部丢失，延迟/降级统计失真；embed/rerank 两条路径此前也完全不测延迟 | — | 已完成 | 基础 | 新增断言 ✅：①同 prompt 二次调用 → 第二行 `cached=true`（修复前恒 false）；②注入约 20ms 延迟的 fetch → `latency_ms>=15`（修复前恒 0）。实现：`MeteredResult` 约束 + `record()` 改从结果取真值 + embed/rerank 补 `t0` 计时 + `Embedding`/`RankedDocs` 类型补两字段；已合入 main（commit 14538ff，直推免 PR），两条断言在 133 单测内 |
-| R-04 | 丙 | 黄金问答口径做实 + 契约校验覆盖：仅 10 条（目标 20）；无期望答案文本；`scripts/smoke.ts` 第 5 段不传 `cve_ids`、只断言「带引用或拒答」且**不用 `expected_intent`**；`scripts/validate_contracts.py` 的 `FIXTURE_SCHEMA_MAP` 不含 golden-qa | R-01 | 已完成 | 基础 | ✅ 本地已完成并实测：fixture 扩到 20 条（6 类意图 + 拒答×4 + 澄清×1 = 8 类）；smoke 逐条硬断言 `expected_intent`/`expected_cve_ids`/`expected_answer_must_include`，请求透传 `cve_ids`，「15 条非拒答全部带引用」精确断言（原来 >=5 和稀泥）；校验器加 golden-qa 条目（None=JSON 合法性，覆盖面 9→10）；`npm run check` 与 `npm run smoke` 全绿，已合入 main（commit d631231，直推免 PR）。D-04 的「20 条」口径自此与实际一致 |
+| R-04 | 丙 | 黄金问答口径做实 + 契约校验覆盖：仅 10 条（目标 20）；无期望答案文本；`scripts/smoke.ts` 第 5 段不传 `cve_ids`、只断言「带引用或拒答」且**不用 `expected_intent`**；`scripts/validate_contracts.py` 的 `FIXTURE_SCHEMA_MAP` 不含 golden-qa | R-01 | 已完成 | 基础 | ✅ 本地已完成并实测：fixture 扩到 20 条（6 类意图 + 拒答×5 + 澄清×1 = 8 类）；smoke 逐条硬断言 `expected_intent`/`expected_cve_ids`/`expected_answer_must_include`，请求透传 `cve_ids`，「15 条非拒答全部带引用」精确断言（原来 >=5 和稀泥）；校验器加 golden-qa 条目（None=JSON 合法性，覆盖面 9→10）；`npm run check` 与 `npm run smoke` 全绿，已合入 main（commit d631231，直推免 PR）。D-04 的「20 条」口径自此与实际一致 |
 | R-05 | 丙 | `.gitignore:32` 是 ` recordings/`（**行首有空格**），对 `recordings/` 目录无效 | — | 已完成 | 基础 | `git check-ignore -v recordings/x.mp4` 命中 ✅ 本地已删行首空格并验证 rc=0（普通路径不受影响）；已合入 main（commit 0d0e92f，直推免 PR） |
 | R-06 | 丙 | 建本台账（原先 `find -iname "*todo*"` 仓库内零命中；Taskwarrior 已装但 `project:safetrace` 零任务） | — | 已完成 | 基础 | 本文件存在且随 PR 更新  ✅ 本 PR #1 已建：本文件|
 
@@ -109,7 +109,7 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 | D-01 | 丙 | `README.md:21/34`、`ROADMAP.md:19` 写「7 个 JSON Schema」，实际 8 个，而 `README.md:128` 又写「8 schema」——统一为实际数 | C-06 | 待办 | 基础 |
 | D-02 | 丙 | 契约冻结日三个口径并存：README:128「D1 冻结 v1」/ ROADMAP:19「D6」/ README:10 与 GITHUB-FLOW:101「D8」→ 统一为「v1 内容 D1 落库，D6=10/3 形式化冻结」 | C-06 | 待办 | 基础 |
 | D-03 | 丙 | `PROJECT-INTRO.md:15/75`、`README.md:29` 说编排框架是 **pi-agent-core——从未安装、零代码、零 spike**，实际是自研 TaskGraph → 改为适配层 + LangGraph 后端 + 原生后备；pi-agent-core 移入「已评估未采用」并写明理由 | A-01 | 待办 | 基础 |
-| D-04 | 丙 | 黄金问答「20 条」vs 实际 10 条（README:48/97/133/160、ROADMAP:22/86、PROJECT-INTRO:41/95）→ 扩到 20 后统一；未扩前如实写 10/20 | R-04 | 待办 | 基础 |
+| D-04 | 丙 | 黄金问答「20 条」vs 实际 10 条（README:48/97/133/160、ROADMAP:22/86、PROJECT-INTRO:41/95）→ 扩到 20 后统一；未扩前如实写 10/20 | R-04 | 已完成 | 基础 | ✅ R-04（commit d631231）已把 fixture 扩到 20 条，README:48/97 与 ROADMAP:22 的「20 条」口径自此与 fixtures/golden-qa.v0.json 实际一致；README:133 的 `src/qa` 测试数与 README:160 的黄金问答数字随 C-06/D-01 一并核准 |
 | D-05 | 丙 | `README.md:49`「Trace 全落 Langfuse」vs 代码零 Langfuse → 改为「S2 总线 trace_id 已贯穿；Langfuse 外发在 D13-D18 落地」 | A-06 | 待办 | 砍③ |
 | D-06 | 丙 | `PROJECT-INTRO.md` 与 README 多用 `C:\Users\niangao\safetrace\`、`C:\Users\niangao\asktrace9\` → 改成本仓库实际路径与远端 | — | 待办 | 基础 |
 | D-07 | 丙 | `PROJECT-INTRO.md:136` 指向 `asktrace9/docs/` 四篇报告 + 三张图，**仓库内完全缺失**（`docs/` 只有 GITHUB-FLOW.md）；交叉引用（GITHUB-FLOW:4 引 03-roadmap、README:54、GITHUB-FLOW:86 引 02-report）全部不可解析 → 迁入 `docs/` 或改写索引 | — | 待办 | 基础 |
