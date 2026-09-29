@@ -114,8 +114,7 @@ export async function getJson<T>(
   }
 }
 
-export async function postJson<T>(path: string, body: unknown): Promise<T> {
-  if (MOCK_MODE === 'always') {
+export async function postJson<T>(path: string, body: unknown): Promise<T> {  if (MOCK_MODE === 'always') {
     markMock('VITE_USE_MOCK=true（演示模式）')
     return mockPost<T>()
   }
@@ -140,6 +139,24 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
     }
     throw e
   }
+}
+
+/**
+ * PUT 请求（配置管理用）。
+ *
+ * **刻意不做 mock 回退**：配置接口的失败都是有意义的业务错误
+ * （422 字段非法、500 写盘失败），必须如实抛给界面，
+ * 而不是拿预置数据假装成功——那会让人以为"配置已保存"。
+ */
+export async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  })
+  const data = await unwrap<T>(res)
+  markLive()
+  return data
 }
 
 export function streamChat(

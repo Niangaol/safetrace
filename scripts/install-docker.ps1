@@ -1,4 +1,4 @@
-# SafeTrace: 安装 Docker Desktop（需要管理员权限）
+﻿# SafeTrace: 安装 Docker Desktop（需要管理员权限）
 #
 # 由主会话以「提权」方式启动：会弹一次 UAC，请点「是」。
 # 全过程日志写到 install-docker.log，主会话读它来判断进度。
@@ -76,6 +76,11 @@ try {
 Log "需要重启: $needReboot"
 Log '=== 完成 ==='
 if ($needReboot) {
-  Log '下一步：请**手动重启**，重启后 Docker Desktop 才会可用；然后回来告诉我，我接着起 compose。'
+  Log '下一步（两件事）：'
+  Log '  1) **手动重启系统**（WSL2 组件启用后必须重启才生效）；'
+  Log '  2) 重启后跑：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-compose.ps1'
+  Log '     它会拉起 Docker Desktop、等引擎就绪、起全栈、并在容器内跑 accept.py。'
+} else {
+  Log '无需重启。可以直接跑：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-compose.ps1'
 }
 Log '（本脚本不会自动重启，避免打断正在运行的服务）'

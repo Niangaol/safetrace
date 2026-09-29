@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app
 
-from aiintel.api.routers import collect, metrics, qa, vulns
+from aiintel.api.routers import collect, config, metrics, qa, vulns
 from aiintel.config import get_settings
 from aiintel.core.metrics import setup_logging
 
@@ -101,6 +101,7 @@ app.include_router(collect.router, prefix=API_PREFIX)
 app.include_router(vulns.router, prefix=API_PREFIX)
 app.include_router(qa.router, prefix=API_PREFIX)
 app.include_router(metrics.router, prefix=API_PREFIX)
+app.include_router(config.router, prefix=API_PREFIX)
 app.mount("/metrics", make_asgi_app())
 
 

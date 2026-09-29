@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import HomeView from './views/HomeView.vue'
+import ConfigView from './views/ConfigView.vue'
 import DashboardView from './views/DashboardView.vue'
 import DetailView from './views/DetailView.vue'
 import IntelView from './views/IntelView.vue'
@@ -14,5 +15,6 @@ export const router = createRouter({
     { path: '/intel', component: IntelView },
     { path: '/intel/:id', component: DetailView, props: true },
     { path: '/qa', component: QaView },
+    { path: '/config', component: ConfigView },
   ],
 })
