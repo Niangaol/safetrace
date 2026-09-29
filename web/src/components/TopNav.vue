@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
+import { IS_DEMO_MODE } from '../api'
 
 const links = [
   { to: '/dashboard', label: '态势大屏', icon: 'M3 3h7v7H3V3zm0 11h7v7H3v-7zm11-11h7v7h-7V3zm0 11h7v7h-7v-7z' },
@@ -31,9 +32,9 @@ const links = [
         {{ link.label }}
       </RouterLink>
     </div>
-    <div class="nav-status">
+    <div class="nav-status" :class="{ demo: IS_DEMO_MODE }">
       <span class="dot"></span>
-      系统运行中
+      {{ IS_DEMO_MODE ? '演示模式' : '系统运行中' }}
     </div>
   </nav>
 </template>

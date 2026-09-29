@@ -25,6 +25,7 @@ import {
 } from "./f6-verify.js";
 
 export * from "./f4-cvss.js";
+export * from "./f2-assets.js";
 export * from "./f1-papers.js";
 export * from "./f6-verify.js";
 

@@ -1,7 +1,8 @@
 import { mockCollectStatus, mockEvidence, mockMetrics, mockVuln, mockVulnsPage, mockQaResponse } from './mock'
 
 const BASE = '/api/v1'
-const USE_MOCK = true // 无后端时自动用 mock 数据展示
+// 当前版本固定使用预置样例；真实接口接线完成后才切换此开关。
+export const IS_DEMO_MODE = true
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('api_token')
@@ -24,7 +25,7 @@ export function getJson<T>(path: string, params?: Record<string, string | number
   }
   const url = `${BASE}${path}${qs.toString() ? `?${qs}` : ''}`
 
-  if (USE_MOCK) {
+  if (IS_DEMO_MODE) {
     return mockGet<T>(path, params)
   }
 
@@ -32,7 +33,7 @@ export function getJson<T>(path: string, params?: Record<string, string | number
 }
 
 export function postJson<T>(path: string, body: unknown) {
-  if (USE_MOCK) return mockPost<T>(path, body)
+  if (IS_DEMO_MODE) return mockPost<T>(path, body)
   return fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -45,7 +46,7 @@ export function streamChat(
   onEvent: (event: Record<string, any>) => void,
   onError: (message: string) => void,
 ): () => void {
-  if (USE_MOCK) {
+  if (IS_DEMO_MODE) {
     return mockStreamChat(body as { question?: string }, onEvent)
   }
 

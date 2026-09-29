@@ -113,9 +113,10 @@ python scripts/validate_contracts.py
 
 ```bash
 npm install                 # 一次性（Node ≥24，免原生编译）
-npm run check               # 门禁 = typecheck + 132 单测 + 契约校验（全绿）
+npm run check               # 门禁 = typecheck + 单测 + 契约校验 + 前端构建
 npm run smoke               # 端到端冒烟：fixture 回放跑完整链路，逐项 PASS
 npm run cli:ask -- "Log4Shell 影响哪些版本？怎么修复？"   # 问答线 CLI 演示
+npm run assets:demo                                         # 20 条本地合成资产版本匹配，不扫描网络
 npm run gateway:serve       # MG1 HTTP :8317（/healthz /v1/chat/complete /v1/embed /v1/rerank）
 npm run qa:serve            # 检索服务 :8318（/healthz /v1/retrieve）
 ```
@@ -133,6 +134,6 @@ npm run qa:serve            # 检索服务 :8318（/healthz /v1/retrieve）
 | src/qa（Q 线） | 最小闭环 | 36/36 | Q1 规则意图、Q2 BM25 内存索引 + Qdrant REST、Q4 四段式带引用答案（四条件 abstain）、四 Agent 任务图、CLI + HTTP |
 | ops/ | compose 就位待验 | 脚本自测过 | qdrant + postgres + langfuse 全家桶（Docker 未装，装好后 `bash ops/scripts/wait-healthy.sh`） |
 
-**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 为确定性占位，真实 LLM 合成待配 key；② Embed 为 `hash-256` 占位向量，Qdrant 接入后换 BGE-M3（S3 绑定已留 `model_id` 校验）；③ 无独立 rerank 通道（MemoryIndex 的 `score_rerank` 为查询内归一分）；④ F2/F3/F5、Q3、D1–D4 按初赛分级口径只留契约位；⑤ `published_after` 在 chunk 级暂不生效（EvidenceChunk 契约无时间字段，需走 contract PR）。
+**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 为确定性占位，真实 LLM 合成待配 key；② Embed 为 `hash-256` 占位向量，Qdrant 接入后换 BGE-M3（S3 绑定已留 `model_id` 校验）；③ 无独立 rerank 通道（MemoryIndex 的 `score_rerank` 为查询内归一分）；④ F2 仅新增 20 条纯合成演示资产的本地版本匹配原型，未接真实清单/API/界面/问答链；F3/F5、Q3、D1–D4 仍只留契约位；⑤ `published_after` 在 chunk 级暂不生效（EvidenceChunk 契约无时间字段，需走 contract PR）；⑥ `web/` 页面当前固定展示预置样例（含统计、漏洞、引用和问答），已显式标记演示模式，真实 API 与 Trace 页待接。
 
 **D2 起任务单**：甲——cvelistV5 git 差分补第 5 源、72h 挂机；乙——F1 真跑调参（recall@5 基线）、黄金集 200 条启动；丙（队长）——pi-agent-core 实测决定是否替换自研 TaskGraph、Langfuse 接入、20 条黄金问答扩量。全员：今天申请 NVD API key。

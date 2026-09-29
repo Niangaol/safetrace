@@ -1,0 +1,27 @@
+{
+  "fixture_id": "demo-assets.v0",
+  "data_class": "synthetic_demo_only",
+  "authorization": "preloaded local examples; no organization inventory or network discovery",
+  "assets": [
+    { "asset_id": "demo-asset-01", "product": "log4j-core", "vendor": "apache", "version": "2.14.1", "service": "demo-order-api", "criticality": "critical" },
+    { "asset_id": "demo-asset-02", "product": "log4j-core", "vendor": "apache", "version": "2.14.0", "service": "demo-billing-api", "criticality": "high" },
+    { "asset_id": "demo-asset-03", "product": "log4j-core", "vendor": "apache", "version": "2.15.0", "service": "demo-catalog-api", "criticality": "medium" },
+    { "asset_id": "demo-asset-04", "product": "log4j-core", "vendor": "apache", "version": "2.17.1", "service": "demo-search-api", "criticality": "high" },
+    { "asset_id": "demo-asset-05", "product": "log4j-core", "vendor": "apache", "version": "unknown", "service": "demo-legacy-api", "criticality": "medium" },
+    { "asset_id": "demo-asset-06", "product": "log4j-core", "vendor": "apache", "version": "2.14.1-rc1", "service": "demo-preview-api", "criticality": "low" },
+    { "asset_id": "demo-asset-07", "product": "log4j-core", "vendor": "demo-vendor-b", "version": "2.14.1", "service": "demo-third-party-api", "criticality": "medium" },
+    { "asset_id": "demo-asset-08", "product": "nginx", "vendor": "nginx", "version": "1.24.0", "service": "demo-edge", "criticality": "high" },
+    { "asset_id": "demo-asset-09", "product": "ollama", "vendor": "ollama", "version": "0.5.7", "service": "demo-model-lab", "criticality": "medium" },
+    { "asset_id": "demo-asset-10", "product": "pytorch", "vendor": "pytorch", "version": "2.5.1", "service": "demo-training", "criticality": "high" },
+    { "asset_id": "demo-asset-11", "product": "transformers", "vendor": "huggingface", "version": "4.47.0", "service": "demo-inference", "criticality": "high" },
+    { "asset_id": "demo-asset-12", "product": "vllm", "vendor": "vllm-project", "version": "0.6.4", "service": "demo-serving", "criticality": "critical" },
+    { "asset_id": "demo-asset-13", "product": "jupyter-server", "vendor": "project-jupyter", "version": "2.14.2", "service": "demo-notebook", "criticality": "medium" },
+    { "asset_id": "demo-asset-14", "product": "fastapi", "vendor": "tiangolo", "version": "0.115.0", "service": "demo-control-plane", "criticality": "high" },
+    { "asset_id": "demo-asset-15", "product": "redis", "vendor": "redis", "version": "7.2.4", "service": "demo-cache", "criticality": "high" },
+    { "asset_id": "demo-asset-16", "product": "postgresql", "vendor": "postgresql", "version": "16.4", "service": "demo-database", "criticality": "critical" },
+    { "asset_id": "demo-asset-17", "product": "qdrant", "vendor": "qdrant", "version": "1.12.0", "service": "demo-vector-store", "criticality": "medium" },
+    { "asset_id": "demo-asset-18", "product": "langfuse", "vendor": "langfuse", "version": "3.25.0", "service": "demo-observability", "criticality": "low" },
+    { "asset_id": "demo-asset-19", "product": "docker-engine", "vendor": "docker", "version": "27.3.1", "service": "demo-runtime", "criticality": "high" },
+    { "asset_id": "demo-asset-20", "product": "nodejs", "vendor": "openjs-foundation", "version": "24.8.0", "service": "demo-worker", "criticality": "medium" }
+  ]
+}

@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [main]
 
-# 与本地 pre-push 同口径：契约校验 + 类型检查 + 单测，全绿才允许合入 main
+# 与本地 pre-push 同口径：契约校验 + 类型检查 + 单测 + 前端构建，全绿才允许合入 main
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -34,3 +34,6 @@ jobs:
 
       - name: 契约与 fixtures 校验（唯一接口真相来源）
         run: python scripts/validate_contracts.py
+
+      - name: 前端依赖安装与构建
+        run: npm run check:web
