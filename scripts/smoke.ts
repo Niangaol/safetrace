@@ -6,7 +6,8 @@
  * 验收断言：
  *  1. Y 线产出 ≥1 条 IntelItem（pass/degrade 放行），DQ1 判定落总线
  *  2. F 线对放行条目产出 EnrichmentResult（维度带 source）
- *  3. 黄金问答 10 条：非禁答条必须带引用；expect_abstain 条必须显式拒答
+ *  3. 黄金问答 20 条（R-04）：逐条硬断言主意图 / cve_ids 槽位 / 答案必含要素；
+ *     非拒答条必须带引用作答，expect_abstain 条必须显式拒答
  *  4. 降级透明红线：所有 fallback.events 均 user_visible；降级响应均带 degraded_to
  *  5. MG1 经 AnswerSynthesizer 注入点完成一次真实调用（cache provider，显式可辨）
  *  6. 四 Agent 任务图（监测→富化→问答）拓扑跑通，失败语义可演示
@@ -32,8 +33,14 @@ import { ModelGateway } from "@safetrace/gateway";
 interface GoldenQuestion {
   qid: string;
   text: string;
-  expected_intent: string;
+  /** 澄清类（expects_clarify）不标注主意图 */
+  expected_intent?: string;
+  expects_clarify?: boolean;
   expect_abstain?: boolean;
+  /** Q1 槽位硬断言：问题文本应抽出的 CVE 列表（R-04） */
+  expected_cve_ids?: string[];
+  /** 非拒答条答案必含要素（Answer.text_md 子串，R-04） */
+  expected_answer_must_include?: string[];
   notes?: string;
 }
 
@@ -109,8 +116,8 @@ async function main(): Promise<number> {
   const usageTotals = await gw.usageTotals();
   check(usageTotals.calls >= 1, "MG1 计量落账（calls>=1）");
 
-  // ---------- 5) 黄金问答 10 条 ----------
-  console.log("\n[5] 黄金问答（fixtures/golden-qa.v0.json）");
+  // ---------- 5) 黄金问答 20 条（R-04：意图/槽位/答案要素全部硬断言） ----------
+  console.log("\n[5] 黄金问答（fixtures/golden-qa.v0.json，20 条）");
   const golden = JSON.parse(
     readFileSync(resolve("fixtures/golden-qa.v0.json"), "utf8"),
   ) as { version: string; description: string; cases: GoldenQuestion[] };
@@ -122,6 +129,8 @@ async function main(): Promise<number> {
       query_id: "q_" + q.qid,
       query_text: plan.rewrite_text,
       top_k: 5,
+      // R-04：CVE 槽位必须透传成 Q2 过滤条件（问题指定的漏洞必须被证据覆盖）
+      ...(plan.slots.cve_ids.length > 0 ? { cve_ids: plan.slots.cve_ids } : {}),
       trace_id: "tr_" + q.qid,
       schema_version: "1.0",
     };
@@ -132,15 +141,33 @@ async function main(): Promise<number> {
       synth: undefined, // P0 默认模板合成器；LLM 合成经 MG1 注入（见第 4 步）
     });
     answers.push(ans);
-    const cited = ans.citations.length > 0 && !ans.abstained;
+    // R-04：口径做实——意图、cve_ids 槽位、答案必含要素逐条硬断言，不再"带引用或拒答"和稀泥
+    if (q.expected_intent) {
+      check(plan.intents[0] === q.expected_intent,
+        q.qid + " 主意图=" + q.expected_intent + "（实际 " + (plan.intents[0] ?? "none") + "）");
+    }
+    if (q.expects_clarify) {
+      check(plan.needs_clarify === true, q.qid + " 低置信度输入应触发澄清（禁硬猜）");
+    } else {
+      check(plan.needs_clarify === false, q.qid + " 不应要求澄清");
+    }
+    check(JSON.stringify(plan.slots.cve_ids) === JSON.stringify(q.expected_cve_ids ?? []),
+      q.qid + " cve_ids 槽位=" + JSON.stringify(q.expected_cve_ids ?? []) + "（实际 " + JSON.stringify(plan.slots.cve_ids) + "）");
     if (q.expect_abstain) {
       check(ans.abstained, q.qid + " 无答案问题显式拒答（禁编造）");
     } else {
-      check(cited || ans.abstained, q.qid + "（意图 " + (plan.intents[0] ?? "unknown") + "）答案带引用或显式拒答");
+      check(!ans.abstained && ans.citations.length > 0,
+        q.qid + "（意图 " + (plan.intents[0] ?? "unknown") + "）答案带完整引用（禁含糊：非拒答条必须作答）");
+      const missing = (q.expected_answer_must_include ?? []).filter((s) => !ans.text_md.includes(s));
+      check(missing.length === 0,
+        q.qid + " 答案必含要素 " + JSON.stringify(q.expected_answer_must_include ?? []) +
+        (missing.length > 0 ? " 缺失：" + missing.join("、") : ""));
     }
   }
+  const expectAnswerCount = golden.cases.filter((q) => !q.expect_abstain).length;
   const withCitations = answers.filter((a) => a.citations.length > 0).length;
-  check(withCitations >= 5, "至少 5 条答案带完整引用（当前 " + withCitations + "）");
+  check(withCitations === expectAnswerCount,
+    "全部 " + expectAnswerCount + " 条非拒答基准都带完整引用（当前 " + withCitations + "）");
   const citationsComplete = answers.every((a) =>
     a.citations.every((c) => c.chunk_id.length > 0 && c.url.length > 0));
   check(citationsComplete, "引用完整率 100%（chunk_id + url 非空）");

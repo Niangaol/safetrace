@@ -1,67 +1,166 @@
 {
   "version": "0",
-  "description": "Q 线黄金问题集 v0：Q1 意图分类与 Q4 拒答（abstain）的离线回归基准。字段：qid/text/expected_intent/expect_abstain?/notes",
+  "description": "Q 线黄金问题集 v0：Q1 意图分类与 Q4 拒答（abstain）的离线回归基准，R-04 扩充至 20 条。字段：qid/text/expected_intent（澄清类可省）/expects_clarify?/expect_abstain?/expected_cve_ids（Q1 槽位硬断言）/expected_answer_must_include（非拒答条答案必含要素）/notes。覆盖 8 类：6 种 IntentKind + 拒答（无答案/证据不覆盖）+ 低置信澄清。",
   "cases": [
     {
       "qid": "gq-01",
       "text": "Log4Shell 影响哪些版本？",
       "expected_intent": "impact_range",
-      "notes": "impact_range 基准①：影响面 / 版本范围"
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228", "Log4Shell"],
+      "notes": "impact_range 基准①：影响面 / 版本范围，无显式 CVE 编号"
     },
     {
       "qid": "gq-02",
       "text": "CVE-2021-44228 受影响的产品范围有多大？",
       "expected_intent": "impact_range",
-      "notes": "impact_range 基准②：带 CVE 编号，验证 cve_ids 槽位"
+      "expected_cve_ids": ["CVE-2021-44228"],
+      "expected_answer_must_include": ["CVE-2021-44228", "Log4Shell"],
+      "notes": "impact_range 基准②：带 CVE 编号，验证 cve_ids 槽位透传到 Q2 过滤"
     },
     {
       "qid": "gq-03",
-      "text": "Log4Shell 应该怎么修复？有没有官方补丁？",
-      "expected_intent": "remediation",
-      "notes": "remediation 基准①：修复 + 补丁"
+      "text": "什么是 Log4Shell？它的原理是什么？",
+      "expected_intent": "concept",
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "concept 基准①：概念 / 原理解释"
     },
     {
       "qid": "gq-04",
-      "text": "OpenSSH 这个漏洞如何缓解和升级？",
-      "expected_intent": "remediation",
-      "notes": "remediation 基准②：缓解 + 升级"
+      "text": "Log4Shell 的完整攻击链是怎么打出来的？攻击者通过哪些攻击步骤拿到服务器权限？",
+      "expected_intent": "attack_chain",
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "attack_chain 基准①：攻击链 / 攻击步骤"
     },
     {
       "qid": "gq-05",
-      "text": "什么是 Log4Shell？它的原理是什么？",
-      "expected_intent": "concept",
-      "notes": "concept 基准：概念 / 原理解释"
+      "text": "Log4Shell 应该怎么修复？有没有官方补丁？",
+      "expected_intent": "remediation",
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "remediation 基准①：修复 + 补丁"
     },
     {
       "qid": "gq-06",
-      "text": "Log4Shell 的完整攻击链是怎么打出来的？攻击者通过哪些攻击步骤拿到服务器权限？",
-      "expected_intent": "attack_chain",
-      "notes": "attack_chain 基准：攻击链 / 攻击步骤"
+      "text": "CVE-2021-44228 如何缓解和升级？",
+      "expected_intent": "remediation",
+      "expected_cve_ids": ["CVE-2021-44228"],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "remediation 基准②：缓解 + 升级，带 CVE 编号"
     },
     {
       "qid": "gq-07",
       "text": "近一年 RCE 类高危漏洞的数量趋势如何？",
       "expected_intent": "trend",
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228"],
       "notes": "trend 基准①：时间趋势 + 数量统计"
     },
     {
       "qid": "gq-08",
       "text": "有没有分析 Log4Shell 的学术论文？",
       "expected_intent": "paper_related",
-      "notes": "paper_related 基准：论文关联（F 线 papers 维度）"
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "paper_related 基准①：论文关联（F 线 papers 维度）"
     },
     {
       "qid": "gq-09",
       "text": "最近一个月安全社区的热点漏洞趋势是怎样的？",
       "expected_intent": "trend",
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228"],
       "notes": "trend 基准②：最近 + 热点 + 趋势"
     },
     {
       "qid": "gq-10",
+      "text": "Log4Shell 2.14.1 版本受不受影响？还影响哪些版本？",
+      "expected_intent": "impact_range",
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "impact_range 基准③：带具体版本号（版本槽位），答案须回溯到证据中的受影响版本区间"
+    },
+    {
+      "qid": "gq-11",
+      "text": "CVE-2021-44228 是什么漏洞？原理是什么？",
+      "expected_intent": "concept",
+      "expected_cve_ids": ["CVE-2021-44228"],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "concept 基准②：带 CVE 编号的概念追问"
+    },
+    {
+      "qid": "gq-12",
+      "text": "Log4Shell 怎么修复？需要升级到哪个版本？",
+      "expected_intent": "remediation",
+      "expected_cve_ids": [],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "remediation 基准③：修复 + 升级路径"
+    },
+    {
+      "qid": "gq-13",
+      "text": "CVE-2021-44228 的攻击链和利用步骤是怎样的？",
+      "expected_intent": "attack_chain",
+      "expected_cve_ids": ["CVE-2021-44228"],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "attack_chain 基准②：带 CVE 编号"
+    },
+    {
+      "qid": "gq-14",
+      "text": "CVE-2021-44228 有哪些相关研究论文？",
+      "expected_intent": "paper_related",
+      "expected_cve_ids": ["CVE-2021-44228"],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "paper_related 基准②：带 CVE 编号"
+    },
+    {
+      "qid": "gq-15",
+      "text": "CVE-2021-44228 的官方修复建议和补丁版本？",
+      "expected_intent": "remediation",
+      "expected_cve_ids": ["CVE-2021-44228"],
+      "expected_answer_must_include": ["CVE-2021-44228"],
+      "notes": "remediation 基准④：官方修复建议 + 补丁版本"
+    },
+    {
+      "qid": "gq-16",
       "text": "CVE-2099-4321 应该怎么修复？",
       "expected_intent": "remediation",
       "expect_abstain": true,
-      "notes": "无答案基准：该 CVE 不在索引中。两层拒答——①Q2 带 cve_ids 槽位过滤返回空；②即便不过滤，Q4 发现证据不覆盖问题中的 CVE 也拒答。禁止编造"
+      "expected_cve_ids": ["CVE-2099-4321"],
+      "notes": "拒答基准①：该 CVE 不在索引中。两层拒答——①Q2 带 cve_ids 槽位过滤返回空；②即便不过滤，Q4 发现证据不覆盖问题中的 CVE 也拒答。禁止编造"
+    },
+    {
+      "qid": "gq-17",
+      "text": "CVE-2099-0002 影响哪些版本？",
+      "expected_intent": "impact_range",
+      "expect_abstain": true,
+      "expected_cve_ids": ["CVE-2099-0002"],
+      "notes": "拒答基准②：索引外 CVE，Q4 必须拒答"
+    },
+    {
+      "qid": "gq-18",
+      "text": "CVE-2099-7777 是什么漏洞？",
+      "expected_intent": "concept",
+      "expect_abstain": true,
+      "expected_cve_ids": ["CVE-2099-7777"],
+      "notes": "拒答基准③：概念型问题 + 索引外 CVE"
+    },
+    {
+      "qid": "gq-19",
+      "text": "CVE-2099-8888 的利用趋势如何？",
+      "expected_intent": "trend",
+      "expect_abstain": true,
+      "expected_cve_ids": ["CVE-2099-8888"],
+      "notes": "拒答基准④：趋势型问题 + 索引外 CVE"
+    },
+    {
+      "qid": "gq-20",
+      "text": "嗯",
+      "expects_clarify": true,
+      "expect_abstain": true,
+      "expected_cve_ids": [],
+      "notes": "澄清基准：低置信度输入，Q1 必须 needs_clarify 且拒答（不硬猜），不标注 expected_intent"
     }
   ]
 }

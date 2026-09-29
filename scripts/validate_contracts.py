@@ -42,6 +42,9 @@ FIXTURE_SCHEMA_MAP = {
     "retrievalresponse.sample.json": "RetrievalResponse.json",
     "toolregistration.sample.json": "ToolRegistration.json",
     "qualityverdict.sample.json": None,
+    # R-04：黄金问答基准纳入契约校验覆盖面（暂无独立 schema，
+    # 先做 JSON 合法性 + 存在性；GoldenQA.json  schema 化随契约扩展任务走）
+    "golden-qa.v0.json": None,
 }
 
 
