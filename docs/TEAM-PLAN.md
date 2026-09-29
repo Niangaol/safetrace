@@ -114,7 +114,7 @@ D6（10/3）契约冻结后：**只允许新字段追加 + 旧字段标 `depreca
 | 前端对接 Q 线 HTTP 接口，问答页用真数据 | ✅ **已完成** | `/api/v1/qa/chat` 真 SSE；实测 `model=deepseek-v4-pro`、8 条引用、四段式答案（¥0.0316/次）。数据来源规则：默认**先请求真实后端**，仅"不可达/未实现(404/5xx)"才回退预置数据并全站标注（业务错误 401/422 一律如实报错、不回退）。可复跑：`npm run probe:live-wiring` 判定 `dataSource=live` |
 | **「一次完整问答」演示页**（答辩核心） | ✅ **已完成** | 一屏形态：提问 → **执行轨迹**（8 步，带工具名/入参/结果/每步耗时）→ 检索证据（可点开原始出处）→ 推理链（可展开）→ 带引用答案（关键内容高亮）。深链 `/qa?q=…` 可直接跑；`/qa?demo=1` 用固定样例秒级渲染便于验收排版 |
 | 降级状态可视化 | ✅ **已完成** | ① 数据来源降级：全站横幅 + 导航栏「实时数据/预置数据」；② 答案降级：`degraded=true` 时显式提示；③ 占位答案（无 LLM 凭据走 cache provider）明示"不是模型分析结果"，并标注 `cost_cny=0`；④ 无证据时如实答"知识库中暂无可支撑该问题的证据"并标 `ok=false` |
-| 演示环境跑在 compose 上 | ⛔ **阻塞** | 本机**未安装 Docker**（`docker` 命令不存在），无法验证 `docker compose up`。前端侧已就绪（`web/Dockerfile` + `nginx.conf` 在库内，`npm run build` exit 0），待有 Docker 的机器验证；这与台账 `E-05` 是同一个阻塞项 |
+| 演示环境跑在 compose 上 | ⚠️ **待验证（不再是阻塞）** | **Docker 已装好**（`winget install Docker.DockerDesktop` → `退出码 0`，`Docker Desktop.exe` 已在位）。**但启用 WSL2/VirtualMachinePlatform 后需重启系统**才生效（实测 `RebootPending: True`、`WslService` 尚未出现），故 `docker compose up` 仍**未跑过**。前端侧已就绪（`web/Dockerfile` + `nginx.conf` 在库内，`npm run build` exit 0）。**重启后一条命令即可验证**：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-compose.ps1`（拉起 Docker Desktop → 等引擎 → **先查 8000/5173 端口占用** → 生成环境覆盖文件 → `up -d --build` → 等 `/health` → **在容器内跑 `accept.py`**）。与台账 `E-05` 同一项 |
 
 **本轮顺带修掉的用户可见缺陷与真 bug**（都在上面那个分支里，含可复跑验收）：
 
@@ -131,15 +131,56 @@ D6（10/3）契约冻结后：**只允许新字段追加 + 旧字段标 `depreca
 5. **测试依赖本机 `.env`**：本机把 `REDIS_URL` 写成空 / `LLM_LOCAL_ENABLED=false`
    会让 15 条既有用例失败（事件总线"已禁用"会丢弃全部事件）。已在 `conftest.py` 固定测试默认值。
 
+6. **`QAAgent.answer()` 不接受 `stream` 参数**：`eval/qa_accuracy.py` 调
+   `agent.answer(q, stream=False)`，而 `answer` 把 `**kwargs` 透传给无 `stream` 参数的
+   `answer_stream` → `TypeError`。**问答准确率这个指标从建立起从未跑通过**，
+   这也是技术报告里该指标只能手写数字的直接原因。已修，并加
+   `tests/test_qa_answer_kwargs.py` 钉住。
+7. **`collect_latency` 只读恒为 NULL 的 `latency_seconds`**：`published_at`/`fetched_at`
+   都有真值却不去推导 → 报 `samples: 0`、`sla_tier: "fail"`（数据明明在库里）。
+   改为可由时间戳推导后：22 条样本、档位 `excellent`。已加 `tests/test_eval_collect.py`。
+8. **采集时效指标口径修复**（同上第 7 条的延伸）：`enrich_accuracy` 的
+   `precision` 曾算出 `23.667`（>1，数学上不可能）——根因是把 **case 级**计数与
+   **元素级**计数混进同一个公式，`total - correct - hits` 实测为 **-68**。
+   另有两个同源 bug：`{'poc': False}` 被判成正例（非空 dict 的 `bool()` 为 True）、
+   集合维度 `accuracy = 1.5`。三处已修，并加 `tests/test_eval_metrics.py`。
+
 **可复跑验收命令**（在 `demo-v1-python` 分支）：
 
 ```bash
 python -m ruff check . && python -m ruff format --check . && python -m mypy src
-python -m pytest -q --no-cov          # 469 passed / 8 skipped / 0 failed
+python -m pytest -q --no-cov          # 491 passed / 8 skipped / 0 failed
 cd web && npm run build                # vue-tsc + vite build，exit 0
 cd web && npm run smoke:data-source    # 6/6：先真后假 / 显式标注 / 业务错误不掩盖
 cd web && npm run check:answer-format  # 关键内容标注正确且不吞字
+python -m scripts.accept               # 9 passed / 0 failed / 2 skipped（需 POSTGRES_DSN）
+
+# 评测（第三个指标此前跑不通，现已可跑）
+export POSTGRES_DSN='sqlite:///.../data/demo.db'
+python -m eval.qa_accuracy             # 20 条黄金集，约 20 分钟、约 ¥1
+python -m eval.enrich_accuracy         # 76 条基线，秒级、不调 LLM
+python -m eval.collect_latency         # 22 条时效，秒级
 ```
+
+**本轮首次跑出的真实指标**（详见 `docs/评测实测结果.md` 与 `docs/技术报告-修正版/`）：
+
+| 指标 | 实测 | 目标 | 达标 |
+| --- | --- | --- | --- |
+| 问答整体准确率（20 题黄金集） | **0.575** | ≥0.85 | ❌ |
+| ├ 单跳（11 题） | 0.727 | — | — |
+| └ 多跳（7 题） | **0.357**（4 题 0 分） | — | ❌ |
+| 问答响应 P95 | **95.9 秒** | ≤5 秒 | ❌ |
+| 答案引用率 | **0.65**（13/20 题无引用） | >0.95 | ❌ |
+| 采集时效 P50 / P95 | **3.0h / 5.0h** | ≤6h | ✅ |
+| 富化一致率（**回归基线，非准确率**） | 1.0（76/76） | — | — |
+| 证据链覆盖率 | **100%**（76/76 有 source+evidence） | — | ✅ |
+
+> ⚠️ **两条必须注意的口径**：
+> 1. `enrich_cases.jsonl` 是把**当前产出**固化成期望值生成的**回归基线**，
+>    一致率 1.0 是必然的，**不能当"富化准确率"写进报告**。真正的准确率需人工标注集（`E-03`/`E-04`）。
+> 2. **本机没有嵌入模型**（未装 `sentence_transformers`/`torch`，PG 也无 `vector` 扩展文件），
+>    检索退化为 **ILIKE 关键词匹配**，`citation.score` 恒为 0。
+>    报告里**不能**写"混合检索（向量+全文+RRF）已生效"——向量那一路没跑起来。
 
 ### 3.5 共同事项
 
