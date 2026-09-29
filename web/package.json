@@ -8,7 +8,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "smoke:data-source": "node scripts/smoke-data-source.mjs",
-    "probe:live-wiring": "node scripts/probe-live-wiring.mjs"
+    "probe:live-wiring": "node scripts/probe-live-wiring.mjs",
+    "check:answer-format": "node scripts/check-answer-format.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",

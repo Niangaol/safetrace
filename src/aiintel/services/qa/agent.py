@@ -141,7 +141,13 @@ class QAAgent:
                     {
                         "id": item["ref"],
                         "title": f"{item['owner_type']}:{item['owner_id']}",
-                        "url": item.get("owner_id"),
+                        # 用**真实的原始出处链接**（检索层从 Vuln.references 取）。
+                        # 原来这里写的是 `item.get("owner_id")`，也就是把内部切片标识
+                        # （`CVE-2026-31001`）当 URL 发给前端 —— 前端渲染成链接后点了没反应。
+                        # 取不到链接就如实给 None，前端据此显示"仅内部切片"而不是假链接。
+                        "url": item.get("url"),
+                        "owner_type": item["owner_type"],
+                        "owner_id": item["owner_id"],
                         "score": round(float(item.get("rerank_score", 0.0)), 4),
                     }
                 )
@@ -158,6 +164,14 @@ class QAAgent:
                     {"role": "system", "content": ANSWER_SYSTEM_PROMPT},
                     {"role": "user", "content": f"问题：{question}\n\n证据：\n{context}"},
                 ]
+                # 阶段事件要与实际执行的步骤一一对应。
+                # 注意：前端若把不存在的阶段画进进度条，它就会永远"走不到头"——
+                # 所以每做一步就发一个 stage，别让 UI 去猜。
+                yield {
+                    "event": "stage",
+                    "stage": "generate",
+                    "message": f"基于 {len(evidence[:top_k])} 条证据生成答案…",
+                }
                 buffer: list[str] = []
                 async for piece in get_llm().stream(
                     messages, task="reason", max_tokens=3000, node="qa.answer"
@@ -165,9 +179,12 @@ class QAAgent:
                     buffer.append(piece)
                     yield {"event": "token", "text": piece}
                 answer = "".join(buffer)
+
+                yield {"event": "stage", "stage": "reasoning", "message": "汇总推理链…"}
                 for item in reasoning:
                     yield {"event": "reasoning", **item}
 
+                yield {"event": "stage", "stage": "check", "message": "自检答案是否被证据支持…"}
                 verdict = await check_answer(question, answer, citations + evidence)
                 for item in reasoning:
                     item["finding"] = (
@@ -232,6 +249,14 @@ class QAAgent:
                 },
                 dedup_key=f"{session_id}:{turn_id}",
             )
+            yield {
+                "event": "stage",
+                "stage": "done",
+                "message": (
+                    f"完成：{len(citations)} 条引用，耗时 {elapsed_ms}ms"
+                    + ("（降级）" if degraded else "")
+                ),
+            }
             yield {
                 "event": "done",
                 "session_id": session_id,

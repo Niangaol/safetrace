@@ -3,6 +3,15 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { getJson } from '../api'
+import { parseAnswer, type InlineToken } from '../answerFormat'
+import {
+  SAMPLE_ANSWER,
+  SAMPLE_CITATIONS,
+  SAMPLE_META,
+  SAMPLE_QUESTION,
+  SAMPLE_REASONING,
+  SAMPLE_STAGES,
+} from '../qaSample'
 import { useQaStore } from '../stores/qa'
 import type { MetricsOverview } from '../types'
 
@@ -19,10 +28,17 @@ const question = ref('')
  *   1. 后端没有 LLM 凭据时会返回 `【演示模式】…` 占位答案 —— 必须在页面上显式说明，
  *      不能让人误以为这是模型真实分析结果；
  *   2. 检索得分（`score`）为 0 是真实值（当前是词法兜底排序），要如实展示而不是藏起来；
- *   3. 成本恒为 ¥0（cache provider 占位），也不涂改。
+ *   3. 成本恒为 ¥0（cache provider 占位）时也要如实写，不涂改。
  */
 
-const STAGE_ORDER = ['rewrite', 'retrieve', 'reasoning', 'generate', 'check'] as const
+/**
+ * 流水线步骤**必须与后端实际发出的 stage 一一对应**。
+ * 早先这里画了「改写检索式/混合检索/推理链/生成答案/自检」五步，
+ * 但后端当时只发 `rewrite` 与 `retrieve` —— 于是进度条永远停在第 2 步"走不到头"。
+ * 现在后端补齐了 `generate`/`reasoning`/`check`/`done`，两侧对齐。
+ */
+
+const STAGE_ORDER = ['rewrite', 'retrieve', 'generate', 'reasoning', 'check'] as const
 const STAGE_LABEL: Record<string, string> = {
   plan: '拆解问题',
   rewrite: '改写检索式',
@@ -30,6 +46,7 @@ const STAGE_LABEL: Record<string, string> = {
   reasoning: '推理链',
   generate: '生成答案',
   check: '自检',
+  done: '完成',
 }
 
 /** 预置问题：优先选库里真实有切片的 CVE，保证能检索到证据、演示不空转 */
@@ -49,6 +66,31 @@ const evidenceCount = computed(() => qa.citations.length)
 
 /** 已走过的阶段（用于进度条高亮） */
 const reachedStages = computed(() => new Set(qa.stages.map((s) => s.stage)))
+
+/** 整条流水线是否跑完（后端发过 `done` 阶段） */
+const finished = computed(() => reachedStages.value.has('done'))
+
+/** 结构化后的答案块：用于突出关键内容（标题/引用号/硬事实/动作词） */
+const answerBlocks = computed(() => parseAnswer(qa.answer))
+
+/** 当前被点中的引用编号，用于把对应证据也高亮出来 */
+const activeRef = ref<string | null>(null)
+
+/** 是否处于「样例渲染」模式（`/qa?demo=1`），页面上要如实标注 */
+const isSample = ref(false)
+
+function focusRef(ref: string) {
+  activeRef.value = activeRef.value === ref ? null : ref
+  document.getElementById(`evidence-${ref}`)?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+  })
+}
+
+/** token 的展示类名：颜色与字重由 CSS 的 .hl-* 决定 */
+function tokenClass(t: InlineToken): string {
+  return t.kind ? `hl hl-${t.kind}` : ''
+}
 
 function stageState(name: string): 'done' | 'active' | 'idle' {
   if (qa.thinking && qa.stage === name) return 'active'
@@ -72,6 +114,24 @@ onMounted(async () => {
   } catch {
     /* 不阻塞问答 */
   }
+
+  // `/qa?demo=1`：用固定样例把整页渲染立即可见（不等 25–35s 的真实问答）。
+  // 用途是**渲染验收**与讲解时的静态展示；页面会标注"演示样例"，
+  // 不会被当成真实运行结果（红线⑤）。
+  if (String(route.query.demo ?? '') === '1') {
+    isSample.value = true
+    qa.question = SAMPLE_QUESTION
+    qa.answer = SAMPLE_ANSWER
+    qa.citations = SAMPLE_CITATIONS
+    qa.reasoning = SAMPLE_REASONING
+    qa.stages = SAMPLE_STAGES
+    qa.stage = 'done'
+    qa.meta = SAMPLE_META
+    qa.thinking = false
+    qa.degraded = false
+    return
+  }
+
   // 支持深链：/qa?q=... 直接跑一遍（便于把某个问题固定进演示脚本/书签，
   // 也便于无头截图验证整条问答链路）
   const deepLink = String(route.query.q ?? '').trim()
@@ -118,9 +178,12 @@ onMounted(async () => {
     <div class="panel-header">
       <h3>检索流水线</h3>
       <span class="badge-count">
-        {{ retrieveRounds.length ? `检索 ${retrieveRounds.length} 轮` : '待运行' }}
+        <template v-if="finished">✓ 已跑完</template>
+        <template v-else-if="retrieveRounds.length">运行中</template>
+        <template v-else>待运行</template>
         <template v-if="retrieveRounds.length">
-          · 命中 {{ retrieveRounds[retrieveRounds.length - 1]?.hit ?? 0 }}
+          · 检索 {{ retrieveRounds.length }} 轮 · 命中
+          {{ retrieveRounds[retrieveRounds.length - 1]?.hit ?? 0 }}
         </template>
       </span>
     </div>
@@ -140,6 +203,11 @@ onMounted(async () => {
   </div>
 
   <!-- 答案占位/降级说明：必须在最显眼处 -->
+  <div v-if="isSample" class="notice warn" style="margin-bottom: 14px">
+    <strong>当前为渲染样例（`/qa?demo=1`）。</strong>
+    内容取自本仓一次真实问答的实测输出，用于快速验收排版与高亮；
+    <strong>不代表系统此刻的运行状态</strong>。
+  </div>
   <div v-if="isPlaceholderAnswer" class="notice warn" style="margin-bottom: 14px">
     <strong>当前为演示占位答案，不是模型分析结果。</strong>
     后端未配置 LLM 凭据（<code>LLM_API_KEY</code>），走 cache provider 占位，
@@ -164,12 +232,26 @@ onMounted(async () => {
       <div
         v-for="c in qa.citations"
         :key="c.id"
+        :id="`evidence-${c.id}`"
         class="evidence"
+        :class="{ 'evidence-active': activeRef === c.id }"
         style="margin-bottom: 8px"
       >
-        <div style="display: flex; align-items: center; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
           <span class="badge info" style="min-width: 34px; text-align: center">{{ c.id }}</span>
           <strong style="font-size: 12px">{{ c.title }}</strong>
+          <!-- 原始出处必须可点开核对；取不到链接时如实说明，而不是给个点不开的假链接 -->
+          <a
+            v-if="c.url"
+            :href="c.url"
+            target="_blank"
+            rel="noreferrer"
+            class="src-link"
+            :title="c.url"
+          >
+            打开出处 ↗
+          </a>
+          <span v-else class="muted" style="font-size: 11px">仅内部切片，无外部链接</span>
         </div>
         <div class="muted" style="font-size: 11px; margin-top: 4px">
           检索得分 <code>{{ c.score != null ? c.score.toFixed(4) : '—' }}</code>
@@ -222,17 +304,66 @@ onMounted(async () => {
           {{ qa.meta.model }} · {{ qa.meta.elapsedMs }}ms
         </span>
       </div>
-      <div v-if="hasAnswer" class="answer-body">{{ qa.answer }}</div>
+
+      <!--
+        关键内容突出：段落标题用色块、[Sn] 做成可点徽标、
+        CVE/版本号/评分等硬事实与危险动作词分别着色加粗。
+        解析是保守的（见 answerFormat.ts），不认识的行原样输出，不吞字。
+      -->
+      <div v-if="hasAnswer" class="answer-body">
+        <div v-for="(block, bi) in answerBlocks" :key="bi" class="ans-block">
+          <div v-if="block.heading" class="ans-heading">{{ block.heading }}</div>
+          <p v-for="(line, li) in block.lines" :key="`l-${li}`" class="ans-line">
+            <template v-for="(t, ti) in line" :key="`t-${ti}`">
+              <button
+                v-if="t.kind === 'citation'"
+                class="cite-chip"
+                :class="{ active: activeRef === t.ref }"
+                :title="`跳到证据 ${t.ref}`"
+                @click="focusRef(t.ref!)"
+              >
+                {{ t.text }}
+              </button>
+              <span v-else :class="tokenClass(t)">{{ t.text }}</span>
+            </template>
+          </p>
+          <ul v-if="block.bullets?.length" class="ans-bullets">
+            <li v-for="(b, li) in block.bullets" :key="`b-${li}`">
+              <template v-for="(t, ti) in b" :key="`bt-${ti}`">
+                <button
+                  v-if="t.kind === 'citation'"
+                  class="cite-chip"
+                  :class="{ active: activeRef === t.ref }"
+                  @click="focusRef(t.ref!)"
+                >
+                  {{ t.text }}
+                </button>
+                <span v-else :class="tokenClass(t)">{{ t.text }}</span>
+              </template>
+            </li>
+          </ul>
+        </div>
+      </div>
       <div v-else class="muted" style="padding: 16px; font-size: 12px">
         {{ qa.thinking ? '生成中…' : '暂无答案' }}
       </div>
 
-      <!-- 引用回指：答案里的 [Sn] 与证据编号一一对应 -->
+      <!-- 引用回指：答案里的 [Sn] 与证据编号一一对应，链接可点 -->
       <div v-if="evidenceCount" style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px">
-        <div class="label" style="margin-bottom: 6px">引用来源（可点开核对）</div>
-        <div v-for="c in qa.citations" :key="`f-${c.id}`" style="font-size: 12px; margin-bottom: 4px">
+        <div class="label" style="margin-bottom: 6px">引用来源（点开核对）</div>
+        <div v-for="c in qa.citations" :key="`f-${c.id}`" style="font-size: 12px; margin-bottom: 5px">
           <span class="badge info" style="min-width: 34px; text-align: center">{{ c.id }}</span>
-          <code style="margin-left: 6px">{{ c.url }}</code>
+          <a
+            v-if="c.url"
+            :href="c.url"
+            target="_blank"
+            rel="noreferrer"
+            class="src-link"
+            style="margin-left: 6px"
+          >
+            {{ c.url }}
+          </a>
+          <span v-else class="muted" style="margin-left: 6px">{{ c.title }}（无外部链接）</span>
         </div>
       </div>
     </div>
@@ -322,6 +453,91 @@ onMounted(async () => {
   font-size: 13px;
   line-height: 1.7;
 }
+
+/* ── 关键内容突出 ─────────────────────────────────────────── */
+
+.ans-block { margin-bottom: 12px; }
+.ans-block:last-child { margin-bottom: 0; }
+
+/* 段落标题：结论 / 依据 / 推理链 / 建议动作 */
+.ans-heading {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 1px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+
+.ans-line { margin: 0 0 4px; }
+.ans-bullets { margin: 2px 0 6px; padding-left: 18px; }
+.ans-bullets li { margin-bottom: 3px; }
+
+/* 硬事实：CVE / 版本号 / CVSS / EPSS —— 深色底 + 等宽，便于扫读 */
+.hl-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* 风险/危险动作词：红色 + 加粗 */
+.hl-danger {
+  color: #fb7185;
+  font-weight: 700;
+}
+
+/* 建议动作词：绿色 + 加粗 */
+.hl-action {
+  color: #4ade80;
+  font-weight: 700;
+}
+
+/* [S1] 引用号：做成可点徽标，点一下把对应证据高亮并滚到可见处 */
+.cite-chip {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cite-chip:hover { background: rgba(59, 130, 246, 0.28); }
+.cite-chip.active {
+  color: #0b1220;
+  background: #93c5fd;
+  border-color: #93c5fd;
+}
+
+/* 证据卡片被引用号点中时同步高亮 */
+.evidence-active {
+  border-color: rgba(147, 197, 253, 0.7) !important;
+  box-shadow: 0 0 0 1px rgba(147, 197, 253, 0.35);
+}
+
+/* 原始出处链接 */
+.src-link {
+  font-size: 11px;
+  color: #7dd3fc;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(125, 211, 252, 0.5);
+  word-break: break-all;
+}
+.src-link:hover { color: #bae6fd; border-bottom-style: solid; }
 
 .meta-grid {
   display: grid;

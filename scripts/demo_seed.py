@@ -244,6 +244,33 @@ def _kev_due_date(cve_id: str, kev: bool) -> str | None:
     return _KEV_DUE_DATES.get(cve_id) if kev else None
 
 
+def _references_for(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """构造漏洞的原始出处（可点击）。
+
+    规则：**只写实测能打开的链接**。
+
+    - NVD 详情页按 CVE 编号寻址：`https://nvd.nist.gov/vuln/detail/<CVE>`，实测 200，
+      所以每个条目都给这一条；
+    - **不拼 GitHub Advisory 链接**。演示用的 GHSA 编号（如
+      `GHSA-9m4x-tq7p-hd22`）虽然**格式合法**（三段各 4 位），但它是编的，
+      `github.com/advisories/<GHSA>` 实测 **404**。这里判断过两版：
+      先按"连字符段数"，再按严格格式 `^GHSA(-[0-9a-z]{4}){3}$` —— 两者都拦不住，
+      因为问题不在格式而在**编号是否真实存在**，而离线演示库无从校验。
+      所以宁可不给这条链接，也不要挂一个点开是 404 的"来源"。
+
+    真实链路下这里应当直接来自采集到的 `references` 字段（NVD/GHSA 导出里都有），
+    演示库没有联网采集，故按编号合成 —— **这一点要写进报告「已知限制」。**
+    """
+
+    return [
+        {
+            "source": "nvd",
+            "url": f"https://nvd.nist.gov/vuln/detail/{spec['cve_id']}",
+            "tags": ["vendor-advisory"],
+        }
+    ]
+
+
 # 演示数据严格对齐 `services/enrich/dimensions.py::DIMENSIONS`（6 个计划维度 F1–F6 + AI 安全专项）。
 # 每条都带 source / evidence_id / mock / degraded_to —— 与真实富化输出同结构，
 # 这样前端、评测、指标看到的形状一致，不会出现"演示能跑、真实一大屏空白"。
@@ -819,6 +846,13 @@ def seed(db_path: str) -> dict[str, int]:
                 kev_due_date=_kev_due_date(spec["cve_id"], spec["kev"]),
                 ai_risk_category=spec["ai_risk_category"],
                 exploit_status=spec["exploit_status"],
+                # 漏洞的"原始出处"。没有它，问答页的引用链接无处可点
+                # （实测过：references 为空 → 前端把内部 chunk key 当链接，点了没反应）。
+                # 注意：这里的 CVE 是 2026 演示编号，真实世界里不存在，
+                # 因此只写**能打开**的确定性链接（NVD 详情页按编号寻址）。
+                # GHSA 不拼链接：`github.com/advisories/GHSA-xxx` 对不存在的编号返回 404，
+                # 拼过去就是死链，宁可少一条也不要假链接。
+                references=_references_for(spec),
                 published_at=published,
                 modified_at=published,
                 fetched_at=_hours_ago(spec["hours_ago"]),

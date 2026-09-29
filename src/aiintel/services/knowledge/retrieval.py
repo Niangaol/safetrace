@@ -164,6 +164,11 @@ async def hybrid_search(
             )
         ).all()
         content_map = {doc_key(r[0], r[1], r[2]): r[3] for r in rows}
+        # 原始出处：引用要能"点开核对"。没有它，前端只能把内部切片标识
+        # （`vuln:CVE-...`）当链接渲染 —— 点了没反应（实测过）。
+        url_map = _source_url_map(
+            session, {(k[0], k[1]) for k in (parse_doc_key(doc) for doc in fused)}
+        )
         for rank, doc in enumerate(fused, start=1):
             owner_type, owner_id, _ = parse_doc_key(doc)
             results.append(
@@ -173,6 +178,7 @@ async def hybrid_search(
                     "owner_type": owner_type,
                     "owner_id": owner_id,
                     "content": content_map.get(doc, ""),
+                    "url": url_map.get((owner_type, owner_id)),
                     "rrf_rank": rank,
                 }
             )
@@ -183,6 +189,43 @@ async def hybrid_search(
         except Exception as exc:  # noqa: BLE001
             logger.debug("重排失败，沿用 RRF 顺序: %s", exc)
     return results[:top_k]
+
+
+def _source_url_map(session: Any, keys: set[tuple[str, str]]) -> dict[tuple[str, str], str]:
+    """取每个 owner 的**可点开**的原始出处链接。
+
+    - `vuln`：用 `Vuln.references` 里第一条带 url 的（采集/演示库写入）；
+    - 其余（论文等）：`chunk` 表没有 url 字段，故不提供 —— 宁可不给链接，
+      也不要拼一个打不开的假地址。
+    """
+
+    import json
+
+    from aiintel.db.models import Vuln
+
+    wanted = {owner_id for owner_type, owner_id in keys if owner_type == "vuln"}
+    if not wanted:
+        return {}
+
+    out: dict[tuple[str, str], str] = {}
+    rows = session.execute(
+        select(Vuln.cve_id, Vuln.references).where(Vuln.cve_id.in_(wanted))
+    ).all()
+    for cve_id, refs in rows:
+        if not cve_id:
+            continue
+        entries = refs if isinstance(refs, list) else []
+        if isinstance(refs, str) and refs:
+            try:
+                entries = json.loads(refs)
+            except ValueError:
+                entries = []
+        for item in entries or []:
+            url = item.get("url") if isinstance(item, dict) else None
+            if url:
+                out[("vuln", cve_id)] = str(url)
+                break
+    return out
 
 
 async def _rerank(query: str, results: list[dict]) -> list[dict]:
