@@ -258,7 +258,7 @@ export function mockEvidence(id: string): EvidenceResponse {
     { dimension: 'consistency', value: { consensus: 'all_sources_agree', conflicts: [], timeline: [{ event: 'published', at: v.published_at }, { event: 'poc_released', at: '2026-09-23T00:00:00+08:00' }, { event: 'patched', at: '2026-09-24T00:00:00+08:00' }] }, confidence: 0.85, source: ['nvd', 'github', 'arxiv'], evidence: [{ source: 'nvd', url: `https://nvd.nist.gov/vuln/detail/${v.cve_id}`, snippet: '多源信息一致，无冲突。', fetched_at: '2026-09-25T03:20:00+08:00' }] },
   ]
   for (const d of dims) {
-    enrichments.push({ dimension: d.dimension, value: d.value, source: d.source, evidence: d.evidence, confidence: d.confidence, model: 'deepseek-v4-flash', agent: 'EnrichAgent', version: 2, degraded_to: (d as any).degraded_to ?? null, degraded_reason: '', quality_score: d.dimension === 'consistency' ? 0.83 : undefined, created_at: '2026-09-25T03:21:00+08:00' })
+    enrichments.push({ dimension: d.dimension, value: d.value, source: d.source, evidence: d.evidence, confidence: d.confidence, model: 'deepseek-flash', agent: 'EnrichAgent', version: 2, degraded_to: (d as any).degraded_to ?? null, degraded_reason: '', quality_score: d.dimension === 'consistency' ? 0.83 : undefined, created_at: '2026-09-25T03:21:00+08:00' })
   }
   return {
     enrichments,

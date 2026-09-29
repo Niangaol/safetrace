@@ -305,7 +305,12 @@ onMounted(async () => {
     因此 <code>cost_cny = 0</code>。检索、引用、推理链都是真实的；只有最终文字是占位。
   </div>
   <div v-else-if="qa.degraded" class="notice warn" style="margin-bottom: 14px">
-    <strong>本次回答处于降级状态</strong>（后端 <code>degraded=true</code>），请对照下方证据判断可信度。
+    <strong>{{ qa.llmDegraded ? '本次回答由降级模型生成' : '本次回答处于降级状态' }}</strong>
+    <!-- 必须说清"降级"是哪种：模型降级（云端不可用/预算耗尽，答案不是云端模型产出的）
+         与"自检质量分偏低"（答案本身支撑不足）对读者的含义完全不同。 -->
+    <span v-if="qa.degradedReason">：{{ qa.degradedReason }}</span>
+    <span v-else>（后端 <code>degraded=true</code>）</span>
+    ，请对照下方证据判断可信度。
   </div>
   <div v-if="qa.error" class="notice error" style="margin-bottom: 14px">{{ qa.error }}</div>
 

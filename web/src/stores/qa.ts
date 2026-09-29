@@ -67,6 +67,10 @@ export const useQaStore = defineStore('qa', () => {
   const started = ref(false)
   const thinking = ref(false)
   const degraded = ref(false)
+  /** 降级原因（人话文案，来自后端 done.degraded_reason） */
+  const degradedReason = ref('')
+  /** 是否属于**模型降级**（而非仅自检质量低）——用于区分徽标文案 */
+  const llmDegraded = ref(false)
   const error = ref('')
   const history = ref<{ question: string; answer: string }[]>([])
   const lastCost = ref<number | null>(null)
@@ -85,6 +89,8 @@ export const useQaStore = defineStore('qa', () => {
     started.value = false
     thinking.value = true
     degraded.value = false
+    degradedReason.value = ''
+    llmDegraded.value = false
     error.value = ''
     lastCost.value = null
     meta.value = null
@@ -175,6 +181,10 @@ export const useQaStore = defineStore('qa', () => {
           case 'done':
             thinking.value = false
             degraded.value = Boolean(event.degraded)
+            // 后端现在会给出**降级原因**（模型降级 / 自检质量低，两者可同时成立）。
+            // 只显示一个"降级"徽标而不说原因，用户无法判断该不该信这个答案。
+            degradedReason.value = String(event.degraded_reason ?? '')
+            llmDegraded.value = Boolean(event.llm_degraded)
             lastCost.value = event.cost_cny ?? null
             meta.value = {
               sessionId: event.session_id ?? null,
@@ -233,6 +243,8 @@ export const useQaStore = defineStore('qa', () => {
     started,
     thinking,
     degraded,
+    degradedReason,
+    llmDegraded,
     error,
     history,
     lastCost,
