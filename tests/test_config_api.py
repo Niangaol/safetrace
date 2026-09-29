@@ -44,11 +44,12 @@ def _keys(text: str) -> list[str]:
 
 
 def test_mask_never_reveals_full_secret() -> None:
+    # 用**假**密钥串。绝不要把真实密钥写进测试——本仓已经踩过两次（见模块 docstring）。
     secret = "sk-fake0123456789abcdefghijklmnopqrst"
     masked = cfg._mask(secret)
     assert secret not in masked
-    assert masked.startswith("sk-71a7")
-    assert masked.endswith("5ac9")
+    assert masked.startswith("sk-fake")
+    assert masked.endswith("qrst")
     assert "****" in masked
     # 短值整体打星，避免"脱敏后反而泄漏长度与内容"
     assert cfg._mask("short") == "*****"
