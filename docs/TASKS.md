@@ -3,6 +3,7 @@
 > **建立于 D2 = 2026-09-29**。本文件是唯一可执行任务清单，替代原先只存在于 `README.md` 一句话里的「D2 起任务单」。
 > 出处：`plan-bubbly-karp.md`（本目录 `docs/` 无该文件，plan 存放在队长本地计划目录）。
 > **纪律**：任务只在这里增删改；每次 PR 必须同步更新对应行状态；周五对齐会直接照本文件过，不靠口述。
+> 每行标注的「PR #N」可在 GitHub 上回溯到实际改动；无标注的表示尚未动手。
 
 ## 0. 怎么用这份台账
 
@@ -54,12 +55,12 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 
 | id | 线 | 标题 | 依赖 | 状态 | 砍单层级 | 验收命令 / 证据 |
 |---|---|---|---|---|---|---|
-| R-01 | 丙 | `package.json` 的 `validate:contracts` 调 `python`，本机只有 `python3` → `npm run check` 必失败 exit 127。改为 `PY=$(command -v python3 \|\| command -v python) && "$PY" scripts/validate_contracts.py` | — | 已完成 | 基础 | `npm run check; echo $?` → 0  ✅ 本 PR 已修：改为 `python3`/`python` 双探，`npm run check` 本机首次 exit 0|
-| R-02 | 丙 | `.githooks` 接线：`git config core.hooksPath .githooks` + `chmod +x .githooks/*`（**已做**，待随本 PR 提交模式变更）+ 修 `docs/GITHUB-FLOW.md:91` 的假陈述「本仓库已配置」（已随本 PR 修正，并补 `chmod +x` 要求） | — | 已完成 | 基础 | 试提交 `bad message` 被拒；`npm run hooks:install` 可复现  ✅ 本 PR 已完成：`core.hooksPath` 已配置 + 补 `chmod +x` + GITHUB-FLOW:91 假陈述已改 + 新增 `npm run hooks:install`|
+| R-01 | 丙 | `package.json` 的 `validate:contracts` 调 `python`，本机只有 `python3` → `npm run check` 必失败 exit 127。改为 `PY=$(command -v python3 \|\| command -v python) && "$PY" scripts/validate_contracts.py` | — | 已完成 | 基础 | `npm run check; echo $?` → 0  ✅ 本 PR #1 已修：改为 `python3`/`python` 双探，`npm run check` 本机首次 exit 0|
+| R-02 | 丙 | `.githooks` 接线：`git config core.hooksPath .githooks` + `chmod +x .githooks/*`（**已做**，待随本 PR 提交模式变更）+ 修 `docs/GITHUB-FLOW.md:91` 的假陈述「本仓库已配置」（已随本 PR 修正，并补 `chmod +x` 要求） | — | 已完成 | 基础 | 试提交 `bad message` 被拒；`npm run hooks:install` 可复现  ✅ 本 PR #1 已完成：`core.hooksPath` 已配置 + 补 `chmod +x` + GITHUB-FLOW:91 假陈述已改 + 新增 `npm run hooks:install`|
 | R-03 | 丙 | MG1 usage 表丢两字段：`src/gateway/src/index.ts:246-247` 把 `latency_ms:0`/`cached:false` 写死，丢了 reply 里正确的值（`record()` 入参只收 `{usage, degraded_to}`） | — | 待办 | 基础 | 新增断言：同 prompt 二次调用 → usage 新增一行且 `cached=true`、`latency_ms>0` |
 | R-04 | 丙 | 黄金问答口径做实 + 契约校验覆盖：仅 10 条（目标 20）；无期望答案文本；`scripts/smoke.ts:121-127` 不传 `cve_ids`；`:139` 只断言「带引用或拒答」且**不用 `expected_intent`**；`scripts/validate_contracts.py:34-46` 的 `FIXTURE_SCHEMA_MAP` 不含 golden-qa | R-01 | 待办 | 基础 | 扩到 20 条（覆盖 8 类意图，≥3 条 `expect_abstain`）；smoke 改硬断言 `expected_intent` + `expected_cve_ids` + `expected_answer_must_include`；校验器加 golden-qa 条目 |
 | R-05 | 丙 | `.gitignore:32` 是 ` recordings/`（**行首有空格**），对 `recordings/` 目录无效 | — | 待办 | 基础 | `git check-ignore -v recordings/x.mp4` 命中 |
-| R-06 | 丙 | 建本台账（原先 `find -iname "*todo*"` 仓库内零命中；Taskwarrior 已装但 `project:safetrace` 零任务） | — | 已完成 | 基础 | 本文件存在且随 PR 更新  ✅ 本 PR 已建：本文件|
+| R-06 | 丙 | 建本台账（原先 `find -iname "*todo*"` 仓库内零命中；Taskwarrior 已装但 `project:safetrace` 零任务） | — | 已完成 | 基础 | 本文件存在且随 PR 更新  ✅ 本 PR #1 已建：本文件|
 
 ## 4. 第 1 阶段：契约扩展（**必须赶在 D6 = 10/3 前**）
 
