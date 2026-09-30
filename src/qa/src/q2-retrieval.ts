@@ -7,7 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { degrade, nextId, nowIso, sha256, sha256Json } from "@safetrace/shared";
+import { degrade, nextId, nowIso, parseLoose, sha256, sha256Json } from "@safetrace/shared";
 import type { EventBus, EvidenceChunk, FallbackEvent, RetrievalRequest, RetrievalResponse } from "@safetrace/shared";
 
 /** 仅兼容旧配置/哈希工具；Qdrant 写入必须使用 MG1 provider 返回的真实 embedding。 */
@@ -405,6 +405,8 @@ export class QdrantEngine implements IndexableEngine {
               doc_type: chunk.doc_type,
               text: chunk.text,
               quality_score: chunk.quality_score ?? null,
+              ...(chunk.published_at ? { published_at: chunk.published_at } : {}),
+              ...(chunk.trust ? { trust: chunk.trust } : {}),
               provenance: chunk.provenance,
               cve_ids: extractCveIds(chunk.text),
               embedding_model_id: this.modelId,
@@ -628,6 +630,9 @@ function toChunk(p: { id: string | number; score: number; payload?: Record<strin
     text: String(pl.text ?? ""),
     score_dense: round4(p.score),
     ...(typeof pl.quality_score === "number" ? { quality_score: pl.quality_score } : {}),
+    // Qdrant 载荷里的可选元数据：缺省即"未知"，不补默认值、不猜时间
+    ...(typeof pl.published_at === "string" && pl.published_at !== "" ? { published_at: pl.published_at } : {}),
+    ...(pl.trust === "trusted" || pl.trust === "untrusted" ? { trust: pl.trust } : {}),
     provenance: {
       url: prov.url ?? "",
       section: prov.section ?? "",
@@ -656,6 +661,17 @@ export async function indexChunks(
   return meta;
 }
 
+function readFixtureText(rel: string): string {
+  return readFileSync(new URL(FIXTURE_DIR + rel, import.meta.url), "utf8");
+}
+
+/** 用 shared 的口径把上游日期归一为 ISO-8601 UTC；不可解析返回 undefined（不猜时间）。 */
+function isoOrUndefined(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || raw.trim() === "") return undefined;
+  const ms = parseLoose(raw);
+  return ms === null ? undefined : new Date(ms).toISOString();
+}
+
 function readFixtureJson(rel: string): unknown {
   return JSON.parse(readFileSync(new URL(FIXTURE_DIR + rel, import.meta.url), "utf8"));
 }
@@ -676,7 +692,7 @@ function sha256Of(text: string): string {
  */
 export function readFixtureChunks(): EvidenceChunk[] {
   const nvd = readFixtureJson("sources/nvd.sample.json") as {
-    vulnerabilities: Array<{ cve: { id: string; descriptions: Array<{ lang: string; value: string }> } }>;
+    vulnerabilities: Array<{ cve: { id: string; published?: string; descriptions: Array<{ lang: string; value: string }> } }>;
   };
   const kev = readFixtureJson("sources/kev.sample.json") as {
     vulnerabilities: Array<{
@@ -685,6 +701,7 @@ export function readFixtureChunks(): EvidenceChunk[] {
     }>;
   };
   const cveorg = readFixtureJson("sources/cveorg.sample.json") as {
+    cveMetadata?: { datePublished?: string };
     containers: {
       cna: {
         title: string;
@@ -696,7 +713,7 @@ export function readFixtureChunks(): EvidenceChunk[] {
   const osv = readFixtureJson("sources/osv.sample.json") as {
     results: Array<{
       vulns: Array<{
-        id: string; aliases: string[]; summary: string; details: string;
+        id: string; aliases: string[]; summary: string; details: string; published?: string;
         affected: Array<{ package: { name: string }; ranges: Array<{ events: Array<{ introduced?: string; fixed?: string }> }> }>;
       }>;
     }>;
@@ -752,6 +769,14 @@ export function readFixtureChunks(): EvidenceChunk[] {
     (sa.kev_flag ? "已列入 KEV；" : "") +
     (sa.exploit_maturity ? "利用成熟度 " + sa.exploit_maturity + "。" : "") +
     (sa.impact_summary ? "影响摘要：" + sa.impact_summary : "");
+  // arXiv fixture 提供 entry 级 <published>；用于论文 chunk 的上游发布时间
+  const arxivXml = readFixtureText("enrich/arxiv.sample.xml");
+  const paperPublished = (() => {
+    // fixture 的 paper_id 形如 "arXiv:2112.00507"，Atom 里是 abs/2112.00507v1；按编号片段匹配
+    const key = paper.paper_id.includes(":") ? paper.paper_id.slice(paper.paper_id.indexOf(":") + 1) : paper.paper_id;
+    const entry = arxivXml.split("<entry>").find((block) => block.includes(key));
+    return isoOrUndefined(entry?.match(/<published>([^<]+)<\/published>/)?.[1]);
+  })();
   const paperText =
     "论文《" + paper.title + "》（" + paper.paper_id + (paper.year ? "，" + paper.year : "") +
     "）：分析 CVE-2021-44228（Log4Shell）漏洞及其利用的学术研究，关联度 " + paper.relevance_score +
@@ -763,6 +788,8 @@ export function readFixtureChunks(): EvidenceChunk[] {
       doc_type: "vuln_advisory",
       text: nvdText,
       quality_score: 0.98,
+      published_at: isoOrUndefined(nvdCve.cve.published),
+      trust: "trusted",
       provenance: { url: nvdUrl, section: "description", sha256: sha256Of(nvdText) },
     },
     {
@@ -770,6 +797,8 @@ export function readFixtureChunks(): EvidenceChunk[] {
       doc_type: "vuln_advisory",
       text: kevText,
       quality_score: 0.97,
+      published_at: isoOrUndefined(kevV.dateAdded),
+      trust: "trusted",
       provenance: { url: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", section: "vulnerabilities[CVE-2021-44228]", sha256: sha256Of(kevText) },
     },
     {
@@ -777,6 +806,8 @@ export function readFixtureChunks(): EvidenceChunk[] {
       doc_type: "vuln_advisory",
       text: cveorgText,
       quality_score: 0.96,
+      published_at: isoOrUndefined(cveorg.cveMetadata?.datePublished),
+      trust: "trusted",
       provenance: { url: "https://www.cve.org/CVERecord?id=CVE-2021-44228", section: "containers.cna", sha256: sha256Of(cveorgText) },
     },
     {
@@ -784,6 +815,8 @@ export function readFixtureChunks(): EvidenceChunk[] {
       doc_type: "vuln_advisory",
       text: osvText,
       quality_score: 0.95,
+      published_at: isoOrUndefined(osvV.published),
+      trust: "trusted",
       provenance: { url: "https://osv.dev/vulnerability/" + osvV.id, section: "vulnerabilities[0]", sha256: sha256Of(osvText) },
     },
     {
@@ -791,6 +824,8 @@ export function readFixtureChunks(): EvidenceChunk[] {
       doc_type: "enrichment",
       text: enrichText,
       quality_score: enrich.enrichment_score,
+      published_at: isoOrUndefined(nvdCve.cve.published),
+      trust: "trusted",
       provenance: { url: nvdUrl, section: "metrics.cvssMetricV31", sha256: sha256Of(enrichText) },
     },
     {
@@ -798,6 +833,8 @@ export function readFixtureChunks(): EvidenceChunk[] {
       doc_type: "paper",
       text: paperText,
       quality_score: paper.relevance_score,
+      published_at: paperPublished,
+      trust: "trusted",
       provenance: { url: "https://arxiv.org/abs/2112.00507", section: "abstract", sha256: sha256Of(paperText) },
     },
   ];

@@ -56,6 +56,16 @@
           "score_rerank": {
             "type": "number"
           },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "上游首次发布时间（来自 RawDoc 对应的 IntelItem.published_at，未归一化前不入库）。缺省 = 发布时间未知，调用方必须按未知处理，不得假定新鲜"
+          },
+          "trust": {
+            "type": "string",
+            "enum": ["trusted", "untrusted"],
+            "description": "证据信任级：trusted = 结构化权威源（NVD/KEV/CVE.org/OSV/GHSA/arXiv 等 API 直读）或本系统由其派生；untrusted = 网页/文档类外部文本（厂商公告页、社区、PoC）。缺省 = 未知，不得当作 trusted 使用"
+          },
           "quality_score": {
             "type": "number",
             "description": "DQ1 判定分，degrade 条目随答案标注"

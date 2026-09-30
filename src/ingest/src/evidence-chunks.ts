@@ -8,6 +8,27 @@ export interface SourceEvidenceChunkBuildResult {
   skipped: Array<{ intel_id: string; reason: string }>;
 }
 
+/**
+ * 信任级口径（C-02）：
+ * - trusted = 结构化权威源 API 直读（NVD/KEV/CVE.org/OSV/GHSA/arXiv）或本系统由其派生；
+ * - untrusted = 网页/文档类外部文本（厂商公告页、安全社区、博客、PoC）；
+ * - standard_policy 属于文档类，按 untrusted 处理（标准正文仍是外部可控文本）。
+ * 缺省（unknown）由调用方按最保守方式处理，禁止在缺失时猜测。
+ */
+function sourceTrust(sourceType: SourceType): EvidenceChunk["trust"] {
+  switch (sourceType) {
+    case "nvd_cve":
+    case "cve_org":
+    case "ghsa":
+    case "osv":
+    case "kev":
+    case "paper":
+      return "trusted";
+    default:
+      return "untrusted";
+  }
+}
+
 function sourceDocType(sourceType: SourceType): EvidenceChunk["doc_type"] | undefined {
   switch (sourceType) {
     case "nvd_cve":
@@ -133,6 +154,10 @@ async function buildChunks(
       doc_type: docType,
       text,
       quality_score: verdict.quality_score,
+      // 上游发布时间只取自解析后的 IntelItem.published_at（适配器已归一化并登记 warning）；
+      // 缺失即未知，不用抓取时间或当前时间顶替。
+      ...(item.published_at ? { published_at: item.published_at } : {}),
+      trust: sourceTrust(raw.source_type),
       provenance: { url: raw.url, section: "parsed:title+summary+entities", sha256: payloadSha256 },
     });
     parentIds.add(dqLineageId);

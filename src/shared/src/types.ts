@@ -139,6 +139,9 @@ export interface Provenance {
   sha256?: string;
 }
 
+/** 证据信任级：缺省即未知，禁止调用方把未知当作 trusted。 */
+export type TrustLevel = "trusted" | "untrusted";
+
 export interface EvidenceChunk {
   chunk_id: string;
   doc_type: DocType;
@@ -147,6 +150,10 @@ export interface EvidenceChunk {
   score_sparse?: number;
   score_rerank?: number;
   quality_score?: number;
+  /** 上游首次发布时间；缺省 = 未知（调用方按最不新鲜处理）。 */
+  published_at?: string;
+  /** 证据信任级；缺省 = 未知。 */
+  trust?: TrustLevel;
   provenance: Provenance;
 }
 
