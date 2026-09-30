@@ -310,8 +310,13 @@ class LLMRouter:
         )
 
     async def _private_local_result(
-        self, model: str, messages: list[dict], thinking: bool, max_tokens: int,
-        node: str, agent: str,
+        self,
+        model: str,
+        messages: list[dict],
+        thinking: bool,
+        max_tokens: int,
+        node: str,
+        agent: str,
     ) -> LLMResult:
         """C-05：private 数据只经本地边界。本地不可用（未启用或调用失败）→ 硬拒。
 

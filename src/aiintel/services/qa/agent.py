@@ -280,7 +280,10 @@ class QAAgent:
                 # 缺它就当作"没有降级信息"（0），不要让整个问答挂掉。
                 degrade_before = getattr(_llm, "degrade_count", 0)
                 async for piece in _llm.stream(
-                    messages, task="reason", max_tokens=3000, node="qa.answer",
+                    messages,
+                    task="reason",
+                    max_tokens=3000,
+                    node="qa.answer",
                     data_domain=data_domain,
                 ):
                     buffer.append(piece)
@@ -308,8 +311,8 @@ class QAAgent:
 
                 yield {"event": "stage", "stage": "check", "message": "自检答案是否被证据支持…"}
                 verdict = await check_answer(
-                        question, answer, citations + evidence, data_domain=data_domain
-                    )
+                    question, answer, citations + evidence, data_domain=data_domain
+                )
                 for item in reasoning:
                     item["finding"] = (
                         verdict.get("gaps", [""])[0] if verdict.get("gaps") else "证据支持"
@@ -350,7 +353,10 @@ class QAAgent:
                     _rw = get_llm()
                     rw_before = getattr(_rw, "degrade_count", 0)
                     async for piece in _rw.stream(
-                        messages, task="reason", max_tokens=3000, node="qa.rewrite",
+                        messages,
+                        task="reason",
+                        max_tokens=3000,
+                        node="qa.rewrite",
                         data_domain=data_domain,
                     ):
                         buffer.append(piece)

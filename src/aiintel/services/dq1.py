@@ -55,6 +55,10 @@ FLAG_POC_DEAD_LINK = "poc_dead_link"
 FLAG_KEY5_MISSING = "key5_missing"
 FLAG_BOILERPLATE = "boilerplate"
 FLAG_MULTI_ID_MISMATCH = "multi_id_mismatch"
+#: A-04：外部文本里检出注入迹象（达到可疑阈值）。落进 `flags` 是有意的 ——
+#: 只写在可选字段 `injection_flags` 里，既有 verdict 逻辑不会理会它；
+#: 落进 flags 才能沿用既有的 review/quarantine 语义。
+FLAG_INJECTION_SUSPECT = "injection_suspect"
 
 ALL_FLAGS: tuple[str, ...] = (
     FLAG_TS_NO_TZ,
@@ -118,11 +122,15 @@ class QualityVerdict:
     reviewer: str | None = None
     reviewed_at: str | None = None
     gate_version: str = GATE_VERSION
+    #: A-04：注入迹象评分 0-1。填了表示**已筛查**（与契约"缺省=未筛查"对应）。
+    injection_score: float | None = None
+    #: A-04：命中的注入迹象（取值与上游契约十类枚举逐条一致）
+    injection_flags: list[str] = field(default_factory=list)
 
     def to_payload(self) -> dict[str, Any]:
         """→ `dq.verdicts` 载荷（过 `LocalPayloads.json::QualityVerdict`）。"""
 
-        return {
+        payload: dict[str, Any] = {
             "item_id": self.item_id,
             "item_kind": self.item_kind,
             "quality_score": round(float(self.quality_score), 4),
@@ -136,6 +144,13 @@ class QualityVerdict:
             "reviewed_at": self.reviewed_at,
             "gate_version": self.gate_version,
         }
+        # 两个字段都是**可选**的：只有真筛过才填。
+        # 契约明说缺省 = 未筛查，禁止调用方当作"已筛查且干净"；
+        # 所以没筛就**不放键**，而不是放 0/[] 冒充"筛过且干净"。
+        if self.injection_score is not None:
+            payload["injection_score"] = round(float(self.injection_score), 4)
+            payload["injection_flags"] = sorted(self.injection_flags)
+        return payload
 
 
 # ---------------------------------------------------------------- 维度评分
@@ -398,6 +413,22 @@ def evaluate(
     }
     score = sum(dimension_scores[key] * weights[key] for key in weights)
     flags = collect_flags(vuln)
+
+    # ── A-04 注入筛查（契约 C-03 的可选字段）──────────────────────────
+    # 采集来的 `description` / `summary` 是**外部可控文本**，会进检索与 LLM 上下文，
+    # 所以在这里筛一次。
+    #
+    # ⚠️ 顺序很重要：必须在 `decide_verdict` **之前**把 flag 并进去。
+    # `decide_verdict` 的设计是"**flag 优先于分数**"（拦截结构性错误，
+    # 不被平均分掩盖），而它只看到传进去的 flags —— 先算 verdict 再补 flag，
+    # 等于注入检出结果被静默忽略（第一版就是这么写的，被测试抓出来）。
+    from aiintel.services.injection import detect as _detect_injection
+
+    blob = "\n".join(str(vuln.get(key) or "") for key in ("description", "summary", "title"))
+    inj = _detect_injection(blob)
+    if inj.suspicious and FLAG_INJECTION_SUSPECT not in flags:
+        flags = [*flags, FLAG_INJECTION_SUSPECT]
+
     verdict = decide_verdict(score, flags, gate_version=gate_version)
 
     return QualityVerdict(
@@ -409,6 +440,8 @@ def evaluate(
         verdict=verdict,
         quarantine_ref=f"quarantine://{item_id}" if verdict == "quarantine" else None,
         gate_version=gate_version,
+        injection_score=inj.score,
+        injection_flags=inj.flags,
     )
 
 

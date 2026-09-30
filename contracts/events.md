@@ -49,8 +49,12 @@
 > `dq.verdicts` 载荷（QualityVerdict，机读契约在 `LocalPayloads.json` 的 definitions）为本仓对齐上游
 > 的**纯追加**增量：`flags` 登记 `unknown_version`；可选 `injection_score`（0-1）与 `injection_flags`
 > （十类注入迹象枚举，样例 `fixtures/qualityverdict.injection.sample.json`）。
-> **缺省 = 未做注入筛查**：DQ1 不填这两个字段，任何调用方禁止把缺省当作“已筛查且干净”；
-> 注入检测实现不在本仓范围内。
+> **缺省 = 未做注入筛查**：任何调用方禁止把缺省当作"已筛查且干净"。
+> **A-04 已落地（2026-09-30）**：本仓**有**检测器（`services/injection.py`），
+> DQ1 的 `evaluate()` 现在**会填**这两个字段，且高风险命中会同时落进 `flags`
+> 的 `injection_suspect`（`decide_verdict` 是"flag 优先于分数"，因此检出即转
+> `quarantine`）。旧生产者不带这两字段的载荷**仍然合法**（纯追加、向后兼容）。
+> ⚠️ 检测为**规则匹配**，不覆盖全部注入手法；"未检出"不等于"一定安全"。
 
 > `qa.answers` 载荷（Answer，内联）对齐上游 v1.1.3 / C-04 的**纯追加**增量，可选字段：
 > `stale_warning`（时效评估）与 `injection_guard`（注入筛查状态）。缺省语义两意：

@@ -28,11 +28,7 @@ def test_changelog_lists_every_declared_schema() -> None:
     """CHANGELOG 注册表必须点名全部 11 个 schema（防文档与登记集合脱节）。"""
 
     changelog = (SCHEMA_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
-    missing = [
-        name
-        for name in AUTHORITATIVE_SCHEMAS + LOCAL_SCHEMAS
-        if name not in changelog
-    ]
+    missing = [name for name in AUTHORITATIVE_SCHEMAS + LOCAL_SCHEMAS if name not in changelog]
     assert missing == [], f"CHANGELOG 未点名: {missing}"
 
 

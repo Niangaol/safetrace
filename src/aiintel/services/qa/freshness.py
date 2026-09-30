@@ -127,29 +127,54 @@ def assess_staleness(
 def assess_injection_guard(citations: list[dict[str, Any]]) -> dict[str, Any]:
     """注入筛查状态。
 
-    **本仓当前没有注入检测器**（上游同样只落了契约位，检测实现归 A-04）。
-    因此这里如实返回 `screened=False`，并统计引用了多少条 **untrusted** 证据
-    —— 那是"可能被外部文本影响"的暴露面，是此刻能给出的最有价值信息。
+    A-04 落地后本仓**有检测器了**，所以这里真的筛一遍并把 `screened` 置为 `True`。
+    在此之前本函数恒返回 `screened=False`（如实承认"没筛"）——
+    那是对的，因为当时确实没筛。
 
-    绝不返回 `screened=True`：那等于宣称做过一件没做的事。
+    设计要点：
+    - **筛了才说 True**：`screened` 的含义是"本轮做过筛查"，
+      不是"筛查结果干净"。筛出危险内容时 `screened` 仍是 `True`。
+    - `untrusted_evidence` 继续统计引用里 `trust=untrusted` 的条数 ——
+      那是"暴露面"，与"有没有检出"是两件事，都要给。
+    - 命中 flag 用契约的十类枚举（与上游 `InjectionFlag` 逐条一致）。
     """
+
+    from aiintel.services.injection import screen_items
 
     untrusted = sum(1 for c in citations if c.get("trust") == "untrusted")
     total = len(citations)
+
     if total == 0:
-        note = "本轮无引用证据，注入筛查不适用。"
-    elif untrusted:
-        note = (
-            f"⚠️ 未做注入筛查（screened=false）：本轮引用了 {untrusted}/{total} 条"
-            f"外部文本（trust=untrusted）证据，其内容可能含误导性指令，请勿当作操作依据。"
+        # 没有输入就没有筛查动作：**不谎称筛过**。
+        return {
+            "screened": False,
+            "untrusted_evidence": 0,
+            "note": "本轮无引用证据，注入筛查不适用。",
+        }
+
+    report = screen_items(citations)
+    max_score = float(report["max_score"])
+    flags = list(report["flags"])
+    flagged = int(report["flagged_items"])
+
+    parts: list[str] = []
+    if flagged:
+        parts.append(
+            f"检出 {flagged}/{total} 条证据含注入迹象（最高分 {max_score:.2f}）：{'、'.join(flags)}"
         )
     else:
-        note = (
-            f"未做注入筛查（screened=false）：本轮 {total} 条引用均来自权威源，"
-            f"未发现外部文本；但这不代表已做过注入检测。"
-        )
+        parts.append(f"已筛查 {total} 条引用证据，未发现注入迹象")
+    if untrusted:
+        parts.append(f"其中 {untrusted} 条来自外部文本（trust=untrusted）")
+
     return {
-        "screened": False,
+        "screened": True,
+        "max_score": round(max_score, 4),
+        "flags": flags,
         "untrusted_evidence": untrusted,
-        "note": note,
+        # 如实说明检测手段的边界：规则匹配不可能覆盖全部手法，
+        # 不能让用户把"没检出"读成"一定安全"。
+        "note": ("⚠️ " if flagged else "")
+        + "；".join(parts)
+        + "。筛查为规则匹配，不保证覆盖全部注入手法。",
     }

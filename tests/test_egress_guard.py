@@ -57,7 +57,10 @@ class FakeLLM(LLMRouter):
         return "本地答案", Usage(prompt_tokens=1, completion_tokens=1)
 
     async def _isolation_reject(
-        self, node: str, reason: str, action: str = "isolation_policy_rejection"  # noqa: D102
+        self,
+        node: str,
+        reason: str,
+        action: str = "isolation_policy_rejection",  # noqa: D102
     ) -> None:
         self.rejects.append((action, reason))
 

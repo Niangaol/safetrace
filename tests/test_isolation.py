@@ -92,7 +92,10 @@ async def test_complete_private_uses_local_only() -> None:
 
     router = FakeLLM(_settings(llm_api_key="secret-key"))
     result = await router.complete(
-        [{"role": "user", "content": "问题"}], task="reason", node="t", agent="t",
+        [{"role": "user", "content": "问题"}],
+        task="reason",
+        node="t",
+        agent="t",
         data_domain="private",
     )
     assert result.model == "qwen2.5:7b-instruct"
@@ -107,7 +110,10 @@ async def test_complete_private_no_local_fail_closed() -> None:
     router = FakeLLM(_settings(llm_api_key="secret-key", llm_local_enabled=False, demo_mode=True))
     with pytest.raises(IsolationRejectionError):
         await router.complete(
-            [{"role": "user", "content": "问题"}], task="reason", node="t", agent="t",
+            [{"role": "user", "content": "问题"}],
+            task="reason",
+            node="t",
+            agent="t",
             data_domain="private",
         )
     assert len(router.rejects) == 1
@@ -125,7 +131,10 @@ async def test_complete_private_local_down_fail_closed() -> None:
     router._call_local = boom  # type: ignore[method-assign]
     with pytest.raises(IsolationRejectionError):
         await router.complete(
-            [{"role": "user", "content": "问题"}], task="reason", node="t", agent="t",
+            [{"role": "user", "content": "问题"}],
+            task="reason",
+            node="t",
+            agent="t",
             data_domain="private",
         )
     assert len(router.rejects) == 1
@@ -136,7 +145,10 @@ async def test_complete_private_cloud_boundary_local_allowed() -> None:
 
     router = FakeLLM(_settings(llm_api_key="", llm_cloud_trust_boundary="local"))
     result = await router.complete(
-        [{"role": "user", "content": "问题"}], task="reason", node="t", agent="t",
+        [{"role": "user", "content": "问题"}],
+        task="reason",
+        node="t",
+        agent="t",
         data_domain="private",
     )
     assert result.degraded is True
@@ -148,7 +160,10 @@ async def test_complete_public_behavior_unchanged() -> None:
 
     router = FakeLLM(_settings(llm_api_key=""))
     result = await router.complete(
-        [{"role": "user", "content": "问题"}], task="reason", node="t", agent="t",
+        [{"role": "user", "content": "问题"}],
+        task="reason",
+        node="t",
+        agent="t",
         data_domain="public",
     )
     assert result.model == "qwen2.5:7b-instruct"
@@ -163,7 +178,10 @@ async def test_stream_private_uses_local_only() -> None:
     pieces = [
         piece
         async for piece in router.stream(
-            [{"role": "user", "content": "问题"}], task="reason", node="t", agent="t",
+            [{"role": "user", "content": "问题"}],
+            task="reason",
+            node="t",
+            agent="t",
             data_domain="private",
         )
     ]
@@ -175,7 +193,10 @@ async def test_stream_private_no_local_fail_closed() -> None:
     router = FakeLLM(_settings(llm_local_enabled=False, demo_mode=True))
     with pytest.raises(IsolationRejectionError):
         async for _ in router.stream(
-            [{"role": "user", "content": "问题"}], task="reason", node="t", agent="t",
+            [{"role": "user", "content": "问题"}],
+            task="reason",
+            node="t",
+            agent="t",
             data_domain="private",
         ):
             pass

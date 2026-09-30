@@ -120,7 +120,7 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "注入迹象评分 0-1（可选）。缺省 = 未做注入筛查，禁止调用方当作已筛查且干净；DQ1 当前不填，检测实现不在本仓"
+          "description": "注入迹象评分 0-1（可选）。缺省 = 未做注入筛查，禁止调用方当作已筛查且干净。A-04 已落地（services/injection.py）：DQ1 的 evaluate() 现在会填该字段；检测为规则匹配，不覆盖全部注入手法"
         },
         "injection_flags": {
           "type": "array",
