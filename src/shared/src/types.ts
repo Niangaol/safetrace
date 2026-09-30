@@ -197,6 +197,19 @@ export type DqFlag =
   | "ts_no_tz" | "reject_status" | "poc_dead_link" | "key5_missing"
   | "boilerplate" | "multi_id_mismatch";
 
+/** 注入迹象枚举（C-03 契约位；检测实现见 A-04，未落地前 flags 为空且 injection_score 缺省）。 */
+export type InjectionFlag =
+  | "instruction_override"
+  | "role_confusion"
+  | "zero_width_chars"
+  | "base64_hidden"
+  | "html_entity_encoded"
+  | "comment_embedded"
+  | "exfil_instruction"
+  | "fake_system_prompt"
+  | "citation_spoof"
+  | "multi_stage";
+
 export interface QualityVerdict {
   item_id: string;
   item_kind: DqItemKind;
@@ -210,6 +223,10 @@ export interface QualityVerdict {
   quarantine_ref?: string;
   reviewer?: string;
   reviewed_at?: string;
+  /** C-03：注入迹象评分 0-1。缺省 = 未做注入筛查，禁止调用方当作"已筛查且干净" */
+  injection_score?: number;
+  /** C-03：命中的注入迹象标签；缺省或空数组不等于已筛查 */
+  injection_flags?: InjectionFlag[];
   gate_version: string;
 }
 

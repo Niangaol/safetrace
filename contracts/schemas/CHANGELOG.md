@@ -3,6 +3,12 @@
 > 纪律（docs/GITHUB-FLOW.md 第五节）：只允许「新字段追加 + 旧字段标 deprecated」；
 > 禁止改语义、改枚举值含义、删字段。每次契约改动必须在此登记，并在 PR 中三线 sign-off。
 
+## v1.1.2（2026-09-30，D6 冻结前增量；C-03）
+
+| 契约 | 生产者 → 消费者 | 变更与兼容性 |
+|---|---|---|
+| QualityVerdict（events.md 内联） | DQ1 → S1/A1、注入防护消费方 | 追加**可选** `injection_score`（0-1）与 `injection_flags`（十类注入迹象枚举）；`required` 与既有字段不变，旧生产者合法（纯追加、无破坏性）。`flags` 同步登记既有实现已在用的 `unknown_version`。**缺省 = 未做注入筛查**，禁止调用方当作“已筛查且干净”；注入检测实现归 A-04，本条只落契约位与样例（`fixtures/qualityverdict.injection.sample.json`）。迁移动作：DQ1 填充前消费者按“未筛查”处理；A-04 落地后由 DQ1 填充，消费者据 flags 路由人工复核。 |
+
 ## v1.1.1（2026-09-30，D6 冻结前增量；C-02）
 
 | 契约 | 生产者 → 消费者 | 变更与兼容性 |
