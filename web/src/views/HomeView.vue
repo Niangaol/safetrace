@@ -102,6 +102,39 @@ const globePings = computed<GlobeDot[]>(() =>
   globeDots.value.filter((_, i) => i % 11 === 0).map((d) => ({ ...d, delay: `-${((d.x * 13) % 29) / 10}s` })),
 )
 
+interface GlobeArc { d: string; kind: string; delay: string; dur: string }
+
+/** 卡巴斯基式“实时威胁地图”：球面上城市间飞行的攻击/防御流线（确定性生成） */
+const globeArcs = computed<GlobeArc[]>(() => {
+  const pts = globeDots.value
+  if (!pts.length) return []
+  const kinds = ['threat', 'threat', 'threat', 'attack', 'threat', 'defend', 'threat']
+  const arcs: GlobeArc[] = []
+  const pick = (i: number) => pts[(i * 13 + 5) % pts.length]
+  for (let k = 0; k < 14; k++) {
+    const a = pick(k)
+    const b = pick(k + 3 + (k % 5))
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const d = Math.hypot(dx, dy)
+    if (d < 44 || d > 200) continue
+    const mx = (a.x + b.x) / 2
+    const my = (a.y + b.y) / 2
+    const len = d || 1
+    // 沿弦垂线抬高控制点，形成跨越球面的弓形流线
+    const px = -dy / len
+    const py = dx / len
+    const lift = d * 0.36
+    arcs.push({
+      d: `M ${a.x.toFixed(1)} ${a.y.toFixed(1)} Q ${(mx + px * lift).toFixed(1)} ${(my + py * lift).toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`,
+      kind: kinds[k % kinds.length],
+      delay: `-${((k * 1.7) % 4.2).toFixed(2)}s`,
+      dur: `${(2.2 + (k % 3) * 0.7).toFixed(2)}s`,
+    })
+  }
+  return arcs
+})
+
 /**
  * 智能体卡片：名字与颜色是产品定义（稳定的），但**运行数字全部来自 `/agents/runs`**。
  * `graph` 字段与后端的编排图同名：collect / enrich / qa / alert。
@@ -164,7 +197,24 @@ const toolsByTier = computed(() => {
               <line x1="46" y1="289" x2="354" y2="289" class="globe-parallel" />
               <line x1="111" y1="46" x2="289" y2="46" class="globe-parallel" />
               <line x1="111" y1="354" x2="289" y2="354" class="globe-parallel" />
-              <path d="M 60 200 A 140 140 0 0 1 156 68" class="globe-arc" />
+              <path d="M 60 200 A 140 140 0 0 1 156 68" class="globe-rim-arc" />
+              <!-- 威胁流线：静态半透明轨道 + 流动亮粒子 -->
+              <g class="globe-arcs">
+                <path
+                  v-for="(arc, i) in globeArcs"
+                  :key="'rail' + i"
+                  :d="arc.d"
+                  class="globe-arc-rail"
+                />
+                <path
+                  v-for="(arc, i) in globeArcs"
+                  :key="'stream' + i"
+                  :d="arc.d"
+                  class="globe-arc-stream"
+                  :class="arc.kind"
+                  :style="{ animationDelay: arc.delay, animationDuration: arc.dur }"
+                />
+              </g>
               <circle
                 v-for="(d, i) in globeDots"
                 :key="'d' + i"
@@ -414,11 +464,42 @@ const toolsByTier = computed(() => {
   stroke: rgba(56, 189, 248, 0.22);
   stroke-width: 1;
 }
-.globe-arc {
+.globe-rim-arc {
   fill: none;
   stroke: rgba(125, 211, 252, 0.5);
   stroke-width: 2;
   filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.7));
+}
+/* 威胁流线：静态轨道 + 流动粒子 */
+.globe-arcs {
+  pointer-events: none;
+}
+.globe-arc-rail {
+  fill: none;
+  stroke: rgba(56, 189, 248, 0.16);
+  stroke-width: 1;
+}
+.globe-arc-stream {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 46 120;
+  animation: arcFlow 3s linear infinite;
+}
+.globe-arc-stream.threat {
+  stroke: rgba(56, 189, 248, 0.9);
+  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.7));
+}
+.globe-arc-stream.attack {
+  stroke: rgba(255, 84, 112, 0.92);
+  filter: drop-shadow(0 0 4px rgba(255, 84, 112, 0.7));
+}
+.globe-arc-stream.defend {
+  stroke: rgba(34, 197, 94, 0.92);
+  filter: drop-shadow(0 0 4px rgba(34, 197, 94, 0.7));
+}
+@keyframes arcFlow {
+  to { stroke-dashoffset: -166; }
 }
 .globe-dot {
   animation: gtwinkle 3.6s ease-in-out infinite;

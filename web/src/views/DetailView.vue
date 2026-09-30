@@ -328,115 +328,165 @@ onMounted(async () => {
         <span class="badge-count">{{ graphLayout.nodes.length }} 节点 · {{ graphLayout.edges.length }} 关系</span>
       </div>
       <p class="muted" style="font-size: 12px; margin-top: 0">
-        蛛网关系图：按「与主条目的关联距离」分层布局，悬停节点高亮所有相连关系；点击 CVE/GHSA 节点可跳转详情。
+        关系表为主视图（全部展开）；右侧蛛网图为辅助概览——悬停节点高亮相连关系，点击 CVE/GHSA 节点可跳转详情。
       </p>
 
-      <div class="graph-wrap fade-in">
-        <svg :viewBox="`0 0 ${GRAPH_V} ${GRAPH_V}`" class="rel-graph" role="img" aria-label="漏洞关系蛛网图">
-          <defs>
-            <radialGradient id="relCore" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stop-color="rgba(56, 189, 248, 0.14)" />
-              <stop offset="100%" stop-color="rgba(56, 189, 248, 0)" />
-            </radialGradient>
-          </defs>
-          <circle :cx="GRAPH_C" :cy="GRAPH_C" :r="GRAPH_R[3]" fill="url(#relCore)" />
-          <circle
-            v-for="r in GRAPH_R.slice(1)"
-            :key="r"
-            :cx="GRAPH_C" :cy="GRAPH_C" :r="r"
-            class="rel-ring"
-          />
-          <line
-            v-for="i in 8" :key="'spoke' + i"
-            :x1="GRAPH_C" :y1="GRAPH_C"
-            :x2="GRAPH_C + GRAPH_R[3] * Math.cos((i * Math.PI) / 4)"
-            :y2="GRAPH_C + GRAPH_R[3] * Math.sin((i * Math.PI) / 4)"
-            class="rel-spoke"
-          />
+      <div class="rel-layout fade-in">
+        <div class="rel-table-side">
+          <div class="rel-table-wrap">
+            <table class="rel-table-main">
+              <thead>
+                <tr><th>起点</th><th>关系</th><th>终点</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(e, i) in graphLayout.edges" :key="i">
+                  <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">{{ e.src }}</td>
+                  <td><span class="badge info">{{ e.rel }}</span></td>
+                  <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">
+                    {{ e.dst }} <span class="muted">({{ e.type }})</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
 
-          <g v-for="(e, i) in graphLayout.edges" :key="'e' + i">
-            <line
-              :x1="e.x1" :y1="e.y1" :x2="e.x2" :y2="e.y2"
-              class="rel-edge"
-              :class="{
-                dim: hoveredNode && hoveredNode !== e.src && hoveredNode !== e.dst,
-                hi: hoveredNode === e.src || hoveredNode === e.dst,
-              }"
-            />
-          </g>
+        <div class="rel-graph-side">
+          <div class="rel-graph-title">蛛网关系图</div>
+          <div class="graph-wrap">
+            <svg :viewBox="`0 0 ${GRAPH_V} ${GRAPH_V}`" class="rel-graph" role="img" aria-label="漏洞关系蛛网图">
+              <defs>
+                <radialGradient id="relCore" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stop-color="rgba(56, 189, 248, 0.14)" />
+                  <stop offset="100%" stop-color="rgba(56, 189, 248, 0)" />
+                </radialGradient>
+              </defs>
+              <circle :cx="GRAPH_C" :cy="GRAPH_C" :r="GRAPH_R[3]" fill="url(#relCore)" />
+              <circle
+                v-for="r in GRAPH_R.slice(1)"
+                :key="r"
+                :cx="GRAPH_C" :cy="GRAPH_C" :r="r"
+                class="rel-ring"
+              />
+              <line
+                v-for="i in 8" :key="'spoke' + i"
+                :x1="GRAPH_C" :y1="GRAPH_C"
+                :x2="GRAPH_C + GRAPH_R[3] * Math.cos((i * Math.PI) / 4)"
+                :y2="GRAPH_C + GRAPH_R[3] * Math.sin((i * Math.PI) / 4)"
+                class="rel-spoke"
+              />
 
-          <g
-            v-for="n in graphLayout.nodes"
-            :key="n.id"
-            class="rel-node"
-            :class="{ dimNode: hoveredNode && hoveredNode !== n.id, hot: hoveredNode === n.id }"
-            @mouseenter="hoveredNode = n.id"
-            @mouseleave="hoveredNode = null"
-            @click="goNode(n)"
-          >
-            <circle
-              :cx="n.x" :cy="n.y"
-              :r="n.id === graphLayout.centerId ? 22 : 11"
-              fill="rgba(10, 15, 26, 0.9)"
-              :stroke="nodeColor(n.type)"
-              :stroke-width="hoveredNode === n.id ? 2.5 : 1.5"
-            />
-            <circle
-              :cx="n.x" :cy="n.y"
-              :r="hoveredNode === n.id ? 15 : 9"
-              fill="none" :stroke="nodeColor(n.type)"
-              opacity="0.5"
-            />
-            <text
-              :x="n.x" :y="n.y - (n.id === graphLayout.centerId ? 26 : 14)"
-              text-anchor="middle"
-              class="rel-label"
-              :fill="hoveredNode === n.id ? '#f1f5f9' : '#94a3b8'"
-            >
-              {{ trunc(n.label, 14) }}
-            </text>
-          </g>
-        </svg>
-      </div>
+              <g v-for="(e, i) in graphLayout.edges" :key="'e' + i">
+                <line
+                  :x1="e.x1" :y1="e.y1" :x2="e.x2" :y2="e.y2"
+                  class="rel-edge"
+                  :class="{
+                    dim: hoveredNode && hoveredNode !== e.src && hoveredNode !== e.dst,
+                    hi: hoveredNode === e.src || hoveredNode === e.dst,
+                  }"
+                />
+              </g>
 
-      <div v-if="hoveredNode && hoverRels.length" class="rel-info">
-        <strong style="color: #e2e8f0">{{ trunc(hoverLabel, 24) }}</strong>
-        <div class="badge info" style="margin-left: 8px">{{ hoverRels.length }} 条相连关系</div>
-        <div class="rel-rels">
-          <span v-for="r in hoverRels" :key="r" class="rel-chip">{{ r }}</span>
+              <g
+                v-for="n in graphLayout.nodes"
+                :key="n.id"
+                class="rel-node"
+                :class="{ dimNode: hoveredNode && hoveredNode !== n.id, hot: hoveredNode === n.id }"
+                @mouseenter="hoveredNode = n.id"
+                @mouseleave="hoveredNode = null"
+                @click="goNode(n)"
+              >
+                <circle
+                  :cx="n.x" :cy="n.y"
+                  :r="n.id === graphLayout.centerId ? 22 : 11"
+                  fill="rgba(10, 15, 26, 0.9)"
+                  :stroke="nodeColor(n.type)"
+                  :stroke-width="hoveredNode === n.id ? 2.5 : 1.5"
+                />
+                <circle
+                  :cx="n.x" :cy="n.y"
+                  :r="hoveredNode === n.id ? 15 : 9"
+                  fill="none" :stroke="nodeColor(n.type)"
+                  opacity="0.5"
+                />
+                <text
+                  :x="n.x" :y="n.y - (n.id === graphLayout.centerId ? 26 : 14)"
+                  text-anchor="middle"
+                  class="rel-label"
+                  :fill="hoveredNode === n.id ? '#f1f5f9' : '#94a3b8'"
+                >
+                  {{ trunc(n.label, 14) }}
+                </text>
+              </g>
+            </svg>
+          </div>
+
+          <div v-if="hoveredNode && hoverRels.length" class="rel-info">
+            <strong style="color: #e2e8f0">{{ trunc(hoverLabel, 24) }}</strong>
+            <div class="badge info" style="margin-left: 8px">{{ hoverRels.length }} 条相连关系</div>
+            <div class="rel-rels">
+              <span v-for="r in hoverRels" :key="r" class="rel-chip">{{ r }}</span>
+            </div>
+          </div>
         </div>
       </div>
-
-      <details class="rel-table">
-        <summary>查看关系表（{{ graphLayout.edges.length }} 行）</summary>
-        <table>
-          <thead>
-            <tr><th>起点</th><th>关系</th><th>终点</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="(e, i) in graphLayout.edges" :key="i">
-              <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">{{ e.src }}</td>
-              <td><span class="badge info">{{ e.rel }}</span></td>
-              <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">
-                {{ e.dst }} <span class="muted">({{ e.type }})</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </details>
     </div>
   </template>
 </template>
 
 <style scoped>
+/* 关系视图：表格为主（左、展开），蛛网图为辅助（右） */
+.rel-layout {
+  display: flex;
+  gap: 24px;
+  align-items: stretch;
+}
+.rel-table-side {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.rel-table-wrap {
+  max-height: 460px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.rel-table-main {
+  width: 100%;
+  background: rgba(8, 13, 25, 0.4);
+}
+.rel-table-main thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  z-index: 1;
+}
+.rel-graph-side {
+  flex: 0 0 340px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.rel-graph-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+@media (max-width: 900px) {
+  .rel-layout {
+    flex-direction: column;
+  }
+  .rel-graph-side {
+    flex: 1 1 0;
+  }
+}
 .graph-wrap {
   display: flex;
   justify-content: center;
-  padding: 8px 0;
 }
 .rel-graph {
   width: 100%;
-  max-width: 520px;
   height: auto;
 }
 .rel-ring {
@@ -479,7 +529,7 @@ onMounted(async () => {
   transition: fill 0.2s;
 }
 .rel-info {
-  margin: 10px 0 14px;
+  margin-top: 10px;
   padding: 10px 14px;
   border: 1px solid rgba(56, 189, 248, 0.25);
   border-radius: 10px;
@@ -504,11 +554,5 @@ onMounted(async () => {
   border: 1px solid rgba(56, 189, 248, 0.2);
   border-radius: 6px;
   padding: 2px 8px;
-}
-.rel-table summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: #7dd3fc;
-  margin-bottom: 10px;
 }
 </style>
