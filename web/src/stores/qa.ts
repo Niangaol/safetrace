@@ -71,6 +71,19 @@ export const useQaStore = defineStore('qa', () => {
   const degradedReason = ref('')
   /** 是否属于**模型降级**（而非仅自检质量低）——用于区分徽标文案 */
   const llmDegraded = ref(false)
+  /**
+   * C-04 时效提示（`stale_warning`）。契约：缺省不得被当作"证据新鲜"，
+   * 而过龄/未知必须**显式可见**，所以原样保留后端给的 note。
+   * `null` = 证据新鲜且时效全已知（唯一不用提示的情况）。
+   */
+  const staleWarning = ref<{ threshold_days: number; note: string } | null>(null)
+  /**
+   * C-04 注入筛查状态。`screened` 恒为 false（本仓无检测器），
+   * 必须显示，否则会被读成"已筛查干净"。
+   */
+  const injectionGuard = ref<{ screened: boolean; untrusted_evidence: number; note: string } | null>(
+    null,
+  )
   const error = ref('')
   const history = ref<{ question: string; answer: string }[]>([])
   const lastCost = ref<number | null>(null)
@@ -91,6 +104,8 @@ export const useQaStore = defineStore('qa', () => {
     degraded.value = false
     degradedReason.value = ''
     llmDegraded.value = false
+    staleWarning.value = null
+    injectionGuard.value = null
     error.value = ''
     lastCost.value = null
     meta.value = null
@@ -185,6 +200,11 @@ export const useQaStore = defineStore('qa', () => {
             // 只显示一个"降级"徽标而不说原因，用户无法判断该不该信这个答案。
             degradedReason.value = String(event.degraded_reason ?? '')
             llmDegraded.value = Boolean(event.llm_degraded)
+            // C-04：时效与注入筛查。**原样保留**（含 null），
+            // 不在这里"补默认值"——那会把"未知"伪装成"没问题"。
+            staleWarning.value = (event.stale_warning as typeof staleWarning.value) ?? null
+            injectionGuard.value =
+              (event.injection_guard as typeof injectionGuard.value) ?? null
             lastCost.value = event.cost_cny ?? null
             meta.value = {
               sessionId: event.session_id ?? null,
@@ -245,6 +265,8 @@ export const useQaStore = defineStore('qa', () => {
     degraded,
     degradedReason,
     llmDegraded,
+    staleWarning,
+    injectionGuard,
     error,
     history,
     lastCost,

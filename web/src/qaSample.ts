@@ -85,6 +85,27 @@ export const SAMPLE_META = {
 }
 
 /** 样例轨迹（时序与一次真实问答一致，便于验收"过程可视化"的排版） */
+/**
+ * C-04 样例：时效提示与注入筛查状态。
+ *
+ * 刻意让样例**带上提示**而不是留空：契约要求
+ * 「过龄或未知必须显式可见」「screened=false 必须显式出现」，
+ * 样例页要能把这两条展示出来，验收时才看得到效果。
+ * 数值取自一次真实问答的形状（1 条 untrusted 引用）。
+ */
+export const SAMPLE_STALE_WARNING = {
+  threshold_days: 365,
+  oldest_published_at: '2025-08-01T00:00:00+00:00',
+  unknown_published_at: 1,
+  note: '⚠️ 证据时效提示：最早证据发布于 425 天前（阈值 365 天）；1 条证据缺上游发布时间，时效未知。结论请结合最新通告核对。',
+}
+
+export const SAMPLE_INJECTION_GUARD = {
+  screened: false,
+  untrusted_evidence: 1,
+  note: '⚠️ 未做注入筛查（screened=false）：本轮引用了 1/3 条外部文本（trust=untrusted）证据，其内容可能含误导性指令，请勿当作操作依据。',
+}
+
 export const SAMPLE_TRACES: TraceStep[] = [
   {
     step: 'recv',

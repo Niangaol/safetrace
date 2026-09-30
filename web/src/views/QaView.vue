@@ -8,6 +8,8 @@ import {
   SAMPLE_ANSWER,
   SAMPLE_CITATIONS,
   SAMPLE_META,
+  SAMPLE_INJECTION_GUARD,
+  SAMPLE_STALE_WARNING,
   SAMPLE_QUESTION,
   SAMPLE_REASONING,
   SAMPLE_STAGES,
@@ -232,6 +234,9 @@ onMounted(async () => {
     qa.meta = SAMPLE_META
     qa.thinking = false
     qa.degraded = false
+    // C-04：样例也带上时效与注入筛查状态，否则验收时看不到这两条提示
+    qa.staleWarning = SAMPLE_STALE_WARNING
+    qa.injectionGuard = SAMPLE_INJECTION_GUARD
     return
   }
 
@@ -325,6 +330,21 @@ onMounted(async () => {
     ，请对照下方证据判断可信度。
   </div>
   <div v-if="qa.error" class="notice error" style="margin-bottom: 14px">{{ qa.error }}</div>
+  <!-- C-04 时效提示：契约要求"过龄或未知必须显式可见"。
+       stale_warning 为 null 表示证据新鲜且时效全已知——那是唯一不用提示的情况。 -->
+  <div v-if="qa.staleWarning" class="notice warn" style="margin-bottom: 14px">
+    {{ qa.staleWarning.note }}
+  </div>
+  <!-- C-04 注入筛查状态：screened 恒为 false（本仓无检测器），必须显示出来，
+       否则用户会把"没筛查"读成"已筛查干净"。 -->
+  <div
+    v-if="qa.injectionGuard"
+    class="notice"
+    :class="{ warn: qa.injectionGuard.untrusted_evidence > 0 }"
+    style="margin-bottom: 14px"
+  >
+    {{ qa.injectionGuard.note }}
+  </div>
 
   <!-- 轨迹：过程可视化（干到哪一步显示到哪一步） -->
   <div v-if="qa.traces.length" class="panel fade-in" style="margin-bottom: 14px">

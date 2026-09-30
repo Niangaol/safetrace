@@ -370,6 +370,18 @@ class QAAgent:
                 },
                 dedup_key=f"{session_id}:{turn_id}",
             )
+            # ── 可信状态：时效 + 注入筛查（上游契约 v1.1.3 / C-04）──────────
+            # 必须**在事件里显式出现**：契约要求 stale_warning 缺省不得被当作
+            # "证据新鲜"、injection_guard.screened=false 必须显式出现。
+            # 所以在**发布事件之前**就要算好，事件与 SSE 用同一份结果。
+            from aiintel.services.qa.freshness import (
+                assess_injection_guard,
+                assess_staleness,
+            )
+
+            stale_warning = assess_staleness(citations)
+            injection_guard = assess_injection_guard(citations)
+
             await self.bus.try_publish(
                 TOPIC_QA_ANSWERS,
                 {
@@ -382,6 +394,9 @@ class QAAgent:
                     "abstained": not evidence,
                     "elapsed_ms": elapsed_ms,
                     "cost_cny": round(cost, 6),
+                    # C-04 新增：两者都发；stale_warning 为 None 时表示证据新鲜
+                    "stale_warning": stale_warning,
+                    "injection_guard": injection_guard,
                 },
                 dedup_key=f"{session_id}:{turn_id}",
             )
@@ -413,6 +428,10 @@ class QAAgent:
                 "degraded_reason": "；".join(degraded_reasons),
                 #: 单独暴露"模型是否降级"，便于前端区分徽标文案
                 "llm_degraded": answer_degraded,
+                #: C-04：时效提示；None = 证据新鲜且时效全已知（唯一可不提示的情况）
+                "stale_warning": stale_warning,
+                #: C-04：注入筛查状态；screened 恒为 False 并如实统计 untrusted 条数
+                "injection_guard": injection_guard,
                 "reasoning": reasoning,
             }
         except Exception as exc:  # noqa: BLE001 - SSE 端点需要结构化错误
