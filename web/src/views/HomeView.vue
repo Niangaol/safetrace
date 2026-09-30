@@ -96,44 +96,6 @@ const globeDots = computed<GlobeDot[]>(() => {
   return arr
 })
 
-/** 会“爆发闪烁”的亮点（漏洞攻击 vs 防御拦截） */
-const globePings = computed<GlobeDot[]>(() =>
-  globeDots.value.filter((_, i) => i % 11 === 0).map((d) => ({ ...d, delay: `-${((d.x * 13) % 29) / 10}s` })),
-)
-
-interface GlobeArc { d: string; kind: string; delay: string; dur: string }
-
-/** 卡巴斯基式“实时威胁地图”：球冠上城市间飞行的攻击/防御流线（确定性生成） */
-const globeArcs = computed<GlobeArc[]>(() => {
-  const pts = globeDots.value
-  if (!pts.length) return []
-  const kinds = ['threat', 'threat', 'threat', 'attack', 'threat', 'defend', 'threat']
-  const arcs: GlobeArc[] = []
-  const pick = (i: number) => pts[(i * 7 + 3) % pts.length]
-  for (let k = 0; k < 12; k++) {
-    const a = pick(k)
-    const b = pick(k + 4 + (k % 3))
-    const dx = b.x - a.x
-    const dy = b.y - a.y
-    const d = Math.hypot(dx, dy)
-    if (d < 26 || d > 120) continue
-    const mx = (a.x + b.x) / 2
-    const my = (a.y + b.y) / 2
-    const len = d || 1
-    // 沿弦垂线抬高控制点，形成跨越球面的弓形流线
-    const px = -dy / len
-    const py = dx / len
-    const lift = d * 0.5
-    arcs.push({
-      d: `M ${a.x.toFixed(1)} ${a.y.toFixed(1)} Q ${(mx + px * lift).toFixed(1)} ${(my + py * lift).toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`,
-      kind: kinds[k % kinds.length],
-      delay: `-${((k * 1.7) % 3.6).toFixed(2)}s`,
-      dur: `${(2 + (k % 3) * 0.6).toFixed(2)}s`,
-    })
-  }
-  return arcs
-})
-
 /**
  * 智能体卡片：名字与颜色是产品定义（稳定的），但**运行数字全部来自 `/agents/runs`**。
  * `graph` 字段与后端的编排图同名：collect / enrich / qa / alert。
@@ -190,44 +152,23 @@ const toolsByTier = computed(() => {
               <g transform="rotate(-18 200 200)">
                 <circle cx="200" cy="200" r="178" class="globe-rim" />
                 <ellipse cx="200" cy="200" rx="156" ry="178" class="globe-meridian" />
-                <ellipse cx="200" cy="200" rx="102" ry="178" class="globe-meridian" />
+                <ellipse cx="200" cy="200" rx="120" ry="178" class="globe-meridian" />
+                <ellipse cx="200" cy="200" rx="80" ry="178" class="globe-meridian" />
+                <ellipse cx="200" cy="200" rx="40" ry="178" class="globe-meridian" />
                 <line x1="200" y1="22" x2="200" y2="378" class="globe-meridian" />
-                <line x1="22" y1="200" x2="378" y2="200" class="globe-parallel" />
-                <line x1="46" y1="111" x2="354" y2="111" class="globe-parallel" />
-                <line x1="46" y1="289" x2="354" y2="289" class="globe-parallel" />
-                <line x1="111" y1="46" x2="289" y2="46" class="globe-parallel" />
-                <line x1="111" y1="354" x2="289" y2="354" class="globe-parallel" />
-                <path d="M 60 200 A 140 140 0 0 1 156 68" class="globe-rim-arc" />
-                <!-- 威胁流线：静态半透明轨道 + 流动亮粒子 -->
-                <g class="globe-arcs">
-                  <path
-                    v-for="(arc, i) in globeArcs"
-                    :key="'rail' + i"
-                    :d="arc.d"
-                    class="globe-arc-rail"
-                  />
-                  <path
-                    v-for="(arc, i) in globeArcs"
-                    :key="'stream' + i"
-                    :d="arc.d"
-                    class="globe-arc-stream"
-                    :class="arc.kind"
-                    :style="{ animationDelay: arc.delay, animationDuration: arc.dur }"
-                  />
-                </g>
+                <line x1="162" y1="26" x2="238" y2="26" class="globe-parallel" />
+                <line x1="141" y1="32" x2="259" y2="32" class="globe-parallel" />
+                <line x1="126" y1="38" x2="274" y2="38" class="globe-parallel" />
+                <line x1="114" y1="44" x2="286" y2="44" class="globe-parallel" />
+                <line x1="104" y1="50" x2="296" y2="50" class="globe-parallel" />
+                <line x1="88" y1="62" x2="312" y2="62" class="globe-parallel" />
+                <path d="M 44 200 A 156 156 0 0 1 156 62" class="globe-rim-arc" />
                 <circle
                   v-for="(d, i) in globeDots"
                   :key="'d' + i"
                   :cx="d.x" :cy="d.y" :r="d.r"
                   class="globe-dot" :class="d.kind"
                   :style="{ animationDelay: d.delay, opacity: d.o }"
-                />
-                <circle
-                  v-for="(p, i) in globePings"
-                  :key="'p' + i"
-                  :cx="p.x" :cy="p.y" :r="3"
-                  class="globe-ping" :class="p.kind"
-                  :style="{ animationDelay: p.delay }"
                 />
               </g>
             </svg>
@@ -385,7 +326,7 @@ const toolsByTier = computed(() => {
 .hero {
   position: relative;
   text-align: center;
-  padding: 206px 24px 88px;
+  padding: 104px 24px 274px;
   border-radius: 16px;
   overflow: hidden;
   margin-bottom: 0;
@@ -439,19 +380,20 @@ const toolsByTier = computed(() => {
   0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
   50% { transform: translateX(-50%) translateY(14px) scale(1.04); }
 }
-/* 品牌地球：放大到整页宽的巨球，只露顶部球冠（≈1/7），不与标题重合 */
+/* 品牌地球（Kaspersky 式威胁地图·克制冷调版）：放大到整页宽的巨球，
+   只在 hero 底部露出顶部球冠，暗色细线条为主、低调不抢标题 */
 .globe-viewport {
   position: absolute;
-  top: 0;
+  bottom: 0;
   left: 50%;
   transform: translateX(-50%);
   z-index: 0;
   width: min(1280px, 220vw);
-  height: 172px;
+  height: 230px;
   overflow: hidden;
   cursor: pointer;
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 62%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 0%, #000 62%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 58%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 58%, transparent 100%);
 }
 .globe-inner {
   width: 100%;
@@ -462,81 +404,32 @@ const toolsByTier = computed(() => {
   height: auto;
   display: block;
   overflow: visible;
-  animation: globeBob 13s ease-in-out infinite;
-}
-@keyframes globeBob {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(5px) scale(1.006); }
 }
 .globe-rim {
-  fill: rgba(8, 13, 25, 0.6);
-  stroke: rgba(56, 189, 248, 0.5);
-  stroke-width: 1.5;
-  filter: drop-shadow(0 0 22px rgba(56, 189, 248, 0.28));
+  fill: rgba(8, 13, 25, 0.7);
+  stroke: rgba(148, 197, 255, 0.34);
+  stroke-width: 1;
 }
 .globe-meridian,
 .globe-parallel {
-  stroke: rgba(56, 189, 248, 0.22);
-  stroke-width: 1;
+  stroke: rgba(148, 197, 255, 0.2);
+  stroke-width: 0.8;
 }
 .globe-rim-arc {
   fill: none;
-  stroke: rgba(125, 211, 252, 0.5);
-  stroke-width: 2;
-  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.7));
-}
-/* 威胁流线：静态轨道 + 流动粒子 */
-.globe-arcs {
-  pointer-events: none;
-}
-.globe-arc-rail {
-  fill: none;
-  stroke: rgba(56, 189, 248, 0.16);
+  stroke: rgba(148, 197, 255, 0.28);
   stroke-width: 1;
 }
-.globe-arc-stream {
-  fill: none;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-dasharray: 46 120;
-  animation: arcFlow 3s linear infinite;
-}
-.globe-arc-stream.threat {
-  stroke: rgba(56, 189, 248, 0.9);
-  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.7));
-}
-.globe-arc-stream.attack {
-  stroke: rgba(255, 84, 112, 0.92);
-  filter: drop-shadow(0 0 4px rgba(255, 84, 112, 0.7));
-}
-.globe-arc-stream.defend {
-  stroke: rgba(34, 197, 94, 0.92);
-  filter: drop-shadow(0 0 4px rgba(34, 197, 94, 0.7));
-}
-@keyframes arcFlow {
-  to { stroke-dashoffset: -166; }
-}
+/* 地表信号点：纯填充、无滤镜（避免每帧重绘滤镜造成的卡顿），低调闪烁 */
 .globe-dot {
   animation: gtwinkle 3.6s ease-in-out infinite;
 }
-.globe-dot.neutral { fill: #7dd3fc; }
-.globe-dot.defend { fill: #22c55e; filter: drop-shadow(0 0 4px rgba(34, 197, 94, 0.9)); }
-.globe-dot.attack { fill: #ff5470; filter: drop-shadow(0 0 4px rgba(255, 84, 112, 0.9)); }
+.globe-dot.neutral { fill: rgba(125, 211, 252, 0.8); }
+.globe-dot.defend { fill: rgba(52, 211, 153, 0.85); }
+.globe-dot.attack { fill: rgba(251, 113, 133, 0.85); }
 @keyframes gtwinkle {
   0%, 100% { opacity: 0.18; }
-  50% { opacity: 0.95; }
-}
-.globe-ping {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: gping 3s ease-out infinite;
-}
-.globe-ping.defend { fill: #22c55e; filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.9)); }
-.globe-ping.attack { fill: #ff5470; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.9)); }
-@keyframes gping {
-  0% { transform: scale(0.4); opacity: 0.9; }
-  60% { transform: scale(1.6); opacity: 0.2; }
-  100% { transform: scale(1.9); opacity: 0; }
+  50% { opacity: 0.7; }
 }
 .hero-content {
   position: relative;
@@ -577,7 +470,6 @@ const toolsByTier = computed(() => {
   letter-spacing: -0.02em;
   line-height: 1.1;
   margin: 0 0 10px;
-  filter: drop-shadow(0 8px 36px rgba(56, 189, 248, 0.35));
 }
 .ht-base {
   font: inherit;
@@ -594,6 +486,8 @@ const toolsByTier = computed(() => {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
+  /* 静态光晕：一次性绘制，不参与光扫动画重绘，避免滤镜拖慢动画 */
+  text-shadow: 0 0 40px rgba(56, 189, 248, 0.35), 0 0 90px rgba(56, 189, 248, 0.2);
 }
 /* 真实光扫：一道亮带单独扫过文字表面（文字其余部分保持稳态金属渐变） */
 .ht-glow {
@@ -665,15 +559,15 @@ const toolsByTier = computed(() => {
 .hero-btn.primary::after {
   content: '';
   position: absolute;
-  top: 0; left: -60%;
+  top: 0; left: 0;
   width: 40%; height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
-  transform: skewX(-20deg);
-  animation: btnSweep 3.2s ease-in-out infinite;
+  transform: skewX(-20deg) translateX(-180%);
+  animation: btnSweep 3.4s ease-in-out infinite;
 }
 @keyframes btnSweep {
-  0%, 60% { left: -60%; }
-  100% { left: 130%; }
+  0%, 55% { transform: skewX(-20deg) translateX(-180%); }
+  100% { transform: skewX(-20deg) translateX(360%); }
 }
 .hero-btn.secondary {
   background: transparent;

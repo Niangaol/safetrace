@@ -14,6 +14,7 @@ const openDims = ref<Set<string>>(new Set())
 const error = ref('')
 const loading = ref(true)
 const hoveredNode = ref<string | null>(null)
+const winMax = ref(false)
 
 const GRAPH_V = 520
 const GRAPH_R: number[] = [0, 78, 138, 186]
@@ -328,29 +329,11 @@ onMounted(async () => {
         <span class="badge-count">{{ graphLayout.nodes.length }} 节点 · {{ graphLayout.edges.length }} 关系</span>
       </div>
       <p class="muted" style="font-size: 12px; margin-top: 0">
-        关系表为主视图（全部展开）；右侧蛛网图为辅助概览——悬停节点高亮相连关系，点击 CVE/GHSA 节点可跳转详情。
+        蛛网关系图为主视图：悬停节点高亮相连关系、点击 CVE/GHSA 节点跳转详情；右侧关系表以 Linux 窗口呈现，可滚轮滑动、可放大查看。
       </p>
 
       <div class="rel-layout fade-in">
-        <div class="rel-table-side">
-          <div class="rel-table-wrap">
-            <table class="rel-table-main">
-              <thead>
-                <tr><th>起点</th><th>关系</th><th>终点</th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="(e, i) in graphLayout.edges" :key="i">
-                  <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">{{ e.src }}</td>
-                  <td><span class="badge info">{{ e.rel }}</span></td>
-                  <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">
-                    {{ e.dst }} <span class="muted">({{ e.type }})</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
+        <!-- 主视图：蛛网关系图 -->
         <div class="rel-graph-side">
           <div class="rel-graph-title">蛛网关系图</div>
           <div class="graph-wrap">
@@ -429,41 +412,51 @@ onMounted(async () => {
             </div>
           </div>
         </div>
+
+        <!-- 辅助视图：Linux 窗口风格的关系表（滚轮滑动，可点大） -->
+        <div v-if="winMax" class="lnx-backdrop" @click="winMax = false"></div>
+        <div class="lnx-win" :class="{ max: winMax }">
+          <div class="lnx-titlebar">
+            <span class="lnx-dots"><i class="d-close"></i><i class="d-min"></i><i class="d-max"></i></span>
+            <span class="lnx-title">safe_trace@intel: ~/relations<span class="lnx-blink">_</span></span>
+            <button
+              class="lnx-max-btn"
+              :title="winMax ? '还原大小' : '放大查看'"
+              @click="winMax = !winMax"
+            >{{ winMax ? '⤡' : '⤢' }}</button>
+          </div>
+          <div class="lnx-body" :class="{ max: winMax }">
+            <div
+              v-for="(e, i) in graphLayout.edges"
+              :key="i"
+              class="lnx-line"
+              @mouseenter="hoveredNode = e.dst"
+              @mouseleave="hoveredNode = null"
+            >
+              <span class="lnx-arrow">▸</span>
+              <span class="lnx-src" :title="e.src">{{ e.src }}</span>
+              <span class="lnx-rel">{{ e.rel }}</span>
+              <span class="lnx-dst" :title="e.dst">{{ e.dst }}</span>
+              <span class="lnx-type">{{ e.type }}</span>
+            </div>
+            <div class="lnx-status">▮ {{ graphLayout.edges.length }} 条关系 · 滚轮滚动 · 悬停行联动图中高亮</div>
+          </div>
+        </div>
       </div>
     </div>
   </template>
 </template>
 
 <style scoped>
-/* 关系视图：表格为主（左、展开），蛛网图为辅助（右） */
+/* 关系视图：蛛网图为主（大），关系表为辅（Linux 窗口，右侧） */
 .rel-layout {
   display: flex;
   gap: 24px;
   align-items: stretch;
 }
-.rel-table-side {
+.rel-graph-side {
   flex: 1 1 0;
   min-width: 0;
-}
-.rel-table-wrap {
-  max-height: 460px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-.rel-table-main {
-  width: 100%;
-  background: rgba(8, 13, 25, 0.4);
-}
-.rel-table-main thead th {
-  position: sticky;
-  top: 0;
-  background: var(--bg-elevated);
-  z-index: 1;
-}
-.rel-graph-side {
-  flex: 0 0 340px;
-  max-width: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -473,20 +466,14 @@ onMounted(async () => {
   color: #e2e8f0;
   margin-bottom: 6px;
 }
-@media (max-width: 900px) {
-  .rel-layout {
-    flex-direction: column;
-  }
-  .rel-graph-side {
-    flex: 1 1 0;
-  }
-}
 .graph-wrap {
   display: flex;
   justify-content: center;
+  flex: 1;
 }
 .rel-graph {
   width: 100%;
+  max-width: 560px;
   height: auto;
 }
 .rel-ring {
@@ -554,5 +541,173 @@ onMounted(async () => {
   border: 1px solid rgba(56, 189, 248, 0.2);
   border-radius: 6px;
   padding: 2px 8px;
+}
+
+/* Linux 窗口风的关系表 */
+.lnx-win {
+  flex: 0 0 372px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  height: fit-content;
+  background: #0b1020;
+  border: 1px solid #2a4060;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
+}
+.lnx-titlebar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, #1a2440, #131c30);
+  border-bottom: 1px solid #2a4060;
+}
+.lnx-dots {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.lnx-dots i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.lnx-dots .d-close { background: #f2545b; }
+.lnx-dots .d-min { background: #f0b429; }
+.lnx-dots .d-max { background: #34d399; }
+.lnx-title {
+  flex: 1;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #a5b7d4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lnx-blink {
+  color: #34d399;
+  animation: lnxBlink 1.1s steps(1) infinite;
+}
+@keyframes lnxBlink {
+  50% { opacity: 0; }
+}
+.lnx-max-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid #2a4060;
+  border-radius: 6px;
+  color: #a5b7d4;
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.lnx-max-btn:hover {
+  border-color: #38bdf8;
+  color: #7dd3fc;
+}
+.lnx-body {
+  background: #0a0f1e;
+  max-height: 420px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2a4060 transparent;
+}
+.lnx-body::-webkit-scrollbar {
+  width: 8px;
+}
+.lnx-body::-webkit-scrollbar-thumb {
+  background: #2a4060;
+  border-radius: 4px;
+}
+.lnx-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.lnx-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  border-bottom: 1px dashed rgba(42, 64, 96, 0.35);
+  transition: background 0.15s;
+}
+.lnx-line:hover {
+  background: rgba(56, 189, 248, 0.09);
+}
+.lnx-arrow { color: #38bdf8; font-size: 9px; flex-shrink: 0; }
+.lnx-src {
+  color: #9cc8f2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 38%;
+  flex-shrink: 1;
+}
+.lnx-rel {
+  color: #f0b429;
+  background: rgba(240, 180, 41, 0.1);
+  border: 1px solid rgba(240, 180, 41, 0.25);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.lnx-dst {
+  color: #7dd3fc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 32%;
+  flex-shrink: 1;
+}
+.lnx-type {
+  color: #64748b;
+  font-size: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.lnx-status {
+  position: sticky;
+  bottom: 0;
+  padding: 4px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #34d399;
+  background: rgba(10, 15, 30, 0.96);
+  border-top: 1px solid rgba(42, 64, 96, 0.4);
+}
+.lnx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 88;
+  background: rgba(4, 8, 16, 0.55);
+  backdrop-filter: blur(1px);
+}
+.lnx-win.max {
+  position: fixed;
+  inset: 44px 36px;
+  z-index: 89;
+  width: auto;
+  height: auto;
+}
+.lnx-body.max {
+  max-height: none;
+  flex: 1;
+}
+@media (max-width: 900px) {
+  .rel-layout {
+    flex-direction: column;
+  }
+  .lnx-win {
+    flex: 1 1 0;
+  }
 }
 </style>
