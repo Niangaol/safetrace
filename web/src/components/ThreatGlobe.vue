@@ -3,19 +3,21 @@
  * ThreatGlobe：卡巴斯基威胁地图风格的线框地球，作为 hero 背景装饰。
  *
  * 实现要点：
- * - Canvas 2D + 正交投影（yaw/pitch 旋转），**完整球体**（经纬网覆盖 -90°~90° 全纬度），
- *   半径按容器取 `min(w,h)/2` 并留 3% 余量，保证球体完整不裁切；
+ * - Canvas 2D + 正交投影（yaw 自转 + pitch 俯视），**完整球体**（经纬网覆盖 -90°~90°），
+ *   半径按容器取 `min(w,h)/2 * 0.97`，整球完整不裁切；
+ * - **球体要"成团"而不是"碎片"**：先铺一层极淡的球面径向渐变给出体积与轮廓，
+ *   再画**整圈**经纬网（背面线只降透明度、不剔除，否则背面缺口会让球看起来破碎），
+ *   最后补一条亮轮廓线 + 真实赤道，点位和攻击弧画在最上层；
  * - **纯装饰、零交互**：不响应鼠标/触摸，不拖动、不点击跳转（避免"拖完松手"或
  *   "选中文字"误触发导航）。`pointer-events: none` 从根上杜绝误触；
  * - 攻击点为**确定性示意数据**（非实时采集），前端不轮询、不伪造"实时"；
- * - 性能：极慢自转 + **30fps 限帧**（不是每帧重绘）；元素不可见 / 标签页隐藏时
- *   完全停帧；`prefers-reduced-motion` 下静止。
+ * - 性能：**45fps 限帧**（不是 60fps 每帧重绘）；元素不可见 / 标签页隐藏时完全停帧。
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
-const SPIN = 0.055 // 自转速度 rad/s
-const FPS = 30 // 限帧：30fps 足够，CPU 约为 60fps 的一半
-const PITCH = 0.22 // 固定俯仰：略微俯视，让赤道与回归线都能看见
+const SPIN = 0.16 // 自转速度 rad/s（约 39 秒转一圈，看得出在转又不晃眼）
+const FPS = 45 // 限帧：45fps 兼顾流畅与 CPU
+const PITCH = 0.22 // 固定俯视：略微俯视，能同时看到赤道南北
 
 interface V3 {
   /** 单位向量 */
@@ -26,20 +28,24 @@ interface V3 {
   r: number
 }
 
-/** 确定性生成的示意点位（Fibonacci 球面分布，覆盖全球） */
+/**
+ * 确定性示意点位。
+ * 用标准 Fibonacci 球面分布（黄金角 137.5°）铺满全球 —— 早先用的
+ * `((i*0.618)%1)` 一维等分会把点挤成条带，看着零碎不均匀。
+ */
 function buildNodes(): V3[] {
   const out: V3[] = []
-  const N = 190
+  const N = 200
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5))
   for (let i = 0; i < N; i++) {
-    const latDeg = ((i * 0.6180339887) % 1) * 172 - 86
-    const lon = ((i * 2.3999632297) % 1) * 360 - 180
-    const lat = (latDeg * Math.PI) / 180
-    const p = (lon * Math.PI) / 180
-    const ct = Math.cos(lat)
+    // y 从 +1 到 -1 均匀分层，theta 按黄金角递增 → 球面上均匀无堆叠
+    const y = 1 - (2 * (i + 0.5)) / N
+    const rr = Math.sqrt(Math.max(0, 1 - y * y))
+    const theta = i * GOLDEN
     out.push({
-      x: ct * Math.sin(p),
-      y: Math.sin(lat),
-      z: ct * Math.cos(p),
+      x: rr * Math.cos(theta),
+      y,
+      z: rr * Math.sin(theta),
       kind: i % 9 === 0 ? 2 : i % 4 === 0 ? 1 : 0,
       r: i % 9 === 0 ? 2.4 : i % 4 === 0 ? 1.8 : 1.3,
     })
@@ -61,13 +67,13 @@ const ARCS: { a: number; b: number; kind: number }[] = (() => {
   return out
 })()
 
-/** 经纬网：经线每 30°、纬线按纬度分层（覆盖全纬度），采样点提前算好 */
+/** 经纬网：经线每 30°、纬线每 30°（含赤道），采样点提前算好 */
 const MERIDIANS: V3[][] = []
 const PARALLELS: V3[][] = []
 for (let m = 0; m < 12; m++) {
   const lon = (m * Math.PI) / 6
   const pts: V3[] = []
-  for (let latDeg = -90; latDeg <= 90; latDeg += 3) {
+  for (let latDeg = -90; latDeg <= 90; latDeg += 2) {
     const lat = (latDeg * Math.PI) / 180
     const ct = Math.cos(lat)
     pts.push({ x: ct * Math.sin(lon), y: Math.sin(lat), z: ct * Math.cos(lon), kind: 0, r: 0 })
@@ -79,12 +85,14 @@ for (const latDeg of [-60, -30, 0, 30, 60]) {
   const y = Math.sin(lat)
   const rr = Math.cos(lat)
   const pts: V3[] = []
-  for (let lon = -180; lon <= 180; lon += 5) {
+  for (let lon = -180; lon <= 180; lon += 4) {
     const p = (lon * Math.PI) / 180
     pts.push({ x: rr * Math.sin(p), y, z: rr * Math.cos(p), kind: 0, r: 0 })
   }
   PARALLELS.push(pts)
 }
+/** 赤道在 PARALLELS 里的下标（lat = 0） */
+const EQUATOR = 2
 
 const cv = ref<HTMLCanvasElement | null>(null)
 let yaw = -0.6
@@ -114,53 +122,76 @@ function rot(p: V3): [number, number, number] {
   return [x1, y0 * cp - z1 * sp, y0 * sp + z1 * cp]
 }
 
+/**
+ * 把一组经纬线画成**两条** Path2D：正面一条、背面一条，各自只 stroke 一次。
+ *
+ * 之前是逐段 beginPath+stroke（1600+ 次/帧），CPU 压力大；逐段剔除背面又会让球面
+ * 出现缺口、看着破碎。这里既批量绘制又保留背面（只降透明度），球面连续且便宜。
+ */
+function buildPaths(lines: V3[][]): { front: Path2D; back: Path2D } {
+  const front = new Path2D()
+  const back = new Path2D()
+  for (const line of lines) {
+    let prev: [number, number, number] | null = null
+    for (const p of line) {
+      const cur = rot(p)
+      if (prev) {
+        // 段中任一点在正面就算正面段
+        const path = prev[2] > 0 || cur[2] > 0 ? front : back
+        path.moveTo(cx + prev[0], cy - prev[1])
+        path.lineTo(cx + cur[0], cy - cur[1])
+      }
+      prev = cur
+    }
+  }
+  return { front, back }
+}
+
 function draw() {
   if (!ctx) return
   ctx.clearRect(0, 0, w, h)
 
-  // 经纬网：只画前半球，按深度衰减透明度
-  ctx.lineWidth = 1
-  for (const group of [MERIDIANS, PARALLELS]) {
-    for (const line of group) {
-      let drawing = false
-      ctx.beginPath()
-      for (const p of line) {
-        const [x1, y1, z1] = rot(p)
-        if (z1 <= 0) {
-          drawing = false
-          continue
-        }
-        if (drawing) ctx.lineTo(cx + x1, cy - y1)
-        else {
-          ctx.moveTo(cx + x1, cy - y1)
-          drawing = true
-        }
-      }
-      ctx.strokeStyle = 'rgba(148,197,255,0.16)'
-      ctx.stroke()
-    }
-  }
-
-  // 赤道：稍亮一点，作为"地面"参考线
+  // 1) 球面体积：极淡的径向渐变，让球有"实体感"，而不是一堆漂浮的线
+  const g = ctx.createRadialGradient(
+    cx - radius * 0.3,
+    cy - radius * 0.35,
+    radius * 0.1,
+    cx,
+    cy,
+    radius,
+  )
+  g.addColorStop(0, 'rgba(56,189,248,0.13)')
+  g.addColorStop(0.55, 'rgba(30,90,170,0.07)')
+  g.addColorStop(1, 'rgba(10,25,60,0.02)')
   ctx.beginPath()
-  let started = false
-  for (const p of PARALLELS[2]) {
-    const [x1, , z1] = rot(p)
-    if (z1 <= 0) {
-      started = false
-      continue
-    }
-    if (started) ctx.lineTo(cx + x1, cy - 0)
-    else {
-      ctx.moveTo(cx + x1, cy)
-      started = true
-    }
-  }
-  ctx.strokeStyle = 'rgba(148,197,255,0.42)'
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+  ctx.fillStyle = g
+  ctx.fill()
+
+  // 2) 经纬网：整圈都画（背面只降透明度，不剔除 → 球面连续不破碎），批量两次 stroke
+  ctx.lineWidth = 1
+  const grid = buildPaths([...MERIDIANS, ...PARALLELS])
+  ctx.strokeStyle = 'rgba(148,197,255,0.06)'
+  ctx.stroke(grid.back)
+  ctx.strokeStyle = 'rgba(148,197,255,0.2)'
+  ctx.stroke(grid.front)
+
+  // 3) 赤道：稍亮，作为"地面"参考线（用真实投影 y，不是画一条水平直线）
   ctx.lineWidth = 1.4
+  const eq = buildPaths([PARALLELS[EQUATOR]])
+  ctx.strokeStyle = 'rgba(148,197,255,0.08)'
+  ctx.stroke(eq.back)
+  ctx.strokeStyle = 'rgba(160,210,255,0.42)'
+  ctx.stroke(eq.front)
+
+  // 4) 轮廓线：闭合圆，勾出球的外沿 —— 这一笔最能让球"完整"
+  ctx.beginPath()
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+  ctx.strokeStyle = 'rgba(148,197,255,0.34)'
+  ctx.lineWidth = 1.2
   ctx.stroke()
 
-  // 攻击弧
+  // 5) 攻击弧：两端都在正面才画
   for (const a of ARCS) {
     const [ax, ay, az] = rot(NODES[a.a])
     const [bx, by, bz] = rot(NODES[a.b])
@@ -172,22 +203,22 @@ function draw() {
     ctx.beginPath()
     ctx.moveTo(cx + ax, cy - ay)
     ctx.quadraticCurveTo(cx + (mx / len) * len * 1.3, cy - (my / len) * len * 1.3, cx + bx, cy - by)
-    ctx.strokeStyle = a.kind === 1 ? 'rgba(52,211,153,0.3)' : 'rgba(148,197,255,0.26)'
+    ctx.strokeStyle = a.kind === 1 ? 'rgba(52,211,153,0.34)' : 'rgba(148,197,255,0.3)'
     ctx.lineWidth = 1.1
     ctx.stroke()
   }
 
-  // 地表点位：按深度定透明度/半径，背面不画
+  // 6) 地表点位：背面不画，正面按深度定透明度/半径
   for (const p of NODES) {
     const [x1, y1, z1] = rot(p)
     if (z1 <= 0) continue
     const depth = z1 / radius
-    const alpha = 0.16 + depth * 0.44
+    const alpha = 0.24 + depth * 0.5
     ctx.beginPath()
     ctx.arc(cx + x1, cy - y1, p.r * (0.7 + depth * 0.5), 0, Math.PI * 2)
     if (p.kind === 2) ctx.fillStyle = `rgba(251,113,133,${alpha})`
     else if (p.kind === 1) ctx.fillStyle = `rgba(52,211,153,${alpha})`
-    else ctx.fillStyle = `rgba(125,211,252,${alpha * 0.7})`
+    else ctx.fillStyle = `rgba(125,211,252,${alpha * 0.8})`
     ctx.fill()
   }
 }
@@ -227,6 +258,7 @@ function resize() {
 let io: IntersectionObserver | null = null
 
 onMounted(() => {
+  // 系统"关闭动画"时保持静止（无障碍）；画一帧静态的，球体依旧完整
   reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   resize()
   window.addEventListener('resize', resize)
@@ -265,6 +297,6 @@ onBeforeUnmount(() => {
   /* 纯装饰：不接收任何指针事件，避免拖动/选字误触发导航 */
   pointer-events: none;
   /* 配角：压低存在感，不喧宾夺主压过标题 */
-  opacity: 0.62;
+  opacity: 0.7;
 }
 </style>
