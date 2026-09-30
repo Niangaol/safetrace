@@ -11,6 +11,24 @@ providers:
     base_url_env: TOKENDANCE_BASE_URL
     base_url_default: https://tokendance.space/gateway/v1
     api_key_env: TOKENDANCE_API_KEY
+
+  # ---- 本地 llama-server（无 Docker，scripts/local/up.ps1 一键起）----
+  # trust_boundary: local → A-03 隔离闸门放行：本地是私有数据合法目的地，不过出网扫描
+  local_embed:
+    type: openai_compat
+    base_url_env: LOCAL_EMBED_BASE_URL
+    base_url_default: http://127.0.0.1:8081/v1
+    api_key_env: LOCAL_EMBED_API_KEY
+    trust_boundary: local
+    capability_flags: { rerank: false }
+
+  local_llm:
+    type: openai_compat
+    base_url_env: LOCAL_LLM_BASE_URL
+    base_url_default: http://127.0.0.1:8080/v1
+    api_key_env: LOCAL_LLM_API_KEY
+    trust_boundary: local
+    capability_flags: { rerank: false }
   cache:
     type: cache            # 确定性假模型：演示与离线开发用，输出可复现
   deepseek:
@@ -61,14 +79,18 @@ roles:
     fallback_chain: [cache, template]
     # 真实模型接入时改为：provider: deepseek, model_id: deepseek-chat
 
+  # 本地 bge-m3（llama-server :8081）：实测 1024 维，与 Tokendance qwen3.7-text-embedding
+  # 同维度，故 safetrace_sources 集合向量元数据可直接复用，无需重建。
+  # 要切回云端：provider 改 tokendance、model_id 改 qwen3.7-text-embedding、
+  # model_version 改 unversioned-api（该行不留 revision，不宣称版本已固定）。
   embedder:
-    provider: tokendance
-    model_id: qwen3.7-text-embedding
-    # API 返回模型名但不提供 revision；服务换版时应重建集合，不宣称模型修订已固定。
-    model_version: unversioned-api
-    max_rpm: 60
-    max_concurrency: 2
-    timeout_ms: 20000
+    provider: local_embed
+    model_id: bge-m3
+    model_version: gguf-q8_0
+    data_domain: private
+    max_rpm: 600
+    max_concurrency: 4
+    timeout_ms: 30000
     fallback_chain: [cache]
     capability_flags: { dim: 1024 }
 

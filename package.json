@@ -34,7 +34,11 @@
     "review:queue": "tsx scripts/review-queue.ts",
     "page:demo": "tsx scripts/demo-page-ingest.ts",
     "pilot:doctor": "tsx scripts/pilot-doctor.ts",
-    "embedding:verify": "node --env-file=.env.local --import tsx scripts/verify-live-embedding.ts"
+    "embedding:verify": "node --env-file=.env.local --import tsx scripts/verify-live-embedding.ts",
+    "vector:verify": "node --env-file=.env.local --import tsx scripts/verify-vector-pipeline.ts",
+    "local:up": "pwsh -NoProfile -File scripts/local/up.ps1",
+    "local:down": "pwsh -NoProfile -File scripts/local/down.ps1",
+    "local:bootstrap": "pwsh -NoProfile -File scripts/local/bootstrap.ps1"
   },
   "devDependencies": {
     "@types/node": "^24",

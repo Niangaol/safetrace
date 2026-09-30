@@ -8,6 +8,22 @@ dist/
 .env.local
 !.env.example
 
+# ============================================================
+# 本地推理基建：二进制与模型体积大，不进仓库。
+# 一键获取：pwsh scripts/local/bootstrap.ps1
+# 说明文档：docs/LOCAL-STACK.md
+# ============================================================
+third_party/
+qdrant_data/
+qdrant-storage/
+.qdrant-initialized
+!third_party/.gitkeep
+
+# 本地模型默认放 D:\AgentPrograms\safetrace-models（仓库外）；
+# 若放在仓库内则忽略该目录：
+local-models/
+*.gguf
+
 # 本地数据（SQLite/Qdrant/Langfuse 运行产物）
 *.sqlite
 *.sqlite-*

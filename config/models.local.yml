@@ -1,0 +1,95 @@
+# ==========================================================================
+# SafeTrace · 本地推理栈配置（无 Docker）
+# 用法：把 .env.local 的 MODELS_CONFIG_PATH 指向本文件，或复制本文件为
+#       config/models.active.yml（后者已 gitignore）。
+#
+# 前置服务（pwsh scripts/local/up.ps1 一键起）：
+#   embedding  : http://127.0.0.1:8081/v1   bge-m3 Q8_0（实测 dim=1024）
+#   chat/Jev   : http://127.0.0.1:8080/v1   Qwen2.5-7B-Instruct Q4_K_M
+#   qdrant     : http://127.0.0.1:6333      qdrant v1.19.1 Windows
+#
+# 与 config/models.yml（云端占位）的差异只在一处：provider 指向本机。
+# 维度口径：bge-m3 = 1024，与 Tokendance qwen3.7-text-embedding 一致，
+# 因此 safetrace_sources 集合的向量元数据无需重建即可切换。
+# ==========================================================================
+version: 1
+
+providers:
+  cache:
+    type: cache            # 确定性假模型：演示与离线开发用，输出可复现
+  template:
+    type: cache
+
+  # 本地 llama-server（embedding 专用实例）
+  local_embed:
+    type: openai_compat
+    base_url_env: LOCAL_EMBED_BASE_URL
+    base_url_default: http://127.0.0.1:8081/v1
+    api_key_env: LOCAL_EMBED_API_KEY
+    trust_boundary: local            # A-03：本地是私有数据合法目的地，不过出网扫描
+    capability_flags: { rerank: false }
+
+  # 本地 llama-server（chat / Jev logits 打分底座）
+  local_llm:
+    type: openai_compat
+    base_url_env: LOCAL_LLM_BASE_URL
+    base_url_default: http://127.0.0.1:8080/v1
+    api_key_env: LOCAL_LLM_API_KEY
+    trust_boundary: local
+    capability_flags: { rerank: false }
+
+default_fallback_chain: [local_llm, local_embed, cache, template]
+
+roles:
+  planner:
+    provider: cache
+    model_id: cache-planner
+    model_version: v0
+    max_rpm: 600
+    max_tpm: 2000000
+    max_concurrency: 4
+    timeout_ms: 30000
+    fallback_chain: [cache, template]
+    capability_flags: { tools: false }
+
+  # 回答合成仍走 cache（确定性、可复现）；要换本地 LLM 时把 provider/model_id 换掉即可
+  answerer:
+    provider: cache
+    model_id: cache-answerer
+    model_version: v0
+    max_rpm: 600
+    max_tpm: 2000000
+    max_concurrency: 4
+    timeout_ms: 30000
+    fallback_chain: [cache, template]
+
+  # 真实本地 embedding：bge-m3 Q8_0，实测 1024 维（非声明值，跑过 verify 脚本确认）
+  embedder:
+    provider: local_embed
+    model_id: bge-m3
+    # llama.cpp 不暴露 revision；换模型/重量化后须重建集合，不宣称版本已固定
+    model_version: gguf-q8_0
+    data_domain: private
+    max_rpm: 600
+    max_concurrency: 4
+    timeout_ms: 30000
+    fallback_chain: [cache]
+    capability_flags: { dim: 1024 }
+
+  reranker:
+    provider: cache
+    model_id: cache-reranker
+    model_version: v0
+    max_rpm: 600
+    max_concurrency: 2
+    timeout_ms: 20000
+    fallback_chain: [cache]
+
+  decision:                 # D4：Y5分级/Q1路由/Q3充分性 的结构化判断
+    provider: cache
+    model_id: rule-fallback-v0   # P0 为规则通道；Jev 通道留 decided_by 枚举位
+    model_version: v0
+    max_rpm: 1200
+    max_concurrency: 8
+    timeout_ms: 10000
+    fallback_chain: [cache]

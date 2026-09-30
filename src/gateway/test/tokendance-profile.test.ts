@@ -6,12 +6,27 @@ import { EventBus, MemoryEventStore } from "@safetrace/shared";
 
 test("real profile is explicitly selectable and default embedder remains cache", () => {
   assert.equal(loadModelsConfig("config/models.yml").roles.embedder.provider, "cache");
-  const live = loadModelsConfig("config/models.tokendance.yml");
+  const live = loadModelsConfig("config/models.cloud.yml");
   assert.equal(live.roles.embedder.provider, "tokendance");
   assert.equal(live.roles.embedder.model_id, "qwen3.7-text-embedding");
   assert.equal(live.roles.embedder.capability_flags.dim, 1024);
   assert.equal(live.providers.tokendance?.api_key_env, "TOKENDANCE_API_KEY");
   assert.equal(live.roles.embedder.model_version, "unversioned-api");
+});
+
+test("local stack profile switches embedder to bge-m3 with trust_boundary local", () => {
+  // 本地栈（无 Docker）：embedder 指向 llama-server :8081，A-03 隔离闸门必须收到 local 边界
+  const local = loadModelsConfig("config/models.tokendance.yml");
+  assert.equal(local.roles.embedder.provider, "local_embed");
+  assert.equal(local.roles.embedder.model_id, "bge-m3");
+  assert.equal(local.roles.embedder.capability_flags.dim, 1024, "本地 bge-m3 与云端同维度，集合元数据可复用");
+  assert.equal(local.roles.embedder.data_domain, "private");
+  assert.equal(local.providers.local_embed?.trust_boundary, "local", "未标 local 会被 A-03 当出云请求拦掉");
+  assert.equal(local.providers.local_llm?.trust_boundary, "local");
+  assert.equal(local.providers.local_embed?.base_url_default, "http://127.0.0.1:8081/v1");
+  assert.equal(local.providers.local_llm?.base_url_default, "http://127.0.0.1:8080/v1");
+  // 云端 provider 定义仍在（切回时改 role 即可，不用重写文件）
+  assert.equal(local.providers.tokendance?.api_key_env, "TOKENDANCE_API_KEY");
 });
 
 test("MG1 real-profile protocol and lineage tested with injected response, not a cloud call", async () => {
@@ -31,7 +46,8 @@ test("MG1 real-profile protocol and lineage tested with injected response, not a
     return new Response(JSON.stringify({ model: body.model, data: [{ index: 0, embedding: Array.from({ length: 1024 }, (_, i) => i === 0 ? 0.5 : 0) }] }), { status: 200 });
   }) as typeof fetch;
   try {
-    const gateway = new ModelGateway({ configPath: "config/models.tokendance.yml", bus });
+    // 用云端配置验协议路径；embedder 现役配置是本地栈（config/models.tokendance.yml）
+    const gateway = new ModelGateway({ configPath: "config/models.cloud.yml", bus });
     const result = await gateway.embed("embedder", ["synthetic protocol test"], "tr_profile_test");
     assert.equal(calls, 1);
     assert.equal(result.provider, "tokendance");

@@ -48,7 +48,12 @@ export async function checkPilotReadiness(opts: PilotReadinessOptions) {
     try {
       const response = await get(e.toString().replace(/\/+$/, "") + "/models");
       const payload = response.ok ? await response.json() as { data?: Array<{ id?: string }> } : undefined;
-      const listed = Array.isArray(payload?.data) && payload.data.some(model => model.id === p.model_id);
+      // llama-server 的 model id 是 GGUF 文件名（如 bge-m3-Q8_0.gguf），配置里写的是短名（bge-m3），
+      // 因此除精确匹配外允许「id 以配置模型名开头」的宽松匹配。
+      // 只放宽命名形式，不放宽服务语义：端点仍须可达并真的列出模型。
+      const listed = Array.isArray(payload?.data) && payload.data.some(model =>
+        model.id === p.model_id || (typeof model.id === "string" && model.id.startsWith(p.model_id))
+      );
       checks.push({ name: "embedding_service", status: listed ? "ok" : "missing", detail: listed ? "configured model advertised; embedding support and actual dimension remain unverified" : "configured model absent or model-list endpoint unavailable" });
     } catch { checks.push({ name: "embedding_service", status: "missing", detail: "loopback model endpoint unreachable or unauthorized" }); }
   }
