@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import { getJson } from '../api'
@@ -15,6 +15,23 @@ const error = ref('')
 const loading = ref(true)
 const hoveredNode = ref<string | null>(null)
 const winMax = ref(false)
+
+/** 放大态：Esc 还原 + 锁背景滚动（避免遮罩下页面跟着滚） */
+function closeWin() {
+  winMax.value = false
+}
+function onWinKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && winMax.value) closeWin()
+}
+watch(winMax, (m) => {
+  document.body.style.overflow = m ? 'hidden' : ''
+  if (m) window.addEventListener('keydown', onWinKey)
+  else window.removeEventListener('keydown', onWinKey)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onWinKey)
+  document.body.style.overflow = ''
+})
 
 const GRAPH_V = 520
 const GRAPH_R: number[] = [0, 78, 138, 186]
@@ -414,14 +431,21 @@ onMounted(async () => {
         </div>
 
         <!-- 辅助视图：Linux 窗口风格的关系表（滚轮滑动，可点大） -->
-        <div v-if="winMax" class="lnx-backdrop" @click="winMax = false"></div>
-        <div class="lnx-win" :class="{ max: winMax }">
+        <div v-if="winMax" class="lnx-backdrop" @click="closeWin"></div>
+        <div
+          class="lnx-win"
+          :class="{ max: winMax }"
+          :role="winMax ? 'dialog' : undefined"
+          :aria-modal="winMax ? 'true' : undefined"
+          aria-label="漏洞关系列表"
+        >
           <div class="lnx-titlebar">
             <span class="lnx-dots"><i class="d-close"></i><i class="d-min"></i><i class="d-max"></i></span>
             <span class="lnx-title">safe_trace@intel: ~/relations<span class="lnx-blink">_</span></span>
             <button
               class="lnx-max-btn"
-              :title="winMax ? '还原大小' : '放大查看'"
+              :title="winMax ? '还原大小（Esc）' : '放大查看'"
+              :aria-label="winMax ? '还原大小' : '放大查看'"
               @click="winMax = !winMax"
             >{{ winMax ? '⤡' : '⤢' }}</button>
           </div>
@@ -439,7 +463,7 @@ onMounted(async () => {
               <span class="lnx-dst" :title="e.dst">{{ e.dst }}</span>
               <span class="lnx-type">{{ e.type }}</span>
             </div>
-            <div class="lnx-status">▮ {{ graphLayout.edges.length }} 条关系 · 滚轮滚动 · 悬停行联动图中高亮</div>
+            <div class="lnx-status">▮ {{ graphLayout.edges.length }} 条关系 · 滚轮滚动 · 悬停行联动图中高亮 · ⤢ 放大 / Esc 还原</div>
           </div>
         </div>
       </div>
@@ -687,14 +711,15 @@ onMounted(async () => {
 .lnx-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 88;
+  /* 必须高于顶栏（sticky z-index:100），否则放大窗口会被导航栏压住 */
+  z-index: 200;
   background: rgba(4, 8, 16, 0.55);
   backdrop-filter: blur(1px);
 }
 .lnx-win.max {
   position: fixed;
-  inset: 44px 36px;
-  z-index: 89;
+  inset: 20px;
+  z-index: 201;
   width: auto;
   height: auto;
 }
