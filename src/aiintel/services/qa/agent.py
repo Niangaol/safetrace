@@ -206,20 +206,26 @@ class QAAgent:
             for idx, item in enumerate(evidence[:top_k], start=1):
                 item["ref"] = f"S{idx}"
                 item["content"] = sanitize(item["content"])
-                citations.append(
-                    {
-                        "id": item["ref"],
-                        "title": f"{item['owner_type']}:{item['owner_id']}",
-                        # 用**真实的原始出处链接**（检索层从 Vuln.references 取）。
-                        # 原来这里写的是 `item.get("owner_id")`，也就是把内部切片标识
-                        # （`CVE-2026-31001`）当 URL 发给前端 —— 前端渲染成链接后点了没反应。
-                        # 取不到链接就如实给 None，前端据此显示"仅内部切片"而不是假链接。
-                        "url": item.get("url"),
-                        "owner_type": item["owner_type"],
-                        "owner_id": item["owner_id"],
-                        "score": round(float(item.get("rerank_score", 0.0)), 4),
-                    }
-                )
+                citation: dict[str, Any] = {
+                    "id": item["ref"],
+                    "title": f"{item['owner_type']}:{item['owner_id']}",
+                    # 用**真实的原始出处链接**（检索层从 Vuln.references 取）。
+                    # 原来这里写的是 `item.get("owner_id")`，也就是把内部切片标识
+                    # （`CVE-2026-31001`）当 URL 发给前端 —— 前端渲染成链接后点了没反应。
+                    # 取不到链接就如实给 None，前端据此显示"仅内部切片"而不是假链接。
+                    "url": item.get("url"),
+                    "owner_type": item["owner_type"],
+                    "owner_id": item["owner_id"],
+                    "score": round(float(item.get("rerank_score", 0.0)), 4),
+                }
+                # 契约 v1.1.1 的可选字段：让用户能判断证据**是否权威、是否过时**。
+                # 推导不出就不放（缺省 = 未知），由前端显示"未评估"，
+                # 而不是填个乐观值让人误以为已评估过。
+                if item.get("trust"):
+                    citation["trust"] = item["trust"]
+                if item.get("published_at"):
+                    citation["published_at"] = item["published_at"]
+                citations.append(citation)
                 yield {"event": "citation", **citations[-1]}
             yield _trace(
                 "citations",
@@ -370,9 +376,7 @@ class QAAgent:
                     "session_id": session_id,
                     "turn_id": turn_id,
                     "text_md": answer,
-                    "citations": [
-                        {"chunk_id": c.get("id", ""), "url": c.get("url") or ""} for c in citations
-                    ],
+                    "citations": [_project_citation(c) for c in citations],
                     "reasoning_chain": [r.get("sub_question", "") for r in reasoning],
                     "confidence": float(verdict.get("score", 1.0)),
                     "abstained": not evidence,
@@ -457,3 +461,25 @@ class QAAgent:
 
 def dumps_event(event: dict[str, Any]) -> str:
     return f"event: {event.get('event')}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def _project_citation(citation: dict[str, Any]) -> dict[str, Any]:
+    """把内部引用投影成事件载荷里的形状。
+
+    `trust` / `published_at` 是上游契约 v1.1.1 给 `RetrievalResponse.chunk`
+    追加的可选字段（本仓 `contracts/schemas/RetrievalResponse.json` 已同步）。
+    用途：让用户能判断这条证据**是否权威、是否过时**。
+
+    **有才放**：缺省语义是"未知"，塞 None 或空串会让消费方以为
+    "评估过了，结果是空"，而事实是"没评估"。
+    """
+
+    out: dict[str, Any] = {
+        "chunk_id": citation.get("id", ""),
+        "url": citation.get("url") or "",
+    }
+    if citation.get("trust"):
+        out["trust"] = citation["trust"]
+    if citation.get("published_at"):
+        out["published_at"] = citation["published_at"]
+    return out

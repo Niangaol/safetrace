@@ -68,6 +68,18 @@ const evidenceCount = computed(() => qa.citations.length)
 /** 已走过的阶段（用于进度条高亮） */
 const reachedStages = computed(() => new Set(qa.stages.map((s) => s.stage)))
 
+/**
+ * 把 ISO 时间显示成日期（只取到"天"）。
+ *
+ * 只显示日期而非精确时刻：这个值的用途是让用户判断**证据是否过时**，
+ * 精确到秒反而会让人误以为它是"采集时刻"（其实是上游首次发布时间）。
+ * 解析失败时原样返回，不显示 Invalid Date。
+ */
+function formatDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : iso
+}
+
 /** 整条流水线是否跑完（后端发过 `done` 阶段） */
 const finished = computed(() => reachedStages.value.has('done'))
 
@@ -404,6 +416,31 @@ onMounted(async () => {
         <div class="muted" style="font-size: 11px; margin-top: 4px">
           检索得分 <code>{{ c.score != null ? c.score.toFixed(4) : '—' }}</code>
           <span v-if="c.score === 0">（词法兜底排序，语义排序需向量模型）</span>
+        </div>
+        <!-- 证据可信度：契约 v1.1.1 的 trust / published_at。
+             **缺省 = 未知**，所以没值时必须显示"未评估"，不能留空让人以为没问题。 -->
+        <div class="muted" style="font-size: 11px; margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap">
+          <span>
+            来源可信度
+            <span
+              v-if="c.trust === 'trusted'"
+              class="badge ok"
+              style="font-size: 10px"
+              title="结构化权威源 API 直读（NVD/KEV/GHSA/arXiv 等）或本系统由其派生"
+            >权威源</span>
+            <span
+              v-else-if="c.trust === 'untrusted'"
+              class="badge warn"
+              style="font-size: 10px"
+              title="网页/文档类外部文本（厂商公告页、社区、博客、PoC），未经权威确认"
+            >外部文本</span>
+            <span v-else class="badge" style="font-size: 10px" title="未做可信度评估，不得当作已验证">未评估</span>
+          </span>
+          <span>
+            发布时间
+            <code v-if="c.published_at">{{ formatDate(c.published_at) }}</code>
+            <span v-else title="发布时间未知，不得假定新鲜">未知</span>
+          </span>
         </div>
       </div>
     </div>

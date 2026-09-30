@@ -104,6 +104,15 @@ def payload_schema_for(topic: str) -> dict | None:
 # 上游交叉核对的环境变量（可选）。未配置时**只**用仓内指纹，不再静默跳过。
 UPSTREAM_ENV = "SAFETRACE_CONTRACTS_DIR"
 
+#: 当前同步到的上游契约版本与引入日期。
+#: 换版时必须一起改这里（`write_manifest` 用它写 `source`），否则清单会谎报版本。
+#: v1.0.0（2026-09-28）→ v1.1.3（2026-09-30）：上游 C-01/C-02 两处**纯追加**
+#: （DecisionReply 增加 `human` 取值；RetrievalResponse.chunk 增加可选
+#: `published_at` / `trust`），已用 `scripts/_check_upstream_sync.py` 验证
+#: 无删除、无 required 变更。
+DEFAULT_CONTRACT_VERSION = "v1.1.3"
+DEFAULT_FROZEN_AT = "2026-09-30"
+
 # 指纹文件本身不是 schema，别混进 schema 计数
 NON_SCHEMA_FILES = frozenset({"FROZEN_MANIFEST.json"})
 
@@ -149,22 +158,29 @@ def load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def write_manifest() -> int:
-    """按当前仓内文件重算指纹（有意换版时才用）。"""
+def write_manifest(
+    version: str = DEFAULT_CONTRACT_VERSION, frozen_at: str = DEFAULT_FROZEN_AT
+) -> int:
+    """按当前仓内文件重算指纹（有意换版时才用）。
+
+    版本标签**必须显式传入**：早先这两个值是写死的 `v1.0.0` / `2026-09-28`，
+    于是上游升到 v1.1.x 后重算指纹，清单里仍写着 v1.0.0 —— 版本与指纹不符，
+    等于把"我同步到哪一版"这件事悄悄说错了。
+    """
 
     manifest = {
         "_comment": (
             "SafeTrace 权威冻结契约的字节级指纹（sha256）。8 个 Schema 逐字引入，本仓无权修改；"
             "改一个字节即视为私改冻结件。指纹由 scripts/validate_contracts.py --regen-manifest 生成。"
         ),
-        "source": "SafeTrace 三件套 contracts/schemas（CHANGELOG v1.0.0，2026-09-28 冻结）",
-        "frozen_at": "2026-09-28",
+        "source": f"SafeTrace 三件套 contracts/schemas（CHANGELOG {version}，{frozen_at} 引入）",
+        "frozen_at": frozen_at,
         "schemas": {name: _sha256(SCHEMA_DIR / name) for name in AUTHORITATIVE_SCHEMAS},
     }
     MANIFEST_PATH.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"已写出 {MANIFEST_PATH.name}：{len(manifest['schemas'])} 条指纹")
+    print(f"已写出 {MANIFEST_PATH.name}：{len(manifest['schemas'])} 条指纹（{version}）")
     return 0
 
 

@@ -38,14 +38,21 @@ export const SAMPLE_CITATIONS: Citation[] = [
     title: 'vuln:CVE-2026-31001',
     url: 'https://nvd.nist.gov/vuln/detail/CVE-2026-31001',
     score: 0,
+    // 该漏洞的 VulnSource 含 nvd/ghsa（权威源）→ trusted
+    trust: 'trusted',
+    published_at: '2026-09-28T07:00:00+00:00',
   },
   {
     id: 'S2',
     title: 'vuln:CVE-2026-31001',
     url: 'https://nvd.nist.gov/vuln/detail/CVE-2026-31001',
     score: 0,
+    trust: 'trusted',
+    published_at: '2026-09-28T07:00:00+00:00',
   },
   {
+    // 故意留一个**没有 trust/published_at** 的：样例要能展示契约要求的
+    // "未评估 / 未知"这一档，否则验收时看不到缺省语义。
     id: 'S3',
     title: 'vuln:CVE-2026-28114',
     url: 'https://nvd.nist.gov/vuln/detail/CVE-2026-28114',

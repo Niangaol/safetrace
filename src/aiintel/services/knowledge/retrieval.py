@@ -169,19 +169,28 @@ async def hybrid_search(
         url_map = _source_url_map(
             session, {(k[0], k[1]) for k in (parse_doc_key(doc) for doc in fused)}
         )
+        meta_map = _source_meta_map(
+            session, {(k[0], k[1]) for k in (parse_doc_key(doc) for doc in fused)}
+        )
         for rank, doc in enumerate(fused, start=1):
             owner_type, owner_id, _ = parse_doc_key(doc)
-            results.append(
-                {
-                    "ref": f"S{rank}",
-                    "chunk_key": doc,
-                    "owner_type": owner_type,
-                    "owner_id": owner_id,
-                    "content": content_map.get(doc, ""),
-                    "url": url_map.get((owner_type, owner_id)),
-                    "rrf_rank": rank,
-                }
-            )
+            item: dict[str, Any] = {
+                "ref": f"S{rank}",
+                "chunk_key": doc,
+                "owner_type": owner_type,
+                "owner_id": owner_id,
+                "content": content_map.get(doc, ""),
+                "url": url_map.get((owner_type, owner_id)),
+                "rrf_rank": rank,
+            }
+            # 契约 v1.1.1 的可选字段：**推导不出就不放**（缺省 = 未知），
+            # 而不是塞一个 None 让下游误以为"评估过了，结果是空"。
+            meta = meta_map.get((owner_type, owner_id)) or {}
+            if meta.get("published_at"):
+                item["published_at"] = meta["published_at"]
+            if meta.get("trust"):
+                item["trust"] = meta["trust"]
+            results.append(item)
 
     if settings.reranker_model:
         try:
@@ -225,6 +234,59 @@ def _source_url_map(session: Any, keys: set[tuple[str, str]]) -> dict[tuple[str,
             if url:
                 out[("vuln", cve_id)] = str(url)
                 break
+    return out
+
+
+def _source_meta_map(
+    session: Any, keys: set[tuple[str, str]]
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """取每个 owner 的**出处元数据**：`published_at` 与 `trust`。
+
+    为什么需要：上游契约 v1.1.1 给 `RetrievalResponse.chunk` 追加了可选
+    `published_at` / `trust`，用途是让问答能告诉用户**这条证据是否权威、是否过时**。
+    缺省语义是「未知」，所以推导不出来时**必须留空**，不能填个乐观值。
+
+    推导依据（都是真实数据，不编造）：
+    - `published_at` ← `Vuln.published_at`（本仓每条漏洞都有值）；
+    - `trust` ← 该漏洞的 `VulnSource.source` 集合，按与上游 `sourceTrust()`
+      同一套口径合成（见 `services/knowledge/trust.py`）。
+    """
+
+    from aiintel.db.models import Vuln, VulnSource
+    from aiintel.services.knowledge.trust import combine_trust
+
+    wanted = {owner_id for owner_type, owner_id in keys if owner_type == "vuln"}
+    if not wanted:
+        return {}
+
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    rows = session.execute(
+        select(Vuln.cve_id, Vuln.id, Vuln.published_at).where(Vuln.cve_id.in_(wanted))
+    ).all()
+    if not rows:
+        return out
+
+    id_by_cve = {cve_id: vid for cve_id, vid, _ in rows if cve_id}
+    sources: dict[str, list[str]] = {}
+    if id_by_cve:
+        for vid, src in session.execute(
+            select(VulnSource.vuln_id, VulnSource.source).where(
+                VulnSource.vuln_id.in_(set(id_by_cve.values()))
+            )
+        ).all():
+            sources.setdefault(vid, []).append(str(src))
+
+    for cve_id, vid, published_at in rows:
+        if not cve_id:
+            continue
+        meta: dict[str, Any] = {}
+        if published_at is not None:
+            meta["published_at"] = published_at.isoformat()
+        trust = combine_trust(sources.get(vid))
+        if trust is not None:
+            meta["trust"] = trust
+        if meta:
+            out[("vuln", cve_id)] = meta
     return out
 
 

@@ -1,15 +1,15 @@
 {
   "_comment": "SafeTrace 权威冻结契约的字节级指纹（sha256）。8 个 Schema 逐字引入，本仓无权修改；改一个字节即视为私改冻结件。指纹由 scripts/validate_contracts.py --regen-manifest 生成。",
-  "source": "SafeTrace 三件套 contracts/schemas（CHANGELOG v1.0.0，2026-09-28 冻结）",
-  "frozen_at": "2026-09-28",
+  "source": "SafeTrace 三件套 contracts/schemas（CHANGELOG v1.1.3，2026-09-30 引入）",
+  "frozen_at": "2026-09-30",
   "schemas": {
     "RawDoc.json": "sha256:774b7786b7aaf9f17d497c95fb17e79aea29d62db102db009ed35ef8bd442418",
     "IntelItem.json": "sha256:882c071205ec05c1fee1cba5920bd857fee80c63e513adb16e95ae50535251f2",
     "EnrichmentResult.json": "sha256:03e1eba1cd7f64daa0111fd1ba3fa0ed304c1997a17e31b819d51411aa7ca9c2",
     "DecisionRequest.json": "sha256:dea16fa28aec8a36d7241da25f7df0ecd83101a21c7fae62f83310551f5bd930",
-    "DecisionReply.json": "sha256:906bc39b9c472a529c18868ae98ebbe14ef21aee7d12da192ef99b024f288442",
+    "DecisionReply.json": "sha256:49942fb430eff8912aee926590bfc56e1583b9c946ac0d3cde2ecaf5f487e7bb",
     "RetrievalRequest.json": "sha256:5e2c725bdfdafea834aa3228187d85ea00145b13ac9804df9a8ce15ef57735c3",
-    "RetrievalResponse.json": "sha256:be64e13c6e68425b6d998c091fc7092ce249eb48f3688b9bc0c3fb96f71d7bb2",
+    "RetrievalResponse.json": "sha256:2f8a1a8d616f0bd948e8d298ed77cd17512934c786abc9afbc9f201a9edc45b5",
     "ToolRegistration.json": "sha256:6029270d3be0acf6ee374e3ca353a33d305db1e2040699d97bfa7156fad035de"
   }
 }

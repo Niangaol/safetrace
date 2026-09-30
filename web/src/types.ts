@@ -88,6 +88,13 @@ export interface Citation {
   title: string
   url: string
   score: number
+  /**
+   * 证据可信度（上游契约 v1.1.1 给 `RetrievalResponse.chunk` 追加的可选字段）。
+   * **缺省 = 未知**，界面上必须显示"未评估"，不得当作已验证。
+   */
+  trust?: 'trusted' | 'untrusted'
+  /** 上游首次发布时间（ISO）。**缺省 = 未知，不得假定新鲜**。 */
+  published_at?: string
 }
 
 export interface Watermark {
