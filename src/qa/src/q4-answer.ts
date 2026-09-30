@@ -5,8 +5,8 @@
  *   → abstained=true，文案显式说明证据不足，禁止编造；
  * - degraded_to 从 RetrievalResponse 原样透传，并在答案尾部给用户可见提示。
  */
-import { nowIso, sha256, sha256Json } from "@safetrace/shared";
-import type { Answer, EventBus, RetrievalResponse } from "@safetrace/shared";
+import { nowIso, parseLoose, sha256, sha256Json } from "@safetrace/shared";
+import type { Answer, EventBus, InjectionFlag, InjectionGuard, RetrievalResponse, StaleWarning } from "@safetrace/shared";
 import type { QueryPlan } from "./q1-intent.js";
 
 /**
@@ -26,6 +26,12 @@ export interface SynthesizeOptions {
   bus?: EventBus;
   parent_lineage_ids?: string[];
   causation_id?: string | null;
+  /** C-04：时效阈值（天）；编排层可按意图覆盖，A-05 落地后由意图驱动。 */
+  stale_after_days?: number;
+  /** 评估基准时间（测试注入用）；缺省当前时间。 */
+  now?: Date;
+  /** C-04：外部注入筛查结果；缺省 = 未筛查（显式如实，不假装干净）。 */
+  injectionGuard?: Omit<InjectionGuard, "untrusted_evidence">;
 }
 
 /** 没有独立 reranker 时，以当前可用的 dense/sparse 召回分做保守拒答门槛。 */
@@ -44,7 +50,12 @@ function retrievalScore(chunk: RetrievalResponse["chunks"][number]): number {
 interface Ctx {
   topScore: number;
   avgQuality: number;
+  stale?: StaleWarning;
+  injection: InjectionGuard;
 }
+
+/** C-04 默认时效阈值（天）。A-05 将按意图细化；此处保证"过龄/未知"必须显式可见。 */
+const DEFAULT_STALE_THRESHOLD_DAYS = 365;
 
 interface BaseAnswer {
   session_id: string;
@@ -79,6 +90,44 @@ function coversRequestedCve(plan: QueryPlan, evidence: RetrievalResponse): boole
 
 function intentLabel(plan: QueryPlan): string {
   return plan.intents.length > 0 ? plan.intents.join("+") : "未识别（意图不明确）";
+}
+
+/**
+ * C-04：基于 C-02 的 published_at 做时效评估。
+ * - 缺 published_at 的证据按"未知时效"计入，不用抓取时间顶替；
+ * - 最早一条早于阈值 → 显式提示；全部未知也提示。
+ */
+function assessStaleness(evidence: RetrievalResponse, now: Date, thresholdDays: number): StaleWarning | undefined {
+  const cited = evidence.chunks;
+  if (cited.length === 0) return undefined;
+  const times = cited.map(c => (c.published_at ? parseLoose(c.published_at) : null));
+  const unknown = times.filter(t => t === null).length;
+  const known = times.filter((t): t is number => t !== null);
+  if (known.length === 0) {
+    return { threshold_days: thresholdDays, unknown_published_at: unknown, note: "⚠️ 证据时效提示：引用证据均无上游发布时间（published_at 缺失），时效未知、无法确认新鲜度，请谨慎采用。" };
+  }
+  const oldest = Math.min(...known);
+  const ageDays = Math.floor((now.getTime() - oldest) / 86400000);
+  if (ageDays <= thresholdDays && unknown === 0) return undefined;
+  const parts: string[] = [];
+  if (ageDays > thresholdDays) parts.push("最早证据发布于 " + ageDays + " 天前（阈值 " + thresholdDays + " 天）");
+  if (unknown > 0) parts.push(unknown + " 条证据缺上游发布时间，时效未知");
+  return { threshold_days: thresholdDays, oldest_published_at: new Date(oldest).toISOString(), unknown_published_at: unknown, note: "⚠️ 证据时效提示：" + parts.join("；") + "。结论请结合最新通告核对。" };
+}
+
+/**
+ * C-04：注入筛查状态。A-04 未落地前 screened=false 必须显式出现在响应对象上，
+ * 禁止调用方把"没有筛查"读成"已筛查干净"。
+ */
+function assessInjectionGuard(evidence: RetrievalResponse, opts: SynthesizeOptions): InjectionGuard {
+  const untrusted = evidence.chunks.filter(c => c.trust === "untrusted").length;
+  if (opts.injectionGuard) {
+    return { ...opts.injectionGuard, untrusted_evidence: untrusted };
+  }
+  const note = untrusted > 0
+    ? "本轮未接入注入筛查（A-04 未落地）；引用证据含 " + untrusted + " 条 untrusted 外部文本，不可信内容按数据处理。"
+    : "本轮未接入注入筛查（A-04 未落地）；引用证据均为 trusted 结构化来源。";
+  return { screened: false, untrusted_evidence: untrusted, note };
 }
 
 function degradedNote(evidence: RetrievalResponse): string | null {
@@ -126,6 +175,8 @@ function buildAbstain(
   lines.push("0.00 —— 拒答：无可靠证据支撑，不以低置信度硬答。");
   const note = degradedNote(evidence);
   if (note) lines.push(note);
+  const staleNote = ctx.stale?.note;
+  if (staleNote) lines.push(staleNote);
   return {
     ...base,
     text_md: lines.join("\n\n"),
@@ -133,6 +184,8 @@ function buildAbstain(
     reasoning_chain: chain,
     confidence: 0,
     abstained: true,
+    ...(ctx.stale ? { stale_warning: ctx.stale } : {}),
+    injection_guard: ctx.injection,
   };
 }
 
@@ -179,6 +232,8 @@ function buildAnswer(
   );
   const note = degradedNote(evidence);
   if (note) lines.push(note);
+  const staleNote = ctx.stale?.note;
+  if (staleNote) lines.push(staleNote);
   return {
     ...base,
     text_md: lines.join("\n\n"),
@@ -186,6 +241,8 @@ function buildAnswer(
     reasoning_chain: chain,
     confidence,
     abstained: false,
+    ...(ctx.stale ? { stale_warning: ctx.stale } : {}),
+    injection_guard: ctx.injection,
   };
 }
 
@@ -217,7 +274,12 @@ export async function synthesizeAnswer(
       };
       const topScore = evidence.chunks.reduce((m, c) => Math.max(m, retrievalScore(c)), 0);
       const qs = evidence.chunks.map((c) => c.quality_score).filter((q): q is number => typeof q === "number");
-      const ctx: Ctx = { topScore, avgQuality: qs.length > 0 ? qs.reduce((sum, q) => sum + q, 0) / qs.length : 0 };
+      const ctx: Ctx = {
+        topScore,
+        avgQuality: qs.length > 0 ? qs.reduce((sum, q) => sum + q, 0) / qs.length : 0,
+        stale: assessStaleness(evidence, opts.now ?? new Date(), opts.stale_after_days ?? DEFAULT_STALE_THRESHOLD_DAYS),
+        injection: assessInjectionGuard(evidence, opts),
+      };
       const reasons: string[] = [];
       if (evidence.chunks.length === 0) reasons.push("检索没有返回任何证据块");
       if (evidence.chunks.length > 0 && topScore < ABSTAIN_RETRIEVAL_SCORE_FLOOR) {
@@ -258,7 +320,11 @@ export async function synthesizeAnswer(
       ...answer.citations.map((citation) => ({ kind: "Citation", id: citation.chunk_id, url: citation.url })),
     ],
     execution: { component_version: opts.synth ? "injected" : "q4-template.v1" },
-    decision: { reason: answer.abstained ? "abstained: evidence gate" : "answered" },
+    decision: {
+      reason: answer.abstained
+        ? (answer.stale_warning ? "abstained: evidence gate; stale" : "abstained: evidence gate")
+        : (answer.stale_warning ? "answered; stale" : "answered"),
+    },
   });
   return answer;
 }

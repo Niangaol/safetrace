@@ -79,7 +79,9 @@
   "reasoning_chain": ["string"],
   "confidence": "0-1",
   "abstained": false,
-  "degraded_to": "string?"
+  "degraded_to": "string?",
+  "stale_warning": { "threshold_days": 0, "oldest_published_at": "ISO-8601?", "unknown_published_at": 0, "note": "string" }?,
+  "injection_guard": { "screened": false, "max_score": "0-1?", "flags": ["instruction_override"], "untrusted_evidence": 0, "note": "string" }?
 }
 
 // FallbackEvent（fallback.events）

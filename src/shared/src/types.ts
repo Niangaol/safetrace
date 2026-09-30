@@ -249,6 +249,28 @@ export interface QueryTurn {
   history?: Array<{ role: "user" | "assistant"; text: string }>;
 }
 
+/** C-04 时效提示（A-05 将按意图细化阈值；此处只保证"过龄或未知必须显式可见"）。 */
+export interface StaleWarning {
+  /** 本次使用的时效阈值（天）。 */
+  threshold_days: number;
+  /** 引用的最早一条上游发布时间；全部缺失时为 undefined。 */
+  oldest_published_at?: string;
+  /** 引用证据中缺少 published_at 的条数（未知时效）。 */
+  unknown_published_at: number;
+  /** 面向用户的可见说明。 */
+  note: string;
+}
+
+/** C-04 注入筛查状态；screened=false 表示本轮未做注入检测，不得当作"已筛查干净"。 */
+export interface InjectionGuard {
+  screened: boolean;
+  max_score?: number;
+  flags?: InjectionFlag[];
+  /** 引用证据中标记为 untrusted 的条数。 */
+  untrusted_evidence: number;
+  note: string;
+}
+
 export interface Answer {
   session_id: string;
   turn_id: string;
@@ -258,6 +280,10 @@ export interface Answer {
   confidence: number;
   abstained: boolean;
   degraded_to?: string;
+  /** C-04：时效提示；缺省 = 未做时效评估，不得当作"证据新鲜"。 */
+  stale_warning?: StaleWarning;
+  /** C-04：注入筛查状态；缺省 = 未筛查。 */
+  injection_guard?: InjectionGuard;
 }
 
 export type FallbackLayer = "L1" | "L2" | "L3" | "L4";

@@ -204,6 +204,14 @@ async function main(): Promise<number> {
     a.citations.every((c) => c.chunk_id.length > 0 && c.url.length > 0));
   check(citationsComplete, "引用完整率 100%（chunk_id + url 非空）");
 
+  // C-04：答案对象必须显式带注入筛查状态；非拒答条可带 stale_warning（证据过龄/未知时）
+  const guarded = answers.filter((a) => a.injection_guard !== undefined).length;
+  check(guarded === answers.length, "所有答案显式带 injection_guard（缺省=未筛查，不假装干净），当前 " + guarded + "/" + answers.length);
+  const nonAbstained = answers.filter((a) => !a.abstained);
+  const staleCarriers = nonAbstained.filter((a) => a.stale_warning !== undefined).length;
+  console.log("  带 stale_warning 的非拒答答案：" + staleCarriers + " 条（种子证据发布于 2021，阈值 365 天 → 预期全部提示）");
+  check(staleCarriers === nonAbstained.length, "过龄证据必须显式带 stale_warning，且正文对用户可见");
+
   // ---------- 6) 四 Agent 任务图 ----------
   console.log("\n[6] 编排层四 Agent 任务图（监测→富化→问答）");
   check(Object.keys(AGENT_ROLES).length === 4, "四角色登记在册");
