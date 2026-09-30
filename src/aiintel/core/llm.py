@@ -19,7 +19,13 @@ import httpx
 
 from aiintel.config import BEIJING_TZ, get_settings
 from aiintel.core.cost import BudgetExceeded, CostGuard, ModelTier, Usage, get_cost_guard
-from aiintel.core.isolation import IsolationRejectionError, egress_allowed, normalize_domain
+from aiintel.core.isolation import (
+    IsolationRejectionError,
+    ScopeViolationError,
+    assert_public_scope,
+    egress_allowed,
+    normalize_domain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +244,14 @@ class LLMRouter:
         if response_format is not None:
             payload["response_format"] = response_format
 
+        # A-03：非本地目的地出网前扫私域标记。命中=策略拒绝（不是 provider 故障），
+        # 立即终止降级链——不本地兜底、不改投别家、不回显命中内容。
+        try:
+            assert_public_scope(payload, "LLM complete 出网载荷")
+        except ScopeViolationError as exc:
+            await self._isolation_reject(node, str(exc), action="egress_guard_rejection")
+            raise
+
         started = _time.perf_counter()
         try:
             resp = await self.client.post("/chat/completions", json=payload)
@@ -322,10 +336,12 @@ class LLMRouter:
             degraded=True,
         )
 
-    async def _isolation_reject(self, node: str, reason: str) -> None:
-        """C-05：策略拒绝的审计事件（fallback.events）。尽力而为，绝不让主链路挂掉。"""
+    async def _isolation_reject(
+        self, node: str, reason: str, action: str = "isolation_policy_rejection"
+    ) -> None:
+        """C-05/A-03：策略拒绝的审计事件（fallback.events）。尽力而为，绝不让主链路挂掉。"""
 
-        logger.warning("C-05 隔离闸策略拒绝 node=%s 原因: %s", node, reason)
+        logger.warning("隔离闸策略拒绝 node=%s 原因: %s", node, reason)
         try:
             from datetime import datetime
 
@@ -337,7 +353,7 @@ class LLMRouter:
                 {
                     "layer": "L3",
                     "trigger": f"isolation:{node}",
-                    "action_taken": "isolation_policy_rejection",
+                    "action_taken": action,
                     "degraded_of": "llm",
                     "user_visible": True,
                     "degraded_state": {
@@ -407,6 +423,13 @@ class LLMRouter:
         }
         if thinking:
             payload["enable_thinking"] = True
+
+        # A-03：非本地目的地出网前扫私域标记（同 complete）。
+        try:
+            assert_public_scope(payload, "LLM stream 出网载荷")
+        except ScopeViolationError as exc:
+            await self._isolation_reject(node, str(exc), action="egress_guard_rejection")
+            raise
 
         usage = Usage()
         try:
