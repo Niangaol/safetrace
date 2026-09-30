@@ -20,7 +20,11 @@ test("local stack profile switches embedder to bge-m3 with trust_boundary local"
   assert.equal(local.roles.embedder.provider, "local_embed");
   assert.equal(local.roles.embedder.model_id, "bge-m3");
   assert.equal(local.roles.embedder.capability_flags.dim, 1024, "本地 bge-m3 与云端同维度，集合元数据可复用");
-  assert.equal(local.roles.embedder.data_domain, "private");
+  // data_domain 必须是 public：A-03 隔离闸门规定 private 数据不得流向 cloud provider，
+  // 若这里是 private，fallback_chain 里的云端 Tokendance 会被直接拦掉，
+  // "本地没模型就转云端"这条用户可见的回退路径就失效了。
+  // 公开漏洞情报（CVE/USN/KEV）本身可出网，原云端配置亦为 public，与此一致。
+  assert.equal(local.roles.embedder.data_domain, "public");
   assert.equal(local.providers.local_embed?.trust_boundary, "local", "未标 local 会被 A-03 当出云请求拦掉");
   assert.equal(local.providers.local_llm?.trust_boundary, "local");
   assert.equal(local.providers.local_embed?.base_url_default, "http://127.0.0.1:8081/v1");

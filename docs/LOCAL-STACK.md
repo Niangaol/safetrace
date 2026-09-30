@@ -6,27 +6,74 @@ SafeTrace 的 embedding / 问答 / 决策链路可以在本机纯离线跑通，
 ## 一键起停
 
 ```powershell
-# 首次：下载 llamacpp（winget 自动装）、Qdrant 二进制、两个模型，共约 5.4GB
-pwsh scripts/local/bootstrap.ps1
-
 # 起全部服务（Qdrant :6333 / embedding :8081 / chat :8080）
-pwsh scripts/local/up.ps1
+# 首次运行会自动下载缺失的模型（约 5GB，国内镜像源，见下）
+npm run local:up
 
 # 全停
-pwsh scripts/local/down.ps1
+npm run local:down
 ```
+
+`local:up` 内部依次做三件事：**就绪模型 → 起 Qdrant → 起 llama-server**。
+模型不需要单独跑 bootstrap，缺了会自动下（幂等，已存在且 sha256 匹配就跳过）。
 
 环境变量：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `SAFETRACE_MODELS_DIR` | `D:\AgentPrograms\safetrace-models` | 模型存放目录（仓库外，避免大文件污染仓库） |
+| `SAFETRACE_SKIP_MODEL_DOWNLOAD` | 未设 | 设 `true` = 拒绝下载，直接转云端（见下） |
+| `SAFETRACE_MODEL_ONLY` | 未设 | 只就绪名字含该子串的模型，调试用 |
 | `LOCAL_EMBED_BASE_URL` | `http://127.0.0.1:8081/v1` | embedding 实例 |
 | `LOCAL_LLM_BASE_URL` | `http://127.0.0.1:8080/v1` | chat 实例 |
 | `QDRANT_URL` | `http://127.0.0.1:6333` | 向量库 |
 | `QDRANT_COLLECTION` | `safetrace_sources` | 集合名 |
 
-模型文件**不进 git**（见 `.gitignore` 的 `third_party/` 与 `*.gguf`），由 bootstrap 脚本按需拉取。
+## 内置模型清单（自动下载）
+
+模型**不进 git**——GitHub 单文件硬上限 100MB，而这两个是 634MB / 4.36GB。
+改成内置下载链接，源按「国内镜像 → 官方」顺序自动探测，谁通用谁：
+
+| 模型 | 用途 | 体积 | 下载源（按序） | sha256 |
+| --- | --- | --- | --- | --- |
+| `bge-m3-Q8_0.gguf` | embedding（实测 1024 维） | 605 MB | hf-mirror.com → huggingface.co | `950f4a8e…11167` |
+| `Qwen2.5-7B-Instruct-Q4_K_M.gguf` | chat / Jev 打分底座 | 4.36 GB | hf-mirror.com → huggingface.co | `3e357ab3…40c6` |
+
+完整清单和校验和写在 [scripts/ensure-models.mjs](../scripts/ensure-models.mjs) 里，加模型只改那一处。
+新增模型的三件套（文件名、体积、sha256）必须齐全，缺一样就不给合入——
+没有 sha256 就无法证明下载到的是不是被篡改/截断的文件。
+
+下载用 curl 而不是 Node fetch：本机环境下 fetch 拉大文件会在中途被 terminate
+（实测 634MB 只下到 162MB 就断），curl 实测 4.6GB / 86MB-s 稳定。
+
+## 拒绝下载 / 下载失败怎么办：转云端
+
+如果你不想下这 5GB，或者下载失败（断网、源挂了），**不需要手动改任何配置**：
+
+```powershell
+# 明确拒绝下载
+$env:SAFETRACE_SKIP_MODEL_DOWNLOAD = "true"
+npm run local:up     # 会跳过 llama-server，只起 Qdrant
+```
+
+此时 embedder 走 `config/models.tokendance.yml` 里的降级链
+`fallback_chain: [tokendance, cache]`：本地 → 云端 Tokendance → cache。
+全程显式留痕（`degraded_to` + FallbackEvent + lineage），**不是静默兜底**。
+实测链路：`failed/local_embed → degraded/tokendance`，返回 1024 维真实云端向量。
+
+> **这里踩过一个真 bug（2026-09-30 修复）**：MG1 给降级 provider 的模型名原本硬编码成
+> `<provider>-fallback`（即 `tokendance-fallback`），云端没这个模型，直接 HTTP 400，
+> 于是"转云端"形同虚设、实际退到了 cache。现在通过 role 的
+> `fallback_model_ids: { tokendance: qwen3.7-text-embedding }` 显式声明真实模型名。
+> 回归测试见 `src/gateway/test/fallback-model-ids.test.ts`。
+
+要彻底禁云（只许本地 + cache，不许出网）：把 `fallback_chain` 改成 `[cache]`。
+
+## 下载源为什么放国内
+
+本机访问 huggingface.co 直连时，release/资源下载的 302 重定向目标连不通（拿到 0 字节）。
+`hf-mirror.com` 是国内镜像，实测 206 可断点续传；魔搭 `modelscope.cn` 也可达（备用）。
+**探测本机服务时才用 `curl --noproxy`，下载外网文件不要加**，否则又变成 0 字节。
 
 ## 用到的模型
 

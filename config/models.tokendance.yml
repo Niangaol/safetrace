@@ -87,11 +87,22 @@ roles:
     provider: local_embed
     model_id: bge-m3
     model_version: gguf-q8_0
-    data_domain: private
+    # data_domain 必须是 public，否则 A-03 隔离闸门会拦掉下面 fallback_chain 里的
+    # 云端 Tokendance，"本地没模型就转云端"这条路直接失效。公开漏洞情报（CVE/USN/KEV）
+    # 本身可出网，原云端配置亦为 public，与此一致。
+    # 若将来要处理含内网标识的私有证据，必须改回 private 并同时把 fallback_chain 去掉云端。
+    data_domain: public
     max_rpm: 600
     max_concurrency: 4
     timeout_ms: 30000
-    fallback_chain: [cache]
+    # 本地模型未就绪（用户拒绝下载/下载失败/SAFETRACE_SKIP_MODEL_DOWNLOAD=true）时
+    # 显式回退云端 Tokendance，再退 cache。降级全程登记 FallbackEvent + degraded_to，
+    # 不是静默兜底。要彻底禁云：把这一行改成 [cache]，同时 data_domain 可改回 private。
+    fallback_chain: [tokendance, cache]
+    # 关键：降级到真实 provider 时必须给它真实存在的模型名。
+    # 不配这项，MG1 会拿 "tokendance-fallback" 当模型名发出去，被云端 400 拒，
+    # 于是"转云端"形同虚设（2026-09-30 实测踩到并修复）。
+    fallback_model_ids: { tokendance: qwen3.7-text-embedding }
     capability_flags: { dim: 1024 }
 
   reranker:

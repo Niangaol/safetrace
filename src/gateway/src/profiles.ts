@@ -18,6 +18,13 @@ export interface ModelProfile {
   max_concurrency: number;
   timeout_ms: number;
   fallback_chain: string[];
+  /**
+   * 降级到真实 provider 时该用的模型名（provider → model_id）。
+   * 不配则沿用 "<provider>-fallback" 这个名字，而它在真实 provider 上必然不存在
+   * （HTTP 400/404），所以跨真实 provider 的降级必须在此显式声明，否则等于降级不通。
+   * cache provider 不需要配：它不校验模型名。
+   */
+  fallback_model_ids?: Record<string, string>;
   /** C-05：该角色默认数据域；缺省 public。调用方可在请求里显式指定。 */
   data_domain?: DataDomain;
   capability_flags: Record<string, unknown>;
@@ -92,6 +99,7 @@ export function loadModelsConfig(path = resolve(process.env.MODELS_CONFIG_PATH ?
       max_concurrency: Number(body.match(/max_concurrency:\s*(\d+)/)?.[1] ?? 4),
       timeout_ms: Number(body.match(/timeout_ms:\s*(\d+)/)?.[1] ?? 30000),
       fallback_chain: parseChain(body) ?? ["cache", "template"],
+      fallback_model_ids: parseFallbackModelIds(body),
       capability_flags: parseInlineFlags(body),
       data_domain: parseDataDomain(body),
     };
@@ -113,6 +121,21 @@ function parseDataDomain(body: string): DataDomain {
 function parseChain(body: string): string[] | undefined {
   const m = body.match(/fallback_chain:\s*\[([^\]]*)\]/);
   return m ? m[1]!.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+}
+
+/**
+ * fallback_model_ids: { tokendance: qwen3.7-text-embedding, deepseek: deepseek-embed }
+ * 单行花括号映射，键值都不含空格。缺省返回 undefined（调用方用 provider+"-fallback"）。
+ */
+function parseFallbackModelIds(body: string): Record<string, string> | undefined {
+  const m = body.match(/fallback_model_ids:\s*\{([^}]*)\}/);
+  if (!m) return undefined;
+  const out: Record<string, string> = {};
+  for (const pair of m[1]!.split(",")) {
+    const [k, v] = pair.split(":").map((s) => s?.trim() ?? "");
+    if (k && v) out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function parseInlineFlags(body: string): Record<string, unknown> {

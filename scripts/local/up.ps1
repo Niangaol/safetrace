@@ -40,6 +40,26 @@ function Wait-Url($url, $timeoutSeconds) {
   return $false
 }
 
+# ---- 0. 模型自动就绪（内置国内下载源；拒绝/失败则退出码 3，由调用方转云端）----
+# 下载源见 scripts/ensure-models.mjs（hf-mirror 国内镜像优先，huggingface 官方兜底）
+# 不想下载：SAFETRACE_SKIP_MODEL_DOWNLOAD=true，此时 embedder 走 config 里 fallback_chain 云端通道
+$ensure = Join-Path $PSScriptRoot "..\ensure-models.mjs"
+if (Test-Path $ensure) {
+  Write-Output "[local] ensuring models (auto-download if missing) ..."
+  & node $ensure
+  if ($LASTEXITCODE -eq 3) {
+    Write-Output "[local] models not available; local inference will degrade to cloud per fallback_chain"
+    $script:ModelsReady = $false
+  } elseif ($LASTEXITCODE -ne 0) {
+    throw "ensure-models failed with exit $LASTEXITCODE"
+  } else {
+    $script:ModelsReady = $true
+  }
+} else {
+  Write-Output "[local] ensure-models.mjs missing; skipping model check"
+  $script:ModelsReady = $false
+}
+
 # ---- 1. Qdrant ----
 $qdrantRunning = $false
 try {
@@ -71,8 +91,8 @@ try {
 } catch { }
 
 if (-not $embedUp) {
-  if ($SkipModels) {
-    Write-Output "[local] embedding server skipped (-SkipModels)"
+  if ($SkipModels -or -not $script:ModelsReady) {
+    Write-Output "[local] embedding server skipped (models not ready; will degrade to cloud)"
   } else {
     $llama = Resolve-LlamaServer
     $embModel = Join-Path $modelsDir "bge-m3-Q8_0.gguf"
@@ -83,7 +103,7 @@ if (-not $embedUp) {
 } else {
   Write-Output "[local] embedding server already running"
 }
-if (-not $SkipModels) {
+if (-not $SkipModels -and $script:ModelsReady) {
   if (-not (Wait-Url "http://127.0.0.1:8081/v1/models" 120)) { throw "embedding server did not become ready" }
 }
 
@@ -95,8 +115,8 @@ try {
 } catch { }
 
 if (-not $chatUp) {
-  if ($SkipModels) {
-    Write-Output "[local] chat server skipped (-SkipModels)"
+  if ($SkipModels -or -not $script:ModelsReady) {
+    Write-Output "[local] chat server skipped (models not ready; Jev ladder abstains to human)"
   } else {
     $llama = Resolve-LlamaServer
     $chatModel = Join-Path $modelsDir "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
@@ -107,7 +127,7 @@ if (-not $chatUp) {
 } else {
   Write-Output "[local] chat server already running"
 }
-if (-not $SkipModels) {
+if (-not $SkipModels -and $script:ModelsReady) {
   if (-not (Wait-Url "http://127.0.0.1:8080/v1/models" 180)) { throw "chat server did not become ready" }
 }
 

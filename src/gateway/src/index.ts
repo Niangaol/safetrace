@@ -299,7 +299,11 @@ export class ModelGateway {
       const providerName = ordered[i]!;
       const isPrimary = i === 0;
       const br = this.breakerFor(role, providerName);
-      const modelId = providerName === rt.profile.provider ? rt.profile.model_id : providerName + "-fallback";
+      // 降级到真实 provider 时必须用它真实存在的模型名，否则必被对端拒（HTTP 400/404）。
+      // 来源：role 的 fallback_model_ids 映射；未配时沿用旧行为（cache 不校验模型名，无影响）。
+      const modelId = providerName === rt.profile.provider
+        ? rt.profile.model_id
+        : rt.profile.fallback_model_ids?.[providerName] ?? providerName + "-fallback";
       // C-05 数据隔离闸门：private 数据禁止流向 cloud provider。硬拒（非 warning），
       // 不降级改投云端，只逐级尝试 local/cache；全链无 local provider 时显式失败。
       if (requestedDomain === "private") {
