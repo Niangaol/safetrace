@@ -11,6 +11,7 @@ import { Semaphore, TokenBucket } from "./limiter.js";
 import { cacheChat, hashEmbedding, hashRerank } from "./providers/cache.js";
 import { compatChat, compatEmbed, compatRerankUnsupported, OpenAiCompatError, resolveConfig } from "./providers/openai-compat.js";
 import { MemoryUsageStore, SqliteUsageStore, type UsageStore } from "./usage-store.js";
+import { IsolationError, ScopeViolationError } from "./isolation.js";
 import type { ChatMessage, ChatParams, Embedding, LlmReply, RankedDocs } from "./types.js";
 
 export interface GatewayOptions {
@@ -236,6 +237,34 @@ export class ModelGateway {
       : [rt.profile.provider, ...rt.profile.fallback_chain];
     const seen = new Set<string>();
     const ordered = chain.filter((p) => (seen.has(p) ? false : (seen.add(p), true)));
+    // A-03：private 数据必须有本机通道（trust_boundary=local 或 cache，二者都不出网）。
+    // 全链只有云端通道时**显式失败**：既不改投云端，也不用确定性 cache 模板冒充模型回答。
+    if (requestedDomain === "private" && !ordered.some((p) => this.privateCapable(p))) {
+      const chainBoundaries = ordered.map((p) => p + ":" + (this.cfg.providers[p]?.trust_boundary ?? "unknown")).join(",");
+      await degrade({
+        layer: "L3",
+        trigger: "data_domain=private 但降级链无本机通道（" + chainBoundaries + "）",
+        degradedOf: "isolation:no-local-provider",
+        traceId,
+        label: "数据隔离闸门：私有数据无本机通道，已显式失败（不改投云端）",
+        recoveryHint: "为该 role 配置 trust_boundary=local 的 provider（vLLM/Ollama），或把数据域改为 public",
+        emit: async (event) => { await this.emitFallback(event); },
+      });
+      await this.opts.bus?.recordLineage({
+        trace_id: traceId,
+        parent_lineage_ids: [],
+        stage: "mg1.isolation_gate",
+        operation_version: "isolation." + call + ".v1",
+        status: "rejected",
+        input_refs: inputRefs,
+        execution: { config_sha256: sha256Json({ role, call, requested_domain: requestedDomain, chain_boundaries: chainBoundaries }) },
+        decision: { reason: "private data requires a local/cache channel; none configured" },
+        error: "isolation gate found no local channel for private data",
+      });
+      throw new IsolationError(
+        "private 数据需要本机通道（trust_boundary=local 或 cache）；角色 " + role + " 的降级链仅有 " + chainBoundaries + "，已显式失败（禁静默改投云端或以 cache 模板冒充回答）",
+      );
+    }
     let lastError: unknown = null;
     let parentLineageIds: string[] = [];
     const modelVersion = (provider: string) => provider === rt.profile.provider ? rt.profile.model_version : "fallback:" + provider;
@@ -309,6 +338,31 @@ export class ModelGateway {
       try {
         result = await fn(providerName, modelId);
       } catch (err) {
+        if (err instanceof ScopeViolationError) {
+          // A-03：私域标记出网属策略拒绝，不是 provider 故障——立即终止整条降级链，不得改投下一家。
+          await degrade({
+            layer: "L3",
+            trigger: "出网载荷含私域标记，已拒绝并终止降级链",
+            degradedOf: "isolation:private-marker",
+            traceId,
+            label: "数据隔离闸门：载荷含私域标记，禁止出网",
+            recoveryHint: "把数据域标为 private 并改用 trust_boundary=local 的 provider",
+            emit: async (event) => { await this.emitFallback(event); },
+          });
+          await this.opts.bus?.recordLineage({
+            trace_id: traceId,
+            parent_lineage_ids: parentLineageIds,
+            stage: "mg1.isolation_gate",
+            operation_version: "isolation." + call + ".v1",
+            status: "rejected",
+            input_refs: inputRefs,
+            execution: { provider: providerName, model_id: modelId, config_sha256: sha256Json({ role, call, provider: providerName, requested_domain: requestedDomain }) },
+            decision: { reason: "private markers detected in outbound payload; chain aborted" },
+            // 只记错误类型，不回显命中内容
+            error: err.name,
+          });
+          throw err;
+        }
         br.onFailure();
         lastError = err;
         await recordAttempt(providerName, modelId, startedAt, "failed", undefined, "provider request failed", ordered[i + 1] ?? "cache");
@@ -343,12 +397,17 @@ export class ModelGateway {
       throw new Error("模型降级链与 cache fallback 均失败");
     }
     let cacheFallbackEventId: string | null = null;
+    const privateFallback = requestedDomain === "private";
     const d = await degrade({
       layer: "L3",
-      trigger: "fallback_chain 全链失败",
+      trigger: privateFallback
+        ? "private 数据：本机通道全部不可用，降级本机 cache（未出网）"
+        : "fallback_chain 全链失败",
       degradedOf: "cache",
       traceId,
-      label: "模型服务全链降级为缓存通道（答案可能陈旧）",
+      label: privateFallback
+        ? "私有数据仅在本机 cache 通道作答（未出网，内容为确定性模板，非真实模型产出）"
+        : "模型服务全链降级为缓存通道（答案可能陈旧）",
       recoveryHint: "检查 provider 配置与网络；恢复后熔断自动关闭",
       emit: async (event) => { cacheFallbackEventId = await this.emitFallback(event); },
     });
@@ -380,6 +439,12 @@ export class ModelGateway {
     });
   }
 
+  /** A-03：本机通道判定——local 与 cache 都不出网，可作为 private 数据的合法目的地。 */
+  private privateCapable(provider: string): boolean {
+    const boundary = this.cfg.providers[provider]?.trust_boundary;
+    return boundary === "local" || boundary === "cache";
+  }
+
   private breakerFor(role: RoleName, provider: string): CircuitBreaker {
     const rt = this.mustRole(role);
     let br = rt.breakers.get(provider);
@@ -409,3 +474,6 @@ export type { UsageStore };
 // A-02：/v1/decide 路由由调用方注入 decideHandler（问答线编排层接线），此处导出建服务入口。
 export { createGatewayServer } from "./server.js";
 export type { ServerOptions } from "./server.js";
+// A-03：数据隔离闸门（出网前私域标记扫描），供上游采集/富化线复用同一份标记口径。
+export { PRIVATE_MARKERS, IsolationError, ScopeViolationError, scanPrivateMarkers, assertPublicScope } from "./isolation.js";
+export type { ScopeViolation } from "./isolation.js";

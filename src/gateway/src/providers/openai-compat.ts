@@ -5,6 +5,8 @@
  * provider capability_flags.rerank=false 时上层必须显式报错，禁止静默降级成 chat。
  */
 import type { ChatMessage, ChatParams, ProviderResult } from "../types.js";
+import { assertPublicScope } from "../isolation.js";
+import type { TrustBoundary } from "../profiles.js";
 
 export interface OpenAiCompatConfig {
   baseUrl: string;
@@ -12,6 +14,11 @@ export interface OpenAiCompatConfig {
   modelId: string;
   timeoutMs: number;
   rerankCapable: boolean;
+  /**
+   * A-03：该 provider 的信任边界。非 local（含缺省）时出网前必须过私域标记扫描——
+   * local provider 是私有数据的合法目的地，不扫描。
+   */
+  trustBoundary?: TrustBoundary;
 }
 
 export class OpenAiCompatError extends Error {
@@ -28,6 +35,7 @@ export function resolveConfig(
     base_url_env?: string;
     base_url_default?: string;
     api_key_env?: string;
+    trust_boundary?: TrustBoundary;
     capability_flags?: Record<string, unknown>;
   },
   modelId: string,
@@ -39,6 +47,7 @@ export function resolveConfig(
     modelId,
     timeoutMs,
     rerankCapable: def.capability_flags?.rerank !== false,
+    trustBoundary: def.trust_boundary ?? "cloud",
   };
 }
 
@@ -47,6 +56,9 @@ function envOr(name: string | undefined, fallback: string): string {
 }
 
 async function postJson(url: string, body: unknown, cfg: OpenAiCompatConfig): Promise<any> {
+  // A-03 第二道隔离闸门：唯一出网点。非 local 边界（缺省按 cloud，fail-closed）时，
+  // 即使调用方漏传 data_domain，含私域标记的载荷也不得出网；local 是私有数据合法目的地，不扫描。
+  if ((cfg.trustBoundary ?? "cloud") !== "local") assertPublicScope(body, "openai_compat 请求体");
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), cfg.timeoutMs);
   try {

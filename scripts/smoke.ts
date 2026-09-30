@@ -11,7 +11,8 @@
  *  4. 降级透明红线：所有 fallback.events 均 user_visible；降级响应均带 degraded_to
  *  5. MG1 经 AnswerSynthesizer 注入点完成一次真实调用（cache provider，显式可辨）
  *  6. A-02 四层兜底阶梯：工具层缺失显式 unavailable、阶梯路径 escalation_trace 留痕、
- *     全链未决显式挂起（abstain + decided_by=human）不伪造决策
+ *     全链未决显式挂起（abstain + decided_by=human）不伪造决策；
+ *     A-03 数据隔离：默认配置 private 角色仍由本机通道服务，闸门不误伤
  *  7. 四 Agent 任务图（监测→富化→问答）拓扑跑通，失败语义可演示
  */
 import { readFileSync } from "node:fs";
@@ -216,7 +217,14 @@ async function main(): Promise<number> {
   check(staleCarriers === nonAbstained.length, "过龄证据必须显式带 stale_warning，且正文对用户可见");
 
   // ---------- 6) A-02 四层兜底阶梯（工具→规则→LLM→人工） ----------
-  console.log("\n[6] 决策阶梯（A-02：逐层显式下坠，禁静默兜底）");
+  console.log("\n[6] 决策阶梯（A-02）与数据隔离闸门抽检（A-03）");
+  // A-03：默认配置下 private 角色（decision）仍由本机 cache 通道服务，隔离闸门不得误伤本机通道
+  const decisionPrivate = await gw.chat("decision", [{ role: "user", content: "y5 triage" }], {}, "tr_smoke_isolation");
+  check(decisionPrivate.provider === "cache" && (decisionPrivate.degraded_to ?? "") === "",
+    "默认配置 private 角色由本机通道服务（隔离闸门不误伤 cache/local）");
+  const isolationRows = await store.readLineage("tr_smoke_isolation");
+  check(!isolationRows.some((r) => r.stage === "mg1.isolation_gate"), "本机通道不触发隔离拒绝");
+  check(isolationRows.every((r) => !JSON.stringify(r).includes("y5 triage")), "隔离判定 lineage 不复制请求内容");
   const ladderReq: DecisionRequest = {
     decision_id: "dec_smoke",
     kind: "q1_route",
