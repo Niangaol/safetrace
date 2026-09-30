@@ -17,8 +17,9 @@ from typing import Any, Literal
 
 import httpx
 
-from aiintel.config import get_settings
+from aiintel.config import BEIJING_TZ, get_settings
 from aiintel.core.cost import BudgetExceeded, CostGuard, ModelTier, Usage, get_cost_guard
+from aiintel.core.isolation import IsolationRejectionError, egress_allowed, normalize_domain
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,7 @@ class LLMRouter:
         node: str = "unknown",
         agent: str = "unknown",
         response_format: dict | None = None,
+        data_domain: str = "public",
     ) -> LLMResult:
         import time as _time
 
@@ -196,6 +198,24 @@ class LLMRouter:
         if task not in THINKING_TASKS:
             # 抽取/分类类任务强制关闭思考模式：思考 token 按输出计费，会放大 2~3 倍成本
             thinking = False
+
+        if normalize_domain(data_domain) == "private":
+            # C-05：private 只许 local 边界出网。云端边界若被显式标为 local（自托管
+            # 网关）也统一由本地通道承载；无本地通道时 fail-closed（不云端作答、不
+            # 以 cache/模板/demo 占位冒充模型回答）。
+            if not egress_allowed("private", self.settings.llm_cloud_trust_boundary) and (
+                not self.settings.llm_local_enabled
+            ):
+                await self._isolation_reject(
+                    node, "private 数据无合法本地通道（cloud 边界不可用且本地未启用）"
+                )
+                raise IsolationRejectionError(
+                    "私有数据要求本地/隔离边界：云端边界不可用（provider non-local）且"
+                    "本地通道未启用（LLM_LOCAL_ENABLED=false），fail-closed"
+                )
+            return await self._private_local_result(
+                model, messages, thinking, max_tokens, node, agent
+            )
 
         if self.guard.exceeded():
             logger.warning("日预算耗尽，降级本地模型: node=%s", node)
@@ -275,6 +295,67 @@ class LLMRouter:
             degraded=True,
         )
 
+    async def _private_local_result(
+        self, model: str, messages: list[dict], thinking: bool, max_tokens: int,
+        node: str, agent: str,
+    ) -> LLMResult:
+        """C-05：private 数据只经本地边界。本地不可用（未启用或调用失败）→ 硬拒。
+
+        故意**不做** demo/模板/缓存兜底：那等于用占位冒充模型回答私有数据，
+        正是上游 A-03 明令禁止的（"不再以 cache 模板冒充模型回答"）。
+        """
+
+        s = self.settings
+        try:
+            text, usage = await self._call_local(s.llm_local_model, messages, thinking, max_tokens)
+        except httpx.HTTPError as exc:
+            await self._isolation_reject(node, f"私有数据本地通道调用失败: {exc}")
+            raise IsolationRejectionError(
+                f"私有数据要求本地/隔离边界，但本地通道不可用: {exc}"
+            ) from exc
+        self.note_degraded(node=node, reason=f"data_domain=private 经本地模型 {s.llm_local_model}")
+        return LLMResult(
+            text=text,
+            usage=usage,
+            model=s.llm_local_model,
+            cost_cny=0.0,
+            degraded=True,
+        )
+
+    async def _isolation_reject(self, node: str, reason: str) -> None:
+        """C-05：策略拒绝的审计事件（fallback.events）。尽力而为，绝不让主链路挂掉。"""
+
+        logger.warning("C-05 隔离闸策略拒绝 node=%s 原因: %s", node, reason)
+        try:
+            from datetime import datetime
+
+            from aiintel.core.events import TOPIC_FALLBACK_EVENTS, EventBus
+
+            bus = EventBus()
+            env = bus.envelope(
+                TOPIC_FALLBACK_EVENTS,
+                {
+                    "layer": "L3",
+                    "trigger": f"isolation:{node}",
+                    "action_taken": "isolation_policy_rejection",
+                    "degraded_of": "llm",
+                    "user_visible": True,
+                    "degraded_state": {
+                        "label": "私有数据被隔离闸拒绝出网",
+                        "since": datetime.now(BEIJING_TZ).isoformat(),
+                        "detail_ref": reason[:200],
+                    },
+                    "recovery_hint": "为私有数据配置本地/隔离通道（LLM_LOCAL_ENABLED=true），或改用 data_domain=public",
+                    "trace_id": node,
+                },
+                dedup_key=f"isolation:{node}:{reason[:80]}",
+                trace_id=node,
+            )
+            env["payload"]["event_id"] = env["event_id"]
+            await bus.publish_envelope(env)
+        except Exception as exc:  # noqa: BLE001 - 审计事件失败不影响策略拒绝本身
+            logger.warning("隔离策略拒绝事件发布失败: %s", exc)
+
     async def stream(
         self,
         messages: list[dict],
@@ -284,10 +365,28 @@ class LLMRouter:
         temperature: float = 0.3,
         node: str = "qa",
         agent: str = "QAAgent",
+        data_domain: str = "public",
     ) -> AsyncIterator[str]:
         """流式生成。降级时退化为一次性返回。"""
 
         tier, model, thinking = self._pick(task)
+
+        if normalize_domain(data_domain) == "private":
+            if not egress_allowed("private", self.settings.llm_cloud_trust_boundary) and (
+                not self.settings.llm_local_enabled
+            ):
+                await self._isolation_reject(
+                    node, "private 数据无合法本地通道（cloud 边界不可用且本地未启用）"
+                )
+                raise IsolationRejectionError(
+                    "私有数据要求本地/隔离边界：云端边界不可用且本地通道未启用，fail-closed"
+                )
+            result = await self._private_local_result(
+                model, messages, thinking, max_tokens, node, agent
+            )
+            yield result.text
+            return
+
         if self.guard.exceeded() or not self.has_cloud_key:
             if self.guard.exceeded():
                 logger.warning("日预算耗尽，降级本地模型: node=%s", node)

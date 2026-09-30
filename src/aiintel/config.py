@@ -112,6 +112,15 @@ class Settings(BaseSettings):
     # 仅供 python -m scripts.demo 使用，生产必须保持 False——它会掩盖"模型没配好"这个事实。
     demo_mode: bool = False
 
+    # ---- C-05 数据域隔离闸（对齐上游；见 core/isolation.py）----
+    # `data_domain` 是请求/数据属性（public/private），默认 public；API 层可显式传。
+    data_domain_default: str = "public"
+    # `trust_boundary` 是后端属性（cloud/local/cache）：deepseek 云端默认 cloud；
+    # 自托管 OpenAI 兼容网关可显式改 local，private 数据才允许经其出网。
+    llm_cloud_trust_boundary: str = "cloud"
+    # Ollama 本地后端永远 local；demo/缓存占位永远 cache（代码写死，不在配置里改）。
+    llm_local_trust_boundary: str = "local"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

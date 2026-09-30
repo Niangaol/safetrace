@@ -29,7 +29,9 @@ def extract_citations(text: str) -> list[str]:
     return seen
 
 
-async def check_answer(question: str, answer: str, evidence: list[Any]) -> dict:
+async def check_answer(
+    question: str, answer: str, evidence: list[Any], data_domain: str = "public"
+) -> dict:
     refs = extract_citations(answer)
     available = {str(e.get("ref")) for e in evidence if isinstance(e, dict) and e.get("ref")}
     missing = [r for r in refs if r not in available]
@@ -47,6 +49,7 @@ async def check_answer(question: str, answer: str, evidence: list[Any]) -> dict:
         max_tokens=2500,
         node="qa.check",
         agent="QAAgent",
+        data_domain=data_domain,
     )
     try:
         judged = result.json()

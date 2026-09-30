@@ -21,6 +21,8 @@ class ChatRequest(BaseModel):
     top_k: int = Field(default=8, ge=1, le=20)
     stream: bool = True
     filters: dict[str, Any] | None = None
+    # C-05 数据域（public/private）：private 只许本地/隔离边界出网，否则硬拒。
+    data_domain: str = Field(default="public", pattern="^(public|private)$")
 
 
 async def _sse(events: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:
@@ -41,6 +43,7 @@ async def chat(payload: ChatRequest):
                     session_id=payload.session_id,
                     filters=payload.filters,
                     top_k=payload.top_k,
+                    data_domain=payload.data_domain,
                 )
             ),
             media_type="text/event-stream",
@@ -51,4 +54,5 @@ async def chat(payload: ChatRequest):
         session_id=payload.session_id,
         filters=payload.filters,
         top_k=payload.top_k,
+        data_domain=payload.data_domain,
     )

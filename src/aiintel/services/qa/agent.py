@@ -51,7 +51,7 @@ class QAAgent:
     def __init__(self, bus: EventBus | None = None) -> None:
         self.bus = bus or EventBus()
 
-    async def plan(self, question: str) -> dict[str, Any]:
+    async def plan(self, question: str, data_domain: str = "public") -> dict[str, Any]:
         result = await get_llm().complete(
             [{"role": "system", "content": PLANNER_PROMPT}, {"role": "user", "content": question}],
             task="classify",
@@ -63,6 +63,7 @@ class QAAgent:
             max_tokens=2500,
             node="qa.plan",
             agent="QAAgent",
+            data_domain=data_domain,
         )
         try:
             plan = result.json()
@@ -94,6 +95,7 @@ class QAAgent:
         session_id: str | None = None,
         filters: dict | None = None,
         top_k: int = TOP_K,
+        data_domain: str = "public",
     ) -> AsyncIterator[dict[str, Any]]:
         """SSE 事件流，事件名与 docs/API契约.md 第 4 节一致。"""
 
@@ -152,7 +154,7 @@ class QAAgent:
                 "stage": "rewrite",
                 "message": "正在理解问题意图…",
             }
-            plan = await self.plan(question)
+            plan = await self.plan(question, data_domain=data_domain)
             for idx, sub in enumerate(plan["sub_questions"][:3], start=1):
                 reasoning.append({"step": idx, "sub_question": sub, "finding": ""})
             yield _trace(
@@ -278,7 +280,8 @@ class QAAgent:
                 # 缺它就当作"没有降级信息"（0），不要让整个问答挂掉。
                 degrade_before = getattr(_llm, "degrade_count", 0)
                 async for piece in _llm.stream(
-                    messages, task="reason", max_tokens=3000, node="qa.answer"
+                    messages, task="reason", max_tokens=3000, node="qa.answer",
+                    data_domain=data_domain,
                 ):
                     buffer.append(piece)
                     yield {"event": "token", "text": piece}
@@ -304,7 +307,9 @@ class QAAgent:
                 )
 
                 yield {"event": "stage", "stage": "check", "message": "自检答案是否被证据支持…"}
-                verdict = await check_answer(question, answer, citations + evidence)
+                verdict = await check_answer(
+                        question, answer, citations + evidence, data_domain=data_domain
+                    )
                 for item in reasoning:
                     item["finding"] = (
                         verdict.get("gaps", [""])[0] if verdict.get("gaps") else "证据支持"
@@ -345,7 +350,8 @@ class QAAgent:
                     _rw = get_llm()
                     rw_before = getattr(_rw, "degrade_count", 0)
                     async for piece in _rw.stream(
-                        messages, task="reason", max_tokens=3000, node="qa.rewrite"
+                        messages, task="reason", max_tokens=3000, node="qa.rewrite",
+                        data_domain=data_domain,
                     ):
                         buffer.append(piece)
                         yield {"event": "token", "text": piece}
