@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import func, text
 
+from aiintel.config import get_settings
 from aiintel.db.base import get_sessionmaker
 from aiintel.db.models import Chunk, Enrichment, GraphEdge, Poc, TtpMapping, Vuln
 from aiintel.services.knowledge.embedder import get_embedder
@@ -90,6 +91,25 @@ def chunk_columns(session) -> set[str]:
         return {c.name for c in Chunk.__table__.columns}
 
 
+def embedding_col_type(session) -> str | None:
+    """`chunk.embedding` 数据库侧的类型字符串（如 `vector(384)`）；非 PG/缺列返回 None。
+
+    用途：写入前核对**列宽**与模型维度一致，避免把 N 维向量塞进 `vector(M)` 列
+    （pgvector 会抛 `expected M dimensions, not N`）——那会让 `persist_vuln` 的
+    整段分块索引被跳过、向量列永远为空（实测：早期镜像以 1024 建列、ONNX 模型 384 维）。
+    """
+
+    if session.get_bind().dialect.name != "postgresql":
+        return None
+    return session.execute(
+        text(
+            "SELECT format_type(a.atttypid, a.atttypmod) "
+            "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+            "WHERE c.relname = 'chunk' AND a.attname = 'embedding'"
+        )
+    ).scalar()
+
+
 async def index_owner(session, owner_type: str, owner_id: str, title: str, content: str) -> int:
     """写入分块 + 全文索引 + 向量（幂等：先删后写）。
 
@@ -116,6 +136,19 @@ async def index_owner(session, owner_type: str, owner_id: str, title: str, conte
     # 塞 Python list 进去会触发类型处理错误。这正与 `embedder.py` 的降级语义一致
     # —— 没有向量库就退化为关键词检索，而不是让 persist 崩掉。
     has_embedding = "embedding" in columns and is_postgres
+    if has_embedding:
+        # ⚠️ 列宽守卫：`vector(1024)` 列塞不进 384 维向量（pgvector 报维度错），
+        # 而任何 DB 语句级失败会把 session 打脏、反噬已 flush 的结构化数据。
+        # 与其让 persist 整体降级，不如明确跳过向量列、让检索自动走降级路径。
+        col_type = embedding_col_type(session)
+        want = f"vector({get_settings().embedding_dim})"
+        if col_type is not None and col_type != want:
+            logger.warning(
+                "chunk.embedding 类型 %s 与配置维度 %s 不一致，跳过向量写入（检索自动降级）",
+                col_type,
+                get_settings().embedding_dim,
+            )
+            has_embedding = False
     has_tsv = "tsv" in columns
 
     session.query(Chunk).filter_by(owner_type=owner_type, owner_id=owner_id).delete()

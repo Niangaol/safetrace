@@ -24,6 +24,12 @@ def _chunk_columns(session: Any) -> set[str]:
     return chunk_columns(session)
 
 
+def _embedding_col_type(session: Any) -> str | None:
+    from aiintel.services.knowledge.indexer import embedding_col_type
+
+    return embedding_col_type(session)
+
+
 logger = logging.getLogger(__name__)
 
 VECTOR_RECALL = 50
@@ -240,6 +246,16 @@ async def hybrid_search(
         # pgvector 的向量算子只有 PG 有，所以这里显式要求方言是 postgresql。
         is_postgres = session.get_bind().dialect.name == "postgresql"
         has_vector_col = is_postgres and "embedding" in _chunk_columns(session)
+        if has_vector_col and vector:
+            # 读侧列宽守卫：列是 `vector(1024)` 而向量是 384 维时，`<->` 算子
+            # 直接报 "different dimensions"。有列≠能算，必须显式核对再放行，
+            # 否则整轮检索崩溃而不是降级。
+            col_type = _embedding_col_type(session)
+            if col_type is not None and col_type != f"vector({len(vector)})":
+                logger.debug(
+                    "向量列类型 %s 与查询维度 %d 不一致，本轮回退内存余弦", col_type, len(vector)
+                )
+                has_vector_col = False
         if vector and has_vector_col:
             stmt = (
                 select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content)
