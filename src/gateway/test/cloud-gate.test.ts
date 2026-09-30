@@ -21,12 +21,35 @@ function scenario(opts: { confirm?: (r: CloudFallbackRequest) => Promise<boolean
   return { gw, bus, store, seen };
 }
 
+/**
+ * 让本地 provider 必败的场景：注入 fetch，非 tokendance 请求一律抛错。
+ * 不这样做的话，只要本机 llama-server 起着，首选就成功、根本不会降级，
+ * 云端关卡的用例会全数假绿（2026-09-30 实测踩到）。
+ */
+async function scenarioWithLocalDown(opts: { confirm?: (r: CloudFallbackRequest) => Promise<boolean> | boolean } = {}) {
+  const orig = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    if (String(input).includes("tokendance.space")) return orig(input);
+    throw new Error("local channel down (injected)");
+  }) as typeof fetch;
+  const built = scenario({ confirm: opts.confirm });
+  return {
+    ...built,
+    async restore() { globalThis.fetch = orig; },
+  };
+}
+
 test("no confirmCloudFallback injected: cloud fallback is refused and never goes online", async () => {
   // fail closed：无人点头就不出网。本地(local_embed)挂 → 云端被拒 → 退 cache。
-  const { gw } = scenario();
-  const r = await gw.embed("embedder", ["CVE-2021-44228"], "tr_gate_absent");
-  assert.equal(r.provider, "cache", "未注入钩子时不得出网，应退到 cache");
-  assert.equal(r.degraded_to, "cache");
+  // 注意：必须让本地必败，否则本地可用时根本不降级、到不了云端那一跳。
+  const sc = await scenarioWithLocalDown();
+  try {
+    const r = await sc.gw.embed("embedder", ["CVE-2021-44228"], "tr_gate_absent");
+    assert.equal(r.provider, "cache", "未注入钩子时不得出网，应退到 cache");
+    assert.equal(r.degraded_to, "cache");
+  } finally {
+    await sc.restore();
+  }
 });
 
 test("human declines: cloud provider is skipped, no network call, degrade is user-visible", async () => {
@@ -83,7 +106,11 @@ test("human approves: cloud fallback proceeds and records degraded_to", async (t
 });
 
 test("confirm hook throwing is treated as refusal, not as approval", async () => {
-  const { gw } = scenario({ confirm: () => { throw new Error("审批服务不可用"); } });
-  const r = await gw.embed("embedder", ["CVE-2021-44228"], "tr_gate_throw");
-  assert.equal(r.provider, "cache", "钩子异常必须按拒绝处理，绝不能当同意");
+  const sc = await scenarioWithLocalDown({ confirm: () => { throw new Error("审批服务不可用"); } });
+  try {
+    const r = await sc.gw.embed("embedder", ["CVE-2021-44228"], "tr_gate_throw");
+    assert.equal(r.provider, "cache", "钩子异常必须按拒绝处理，绝不能当同意");
+  } finally {
+    await sc.restore();
+  }
 });

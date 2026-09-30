@@ -48,12 +48,18 @@ export async function checkPilotReadiness(opts: PilotReadinessOptions) {
     try {
       const response = await get(e.toString().replace(/\/+$/, "") + "/models");
       const payload = response.ok ? await response.json() as { data?: Array<{ id?: string }> } : undefined;
-      // llama-server 的 model id 是 GGUF 文件名（如 bge-m3-Q8_0.gguf），配置里写的是短名（bge-m3），
-      // 因此除精确匹配外允许「id 以配置模型名开头」的宽松匹配。
+      // llama-server 的 model id 形态不固定：可能是短名（bge-m3）、文件名（bge-m3-Q8_0.gguf），
+      // 也可能是完整路径（D:\...\safetrace-models\bge-m3-Q8_0.gguf，取决于启动时的工作目录）。
+      // 因此匹配时要取路径/文件名的 basename 再比，而不是直接 startsWith 全串。
       // 只放宽命名形式，不放宽服务语义：端点仍须可达并真的列出模型。
-      const listed = Array.isArray(payload?.data) && payload.data.some(model =>
-        model.id === p.model_id || (typeof model.id === "string" && model.id.startsWith(p.model_id))
-      );
+      const basename = (id: unknown): string => String(id ?? "").split(/[\\/]/).pop() ?? "";
+      const listed = Array.isArray(payload?.data) && payload.data.some(model => {
+        const id = String(model.id ?? "");
+        const base = basename(id);
+        return id === p.model_id || base === p.model_id
+          || base.startsWith(p.model_id) || base.startsWith(p.model_id + "-")
+          || base.startsWith(p.model_id + ".");
+      });
       checks.push({ name: "embedding_service", status: listed ? "ok" : "missing", detail: listed ? "configured model advertised; embedding support and actual dimension remain unverified" : "configured model absent or model-list endpoint unavailable" });
     } catch { checks.push({ name: "embedding_service", status: "missing", detail: "loopback model endpoint unreachable or unauthorized" }); }
   }
