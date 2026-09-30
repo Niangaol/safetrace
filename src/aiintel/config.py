@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     # Redis 是可选依赖。没设超时时 redis-py 要 4s 才放弃连接，
     # 一轮富化发 ~11 条事件 = 白等 44s，所以必须显式给短超时。
     redis_socket_timeout_seconds: float = 0.5
-    embedding_dim: int = 1024
+    # 向量维度**必须与所选嵌入模型一致**，且 `db/models.py` 的 `EMBED_DIM`
+    # 是**导入时**求值的（`EMBED_DIM = get_settings().embedding_dim`），
+    # 所以换模型时必须同时改这里的默认值/环境变量，否则 DB 列维度与向量不符。
+    #   默认 ONNX 多语言模型 = 384；BAAI/bge-m3 = 1024；bge-small-zh = 512
+    embedding_dim: int = 384
 
     # ---- LLM 路由 ----
     llm_provider: str = "deepseek"
@@ -47,7 +51,15 @@ class Settings(BaseSettings):
     cost_warn_ratio: float = 0.8
     cost_tracker_path: str = "./data/cost.jsonl"
 
-    embedding_backend: str = "local"
+    #: 嵌入后端：
+    #:   `onnx`  —— 本地 ONNX Runtime（**不需要 torch**，依赖约 15MB）。
+    #:              本机 `huggingface.co` 不可达，权重经 `hf-mirror.com`（实测可达）取；
+    #:              见 `services/knowledge/onnx_embedder.py`。
+    #:   `local` —— sentence-transformers（需 torch ~2.5GB，本机装不成）。
+    #: 两者产出的向量**不可混用**，索引与查询必须同源。
+    embedding_backend: str = "onnx"
+    #: ONNX 后端用；sentence-transformers 后端忽略
+    embedding_onnx_dir: str = "data/models"
     embedding_model: str = "BAAI/bge-m3"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
 

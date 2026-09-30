@@ -37,6 +37,12 @@ data/
 *.sqlite3
 var/
 
+# ONNX 嵌入模型（113MB，可从 hf-mirror 重下，绝不入库）
+# 重新获取：python -m scripts.fetch_embedding_model --model multilingual-minilm
+# （本机 huggingface.co 不可达，脚本走实测可达的 hf-mirror.com）
+data/models/
+*.onnx
+
 # 前端
 web/node_modules/
 web/dist/

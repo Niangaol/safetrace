@@ -216,7 +216,13 @@ class QAAgent:
                     "url": item.get("url"),
                     "owner_type": item["owner_type"],
                     "owner_id": item["owner_id"],
-                    "score": round(float(item.get("rerank_score", 0.0)), 4),
+                    # 分数优先级：reranker 分（有就最准）→ RRF 融合分 → 0。
+                    # 早先只读 `rerank_score`，而 reranker 需要 torch、本机永远不可用，
+                    # 于是**语义检索明明生效了，引用分数仍恒为 0**，
+                    # 前端据此显示"词法兜底排序"—— 把可用能力说成了不可用。
+                    "score": round(
+                        float(item.get("rerank_score") or item.get("rrf_score") or 0.0), 4
+                    ),
                 }
                 # 契约 v1.1.1 的可选字段：让用户能判断证据**是否权威、是否过时**。
                 # 推导不出就不放（缺省 = 未知），由前端显示"未评估"，

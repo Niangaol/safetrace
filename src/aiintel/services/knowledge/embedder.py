@@ -133,14 +133,31 @@ class Reranker:
             return [0.0] * len(documents)
 
 
-_embedder: Embedder | None = None
+#: 嵌入器可以是 `Embedder`（sentence-transformers，需 torch）
+#: 或 `OnnxEmbedder`（ONNX Runtime，轻量）。两者 `embed()` / `available` /
+#: `failure_reason` 契约一致，调用方无需区分。
+_embedder: Any = None
 _reranker: Reranker | None = None
 
 
-def get_embedder() -> Embedder:
+def get_embedder() -> Any:
+    """按 `settings.embedding_backend` 选后端。
+
+    为什么要有这个分派：本机 `huggingface.co` 不可达 + `torch` 装不成，
+    旧的唯一实现（sentence-transformers）在这台机器上**永远不可用**，
+    于是检索一直退化为关键词、`citation.score` 恒为 0。
+    ONNX 后端让本机也能真做语义检索（依赖约 15MB、权重走可达的镜像）。
+    """
+
     global _embedder
     if _embedder is None:
-        _embedder = Embedder()
+        backend = (get_settings().embedding_backend or "local").strip().lower()
+        if backend == "onnx":
+            from aiintel.services.knowledge.onnx_embedder import OnnxEmbedder
+
+            _embedder = OnnxEmbedder()
+        else:
+            _embedder = Embedder()
     return _embedder
 
 

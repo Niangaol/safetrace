@@ -15,6 +15,15 @@ from aiintel.config import get_settings
 from aiintel.db.base import get_sessionmaker
 from aiintel.db.models import Chunk, GraphEdge
 
+
+# `chunk_columns` 在 indexer 里（探测 `chunk` 表实际有哪些列，两种方言能力不同）。
+# 惰性导入避免模块级循环：indexer 会 import embedder，而本模块也在 knowledge 包内。
+def _chunk_columns(session: Any) -> set[str]:
+    from aiintel.services.knowledge.indexer import chunk_columns
+
+    return chunk_columns(session)
+
+
 logger = logging.getLogger(__name__)
 
 VECTOR_RECALL = 50
@@ -126,6 +135,95 @@ def _rrf_fuse(rankings: list[list[str]], k: int = RRF_K) -> list[str]:
     return [doc for doc, _ in sorted(scores.items(), key=lambda kv: -kv[1])]
 
 
+def _rrf_scores(rankings: list[list[str]], k: int = RRF_K) -> dict[str, float]:
+    """同 `_rrf_fuse`，但**把融合分数一起返回**。
+
+    为什么需要：`_rrf_fuse` 只给 doc 列表，分数被丢掉，于是下游
+    `citation.score` 只能去读 `rerank_score` —— 而 reranker 在本机永远不可用
+    （CrossEncoder 需要 torch），结果是**语义检索明明生效了，引用分数却恒为 0**，
+    前端还显示"词法兜底排序"。把分数带出来才能如实展示。
+    """
+
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, doc in enumerate(ranking, start=1):
+            scores[doc] = scores.get(doc, 0.0) + 1 / (k + rank)
+    return scores
+
+
+#: 内存语义召回的上限。**为什么要有这个上限**：内存召回是 O(全表)，
+#: 语料上千条就会明显变慢；超过上限直接不做语义召回并打日志，
+#: 而不是让一次问答复卡几十秒（红线 4：宁可少一条，不可拖垮）。
+IN_MEMORY_SEMANTIC_LIMIT = 500
+
+
+async def _semantic_recall(
+    session: Any, query: str, top_k: int, owner_type: str | None
+) -> list[str]:
+    """语义召回。优先用数据库向量列，不可用则**在内存里算余弦**。
+
+    为什么要内存这条路：本机 PostgreSQL 16.15 **没有 `vector` 扩展**
+    （实测 100 个可用扩展里只有 `pg_trgm`），且降级迁移建出的 `chunk` 表
+    **没有 `embedding` 列** —— 于是 `Chunk.embedding.cosine_distance()` 这条路
+    在本机完全走不通，语义检索能力被卡死在"数据库没装扩展"上。
+
+    而 ONNX 嵌入器（`onnx_embedder.py`）已经能在本机算出**真向量**
+    （依赖约 15MB，权重走可达的 `hf-mirror.com`）。语料规模不大时，
+    把内容拉进内存算余弦是**诚实且有效**的替代：
+    - 做得成：语义相似度真的参与排序，而不是退化成关键词；
+    - 局限：O(全表)，超出 `IN_MEMORY_SEMANTIC_LIMIT` 就如实不做并打日志。
+
+    向量不落库（列可能不存在），每次现算。演示语料 12 条、单条 ~100ms，
+    代价可接受；大语料请装 pgvector 并改用向量列。
+    """
+
+    import numpy as np
+
+    from aiintel.services.knowledge.embedder import get_embedder
+
+    embedder = get_embedder()
+    query_vec = await embedder.embed(query)
+    if not query_vec:
+        return []
+
+    stmt = select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content)
+    if owner_type:
+        stmt = stmt.where(Chunk.owner_type == owner_type)
+    total = (
+        session.execute(
+            select(func.count()).select_from(Chunk).where(Chunk.owner_type == owner_type)
+            if owner_type
+            else select(func.count()).select_from(Chunk)
+        ).scalar()
+        or 0
+    )
+    if total > IN_MEMORY_SEMANTIC_LIMIT:
+        logger.warning(
+            "语料 %d 条超过内存语义召回上限 %d，本轮不做语义召回（请装 pgvector 走向量列）",
+            total,
+            IN_MEMORY_SEMANTIC_LIMIT,
+        )
+        return []
+
+    rows = session.execute(stmt).all()
+    if not rows:
+        return []
+    contents = [r[3] or "" for r in rows]
+    vectors = await embedder.embed_many(contents)
+    q = np.asarray(query_vec, dtype=np.float32)
+    sims: list[tuple[str, float]] = []
+    for row, vec in zip(rows, vectors, strict=False):
+        v = np.asarray(vec, dtype=np.float32)
+        if v.size != q.size:
+            # 维度不一致说明索引与查询不同源 —— 不猜，直接跳过
+            continue
+        denom = float(np.linalg.norm(q) * np.linalg.norm(v))
+        sim = float(q @ v) / denom if denom else 0.0
+        sims.append((doc_key(row[0], row[1], row[2]), sim))
+    sims.sort(key=lambda kv: -kv[1])
+    return [doc for doc, _ in sims[:top_k]]
+
+
 async def hybrid_search(
     query: str, top_k: int = 8, owner_type: str | None = None
 ) -> list[dict[str, Any]]:
@@ -134,7 +232,15 @@ async def hybrid_search(
     with get_sessionmaker()() as session:
         vector = await embed(query)
         rankings: list[list[str]] = []
-        if vector:
+        # ⚠️ 判据必须是"列存在 **且** 该列在**这个方言上真是向量列**"。
+        # 只判列名会踩坑：SQLite 的简化 `chunk` 表**有** `embedding` 列，但那只是
+        # `demo_seed.py` 建的**占位列**（`indexer.py` 的注释写明"SQLite 建不出来"）。
+        # 于是 `Chunk.embedding.cosine_distance()` 在 SQLite 上会编译成 `<=>` ——
+        # 实测报 `sqlite3.OperationalError: near ">": syntax error`，整轮检索直接失败。
+        # pgvector 的向量算子只有 PG 有，所以这里显式要求方言是 postgresql。
+        is_postgres = session.get_bind().dialect.name == "postgresql"
+        has_vector_col = is_postgres and "embedding" in _chunk_columns(session)
+        if vector and has_vector_col:
             stmt = (
                 select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content)
                 .where(Chunk.embedding.isnot(None))
@@ -145,6 +251,11 @@ async def hybrid_search(
                 stmt = stmt.where(Chunk.owner_type == owner_type)
             rows = session.execute(stmt.limit(VECTOR_RECALL)).all()
             rankings.append([doc_key(r[0], r[1], r[2]) for r in rows])
+        else:
+            semantic = await _semantic_recall(session, query, VECTOR_RECALL, owner_type)
+            if semantic:
+                rankings.append(semantic)
+                logger.debug("语义召回（内存余弦）命中 %d 条", len(semantic))
         try:
             keyword = await _keyword_recall(session, query, KEYWORD_RECALL, owner_type)
         except Exception as exc:  # noqa: BLE001 - 中文全文检索配置可能缺失
@@ -152,9 +263,12 @@ async def hybrid_search(
             keyword = await _fallback_recall(session, query, KEYWORD_RECALL, owner_type)
         rankings.append([doc for doc, _ in keyword])
 
-        fused = _rrf_fuse([r for r in rankings if r])[: top_k * 3]
+        active = [r for r in rankings if r]
+        fused = _rrf_fuse(active)[: top_k * 3]
         if not fused:
             return []
+        # 融合分数一起留着，最终写进 item["rrf_score"]，让引用分数有真实来源
+        fusion_scores = _rrf_scores(active)
 
         keys = {parse_doc_key(doc) for doc in fused}
         rows = session.execute(
@@ -182,6 +296,9 @@ async def hybrid_search(
                 "content": content_map.get(doc, ""),
                 "url": url_map.get((owner_type, owner_id)),
                 "rrf_rank": rank,
+                # RRF 融合分数：引用分数的**真实来源**。没有它，前端只能拿到
+                # `rerank_score`（本机 reranker 不可用 → 恒 0）并误显示"词法兜底"。
+                "rrf_score": round(fusion_scores.get(doc, 0.0), 6),
             }
             # 契约 v1.1.1 的可选字段：**推导不出就不放**（缺省 = 未知），
             # 而不是塞一个 None 让下游误以为"评估过了，结果是空"。
