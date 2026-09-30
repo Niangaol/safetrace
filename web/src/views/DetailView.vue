@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import { getJson } from '../api'
+import TerminalWindow from '../components/TerminalWindow.vue'
 import type { EvidenceResponse, GraphNode, VulnItem } from '../types'
 
 const props = defineProps<{ id: string }>()
@@ -14,24 +15,6 @@ const openDims = ref<Set<string>>(new Set())
 const error = ref('')
 const loading = ref(true)
 const hoveredNode = ref<string | null>(null)
-const winMax = ref(false)
-
-/** 放大态：Esc 还原 + 锁背景滚动（避免遮罩下页面跟着滚） */
-function closeWin() {
-  winMax.value = false
-}
-function onWinKey(e: KeyboardEvent) {
-  if (e.key === 'Escape' && winMax.value) closeWin()
-}
-watch(winMax, (m) => {
-  document.body.style.overflow = m ? 'hidden' : ''
-  if (m) window.addEventListener('keydown', onWinKey)
-  else window.removeEventListener('keydown', onWinKey)
-})
-onUnmounted(() => {
-  window.removeEventListener('keydown', onWinKey)
-  document.body.style.overflow = ''
-})
 
 const GRAPH_V = 520
 const GRAPH_R: number[] = [0, 78, 138, 186]
@@ -346,7 +329,7 @@ onMounted(async () => {
         <span class="badge-count">{{ graphLayout.nodes.length }} 节点 · {{ graphLayout.edges.length }} 关系</span>
       </div>
       <p class="muted" style="font-size: 12px; margin-top: 0">
-        蛛网关系图为主视图：悬停节点高亮相连关系、点击 CVE/GHSA 节点跳转详情；右侧关系表以 Linux 窗口呈现，可滚轮滑动、可放大查看。
+        蛛网关系图为主视图：悬停节点高亮相连关系、点击 CVE/GHSA 节点跳转详情；右侧关系表以 Linux 终端窗呈现，滚轮可滚动、悬停行与图中联动、标题栏 ⤢ 可放大查看（Esc 还原）。
       </p>
 
       <div class="rel-layout fade-in">
@@ -430,42 +413,26 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- 辅助视图：Linux 窗口风格的关系表（滚轮滑动，可点大） -->
-        <div v-if="winMax" class="lnx-backdrop" @click="closeWin"></div>
-        <div
-          class="lnx-win"
-          :class="{ max: winMax }"
-          :role="winMax ? 'dialog' : undefined"
-          :aria-modal="winMax ? 'true' : undefined"
-          aria-label="漏洞关系列表"
+        <!-- 辅助视图：Linux 终端窗（滚轮滚动，可点大查看） -->
+        <TerminalWindow
+          class="rel-term"
+          title="safe_trace@intel: ~/relations"
+          :status="`▮ ${graphLayout.edges.length} 条关系 · 滚轮滚动 · 悬停行联动图中高亮 · ⤢ 放大 / Esc 还原`"
         >
-          <div class="lnx-titlebar">
-            <span class="lnx-dots"><i class="d-close"></i><i class="d-min"></i><i class="d-max"></i></span>
-            <span class="lnx-title">safe_trace@intel: ~/relations<span class="lnx-blink">_</span></span>
-            <button
-              class="lnx-max-btn"
-              :title="winMax ? '还原大小（Esc）' : '放大查看'"
-              :aria-label="winMax ? '还原大小' : '放大查看'"
-              @click="winMax = !winMax"
-            >{{ winMax ? '⤡' : '⤢' }}</button>
+          <div
+            v-for="(e, i) in graphLayout.edges"
+            :key="i"
+            class="lnx-line"
+            @mouseenter="hoveredNode = e.dst"
+            @mouseleave="hoveredNode = null"
+          >
+            <span class="lnx-arrow">▸</span>
+            <span class="lnx-src" :title="e.src">{{ e.src }}</span>
+            <span class="lnx-rel">{{ e.rel }}</span>
+            <span class="lnx-dst" :title="e.dst">{{ e.dst }}</span>
+            <span class="lnx-type">{{ e.type }}</span>
           </div>
-          <div class="lnx-body" :class="{ max: winMax }">
-            <div
-              v-for="(e, i) in graphLayout.edges"
-              :key="i"
-              class="lnx-line"
-              @mouseenter="hoveredNode = e.dst"
-              @mouseleave="hoveredNode = null"
-            >
-              <span class="lnx-arrow">▸</span>
-              <span class="lnx-src" :title="e.src">{{ e.src }}</span>
-              <span class="lnx-rel">{{ e.rel }}</span>
-              <span class="lnx-dst" :title="e.dst">{{ e.dst }}</span>
-              <span class="lnx-type">{{ e.type }}</span>
-            </div>
-            <div class="lnx-status">▮ {{ graphLayout.edges.length }} 条关系 · 滚轮滚动 · 悬停行联动图中高亮 · ⤢ 放大 / Esc 还原</div>
-          </div>
-        </div>
+        </TerminalWindow>
       </div>
     </div>
   </template>
@@ -475,7 +442,7 @@ onMounted(async () => {
 /* 关系视图：蛛网图为主（大），关系表为辅（Linux 窗口，右侧） */
 .rel-layout {
   display: flex;
-  gap: 24px;
+  gap: 16px;
   align-items: stretch;
 }
 .rel-graph-side {
@@ -568,90 +535,16 @@ onMounted(async () => {
 }
 
 /* Linux 窗口风的关系表 */
-.lnx-win {
-  flex: 0 0 372px;
+/* 终端窗：高度与左侧蛛网图对齐（align-items: stretch 由 .rel-layout 保证） */
+/* 终端窗：宽高都跟左侧蛛网图对齐（rel-layout 是 stretch + gap 16px） */
+.rel-term {
+  flex: 0 0 clamp(320px, 30vw, 440px);
   max-width: 100%;
-  display: flex;
-  flex-direction: column;
-  height: fit-content;
-  background: #0b1020;
-  border: 1px solid #2a4060;
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
 }
-.lnx-titlebar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: linear-gradient(180deg, #1a2440, #131c30);
-  border-bottom: 1px solid #2a4060;
-}
-.lnx-dots {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.lnx-dots i {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.lnx-dots .d-close { background: #f2545b; }
-.lnx-dots .d-min { background: #f0b429; }
-.lnx-dots .d-max { background: #34d399; }
-.lnx-title {
+.rel-term :deep(.tw-body) {
   flex: 1;
-  text-align: center;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: #a5b7d4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.lnx-blink {
-  color: #34d399;
-  animation: lnxBlink 1.1s steps(1) infinite;
-}
-@keyframes lnxBlink {
-  50% { opacity: 0; }
-}
-.lnx-max-btn {
-  flex-shrink: 0;
-  background: transparent;
-  border: 1px solid #2a4060;
-  border-radius: 6px;
-  color: #a5b7d4;
-  font-size: 13px;
-  line-height: 1;
-  padding: 3px 7px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.lnx-max-btn:hover {
-  border-color: #38bdf8;
-  color: #7dd3fc;
-}
-.lnx-body {
-  background: #0a0f1e;
-  max-height: 420px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: #2a4060 transparent;
-}
-.lnx-body::-webkit-scrollbar {
-  width: 8px;
-}
-.lnx-body::-webkit-scrollbar-thumb {
-  background: #2a4060;
-  border-radius: 4px;
-}
-.lnx-body::-webkit-scrollbar-track {
-  background: transparent;
+  min-height: 0;
+  max-height: none;
 }
 .lnx-line {
   display: flex;
@@ -698,40 +591,11 @@ onMounted(async () => {
   margin-left: auto;
   flex-shrink: 0;
 }
-.lnx-status {
-  position: sticky;
-  bottom: 0;
-  padding: 4px 12px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  color: #34d399;
-  background: rgba(10, 15, 30, 0.96);
-  border-top: 1px solid rgba(42, 64, 96, 0.4);
-}
-.lnx-backdrop {
-  position: fixed;
-  inset: 0;
-  /* 必须高于顶栏（sticky z-index:100），否则放大窗口会被导航栏压住 */
-  z-index: 200;
-  background: rgba(4, 8, 16, 0.55);
-  backdrop-filter: blur(1px);
-}
-.lnx-win.max {
-  position: fixed;
-  inset: 20px;
-  z-index: 201;
-  width: auto;
-  height: auto;
-}
-.lnx-body.max {
-  max-height: none;
-  flex: 1;
-}
 @media (max-width: 900px) {
   .rel-layout {
     flex-direction: column;
   }
-  .lnx-win {
+  .rel-term {
     flex: 1 1 0;
   }
 }

@@ -94,7 +94,8 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 <style scoped>
 .card {
   cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  /* 只过渡合成属性，避免 hover 时触发 layout/paint 重排 */
+  transition: transform 0.18s ease, border-color 0.18s ease;
 }
 .ripple-layer {
   position: absolute;

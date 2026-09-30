@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch, nextTick, computed } from 'vue'
+import { onMounted, onUnmounted, ref, watch, nextTick, computed } from 'vue'
 import { RouterLink } from 'vue-router'
 
 // 按需引入 echarts：本页只画柱状图 + 直角坐标系 + 提示框 + 图例。
@@ -208,6 +208,15 @@ onMounted(async () => {
     initSourceChart()
     window.addEventListener('resize', resizeCharts)
   }
+})
+
+onUnmounted(() => {
+  // 不清理会留下 resize 监听与两个 echarts 实例的动画循环
+  window.removeEventListener('resize', resizeCharts)
+  sevChartInst?.dispose()
+  sourceChartInst?.dispose()
+  sevChartInst = null
+  sourceChartInst = null
 })
 
 watch(metrics, () => { nextTick(() => initSevChart()) })

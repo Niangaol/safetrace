@@ -26,25 +26,37 @@ const tick = ref(0)
 let raf = 0
 let lastTime = 0
 
+// ── 悬停工具提示：点位坐标按容器宽度换算（SVG viewBox 520 → 实际像素）──
+const wrapRef = ref<HTMLElement | null>(null)
+/** 视口可见性：不可见时停帧，避免后台页面持续重绘（CPU 优化） */
+const inView = ref(true)
+let viewObserver: IntersectionObserver | null = null
+
 onMounted(() => {
   lastTime = performance.now()
   const loop = (now: number) => {
     const dt = Math.min((now - lastTime) / 1000, 0.05)
     lastTime = now
-    tick.value += dt
     raf = requestAnimationFrame(loop)
+    // 不可见 / 标签页隐藏时不推进 tick，模板不会重算 → 零重绘
+    if (!inView.value || document.hidden) return
+    tick.value += dt
   }
   raf = requestAnimationFrame(loop)
   measure()
   window.addEventListener('resize', measure)
+  if (wrapRef.value) {
+    viewObserver = new IntersectionObserver((es) => {
+      inView.value = es[0]?.isIntersecting ?? true
+    })
+    viewObserver.observe(wrapRef.value)
+  }
 })
 onUnmounted(() => {
   cancelAnimationFrame(raf)
   window.removeEventListener('resize', measure)
+  viewObserver?.disconnect()
 })
-
-// ── 悬停工具提示：点位坐标按容器宽度换算（SVG viewBox 520 → 实际像素）──
-const wrapRef = ref<HTMLElement | null>(null)
 const svgScale = ref(W / 560)
 function measure() {
   const el = wrapRef.value

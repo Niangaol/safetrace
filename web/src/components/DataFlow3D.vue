@@ -41,6 +41,11 @@ let hasDragged = false
 const selected = ref<string | null>(null)
 const hovered = ref<string | null>(null)
 
+/** 视口可见性 + 观察器：不可见时动画循环直接跳过计算与渲染 */
+const wrapRef = ref<SVGSVGElement | HTMLElement | null>(null)
+const inView = ref(true)
+let viewObserver: IntersectionObserver | null = null
+
 // Morph: per-node control-point offset for line curvature
 const morph = ref<Record<string, { x: number; y: number; z: number }>>({})
 
@@ -59,8 +64,12 @@ onMounted(() => {
   const loop = (now: number) => {
     const dt = Math.min((now - lastTime) / 1000, 0.05)
     lastTime = now
-    tick.value += dt
+    raf = requestAnimationFrame(loop)
 
+    // 不可见 / 标签页隐藏时直接空转返回，不做任何计算与渲染（省 CPU）
+    if (!inView.value || document.hidden) return
+
+    let moved = false
     // Apply inertia
     if (!isDragging.value) {
       if (Math.abs(velX.value) > 0.01 || Math.abs(velY.value) > 0.01) {
@@ -68,28 +77,42 @@ onMounted(() => {
         rotX.value = Math.max(-80, Math.min(80, rotX.value + velX.value * dt * 60))
         velX.value *= DAMPING
         velY.value *= DAMPING
+        moved = true
       } else if (autoRotate.value && !hovered.value) {
         rotY.value += dt * 8
+        moved = true
       }
+    } else {
+      moved = true
     }
 
     // Morph: line curvature control points drift slowly (not node jitter)
+    const t = tick.value
+    if (moved) tick.value += dt
     for (const d of props.dims) {
       const m = morph.value[d.id]
       if (!m) continue
       // slow sinusoidal drift of bezier control point offset
-      const t = tick.value
       const phase = d.id.length * 1.3
       m.x = Math.sin(t * 0.5 + phase) * 12
       m.y = Math.cos(t * 0.4 + phase) * 8
       m.z = Math.sin(t * 0.6 + phase * 0.7) * 10
     }
-
-    raf = requestAnimationFrame(loop)
   }
   raf = requestAnimationFrame(loop)
+
+  // 元素滚出视口就停帧（配合 loop 里的 document.hidden 判断）
+  if (wrapRef.value) {
+    viewObserver = new IntersectionObserver((es) => {
+      inView.value = es[0]?.isIntersecting ?? true
+    })
+    viewObserver.observe(wrapRef.value)
+  }
 })
-onUnmounted(() => cancelAnimationFrame(raf))
+onUnmounted(() => {
+  cancelAnimationFrame(raf)
+  viewObserver?.disconnect()
+})
 
 const RADIUS = 135
 
@@ -271,7 +294,7 @@ const legendItems = [
 </script>
 
 <template>
-  <div class="df3d-container">
+  <div class="df3d-container" ref="wrapRef">
     <div class="df3d-toolbar">
       <button class="df3d-btn" :class="{ active: autoRotate }" @click="autoRotate = !autoRotate">
         {{ autoRotate ? '暂停旋转' : '自动旋转' }}

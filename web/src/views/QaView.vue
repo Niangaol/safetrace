@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { getJson } from '../api'
+import TerminalWindow from '../components/TerminalWindow.vue'
 import { parseAnswer, type InlineToken } from '../answerFormat'
 import {
   SAMPLE_ANSWER,
@@ -404,35 +405,39 @@ onMounted(async () => {
         </button>
       </div>
     </div>
-    <div v-if="showTrace" class="trace-list">
-      <div
-        v-for="(t, i) in traceRows"
-        :key="`${t.step}-${i}`"
-        class="trace-row"
-        :class="{ running: t.running, failed: t.ok === false }"
+<TerminalWindow
+        v-if="showTrace"
+        title="safe_trace@qa: ~/trace --follow"
+        :status="`▮ ${traceRows.length} 步 · 滚轮滚动 · ⤢ 放大 / Esc 还原`"
       >
-        <span class="trace-icon">
-          <span v-if="t.running" class="spinner"></span>
-          <span v-else-if="t.ok === false">✕</span>
-          <span v-else>✓</span>
-        </span>
-        <span class="trace-main">
-          <span class="trace-title">
-            {{ traceLabel(t.step) }}
-            <code class="trace-tool">{{ t.tool }}</code>
+        <div
+          v-for="(t, i) in traceRows"
+          :key="`${t.step}-${i}`"
+          class="trace-row"
+          :class="{ running: t.running, failed: t.ok === false }"
+        >
+          <span class="trace-icon">
+            <span v-if="t.running" class="spinner"></span>
+            <span v-else-if="t.ok === false">✕</span>
+            <span v-else>✓</span>
           </span>
-          <span v-if="t.output" class="trace-output">{{ t.output }}</span>
-          <span v-else-if="t.input" class="trace-input" :title="JSON.stringify(t.input)">
-            {{ inputSummary(t.input) }}
+          <span class="trace-main">
+            <span class="trace-title">
+              {{ traceLabel(t.step) }}
+              <code class="trace-tool">{{ t.tool }}</code>
+            </span>
+            <span v-if="t.output" class="trace-output">{{ t.output }}</span>
+            <span v-else-if="t.input" class="trace-input" :title="JSON.stringify(t.input)">
+              {{ inputSummary(t.input) }}
+            </span>
           </span>
-        </span>
-        <span class="trace-time">
-          <template v-if="t.durationMs != null">{{ t.durationMs }}ms</template>
-          <template v-else>…</template>
-          <span class="trace-at">@{{ t.startedAt }}ms</span>
-        </span>
-      </div>
-    </div>
+          <span class="trace-time">
+            <template v-if="t.durationMs != null">{{ t.durationMs }}ms</template>
+            <template v-else>…</template>
+            <span class="trace-at">@{{ t.startedAt }}ms</span>
+          </span>
+        </div>
+      </TerminalWindow>
     <p v-else class="muted" style="font-size: 12px; margin: 0">
       已收起 {{ traceRows.length }} 步（点右上角展开）
     </p>
@@ -825,21 +830,13 @@ onMounted(async () => {
 
 /* ── 执行轨迹（过程可视化）────────────────────────────────── */
 
-.trace-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border-left: 2px solid rgba(56, 189, 248, 0.25);
-  padding-left: 0;
-  margin-left: 6px;
-}
-
+/* 轨迹已改用 TerminalWindow 承载（Linux 终端风 + 滚轮 + ⤢ 放大） */
 .trace-row {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   padding: 6px 10px;
-  border-radius: 6px;
+  border-bottom: 1px dashed rgba(42, 64, 96, 0.3);
   font-size: 12px;
   position: relative;
 }

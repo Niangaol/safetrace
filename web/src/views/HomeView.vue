@@ -4,6 +4,8 @@ import { RouterLink, useRouter } from 'vue-router'
 
 import { getJson } from '../api'
 import SystemFactory from '../components/SystemFactory.vue'
+import TerminalWindow from '../components/TerminalWindow.vue'
+import ThreatGlobe from '../components/ThreatGlobe.vue'
 import type { CollectStatus, MetricsOverview } from '../types'
 
 const router = useRouter()
@@ -68,6 +70,14 @@ const stats = computed(() => {
   ]
 })
 
+/** 终端日志里的数字同样来自真实接口；null 一律显示「未运行」，不编造 */
+function fmt(n: number | null | undefined): string {
+  return n == null ? '未运行' : n.toLocaleString()
+}
+function ratio(r: number | null | undefined): string {
+  return r == null ? '未运行' : `${(r * 100).toFixed(0)}%`
+}
+
 const STAT_ICONS: Record<string, string> = {
   shield: 'M12 2L2 7v10l10 5 10-5V7L12 2z M12 22V12 M2 7l10 5 10-5',
   docs: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M16 13H8 M16 17H8',
@@ -75,26 +85,7 @@ const STAT_ICONS: Record<string, string> = {
   spark: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z',
 }
 
-interface GlobeDot { x: number; y: number; r: number; kind: string; o: number; delay: string }
 
-/** 地球表面“星星点点”的威胁/防御信号：集中在上半球球冠可见区（确定性生成，纯装饰） */
-const globeDots = computed<GlobeDot[]>(() => {
-  const arr: GlobeDot[] = []
-  const R = 168
-  for (let i = 0; i < 90; i++) {
-    // 只铺球冠区（θ∈≈[0.04, 0.48] rad，对应顶部可见区），phi 全覆盖
-    const theta = 0.04 + ((i * 0.2394) % 1) * 0.44
-    const phi = (i * 2.399963) % (Math.PI * 2)
-    const x = 200 + R * Math.sin(theta) * Math.cos(phi)
-    const y = 200 - R * Math.cos(theta)
-    const z = R * Math.sin(theta) * Math.sin(phi)
-    const o = 0.3 + ((z + R) / (2 * R)) * 0.7
-    const kind = i % 7 === 0 ? 'attack' : i % 3 === 0 ? 'defend' : 'neutral'
-    const r = kind === 'attack' ? 2.1 + (i % 3) * 0.5 : kind === 'defend' ? 1.7 : 1.2
-    arr.push({ x, y, r, kind, o, delay: `-${((i % 23) * 0.21 + (i % 5) * 0.06).toFixed(2)}s` })
-  }
-  return arr
-})
 
 /**
  * 智能体卡片：名字与颜色是产品定义（稳定的），但**运行数字全部来自 `/agents/runs`**。
@@ -146,33 +137,8 @@ const toolsByTier = computed(() => {
         <div class="orb orb-a"></div>
         <div class="orb orb-b"></div>
         <div class="orb orb-c"></div>
-        <div class="globe-viewport" @click="router.push('/dashboard')" title="点击进入态势大屏">
-          <div class="globe-inner">
-            <svg viewBox="0 0 400 400" class="globe-svg" role="img" aria-label="全球威胁与防御信号（示意）">
-              <g transform="rotate(-18 200 200)">
-                <circle cx="200" cy="200" r="178" class="globe-rim" />
-                <ellipse cx="200" cy="200" rx="156" ry="178" class="globe-meridian" />
-                <ellipse cx="200" cy="200" rx="120" ry="178" class="globe-meridian" />
-                <ellipse cx="200" cy="200" rx="80" ry="178" class="globe-meridian" />
-                <ellipse cx="200" cy="200" rx="40" ry="178" class="globe-meridian" />
-                <line x1="200" y1="22" x2="200" y2="378" class="globe-meridian" />
-                <line x1="162" y1="26" x2="238" y2="26" class="globe-parallel" />
-                <line x1="141" y1="32" x2="259" y2="32" class="globe-parallel" />
-                <line x1="126" y1="38" x2="274" y2="38" class="globe-parallel" />
-                <line x1="114" y1="44" x2="286" y2="44" class="globe-parallel" />
-                <line x1="104" y1="50" x2="296" y2="50" class="globe-parallel" />
-                <line x1="88" y1="62" x2="312" y2="62" class="globe-parallel" />
-                <path d="M 44 200 A 156 156 0 0 1 156 62" class="globe-rim-arc" />
-                <circle
-                  v-for="(d, i) in globeDots"
-                  :key="'d' + i"
-                  :cx="d.x" :cy="d.y" :r="d.r"
-                  class="globe-dot" :class="d.kind"
-                  :style="{ animationDelay: d.delay, opacity: d.o }"
-                />
-              </g>
-            </svg>
-          </div>
+        <div class="globe-viewport" @click="router.push('/dashboard')">
+          <ThreatGlobe @enter="router.push('/dashboard')" />
         </div>
       </div>
       <div class="hero-content">
@@ -181,8 +147,11 @@ const toolsByTier = computed(() => {
           AI Security Intelligence
         </div>
         <h1 class="hero-title">
-          <span class="ht-base">SafeTrace</span>
-          <span class="ht-glow" aria-hidden="true">SafeTrace</span>
+          <!-- 两层叠放实现光扫：base 参与排版，glow 绝对定位覆盖，保证标题真正水平居中 -->
+          <span class="ht-stack">
+            <span class="ht-base">SafeTrace</span>
+            <span class="ht-glow" aria-hidden="true">SafeTrace</span>
+          </span>
         </h1>
         <p class="hero-subtitle">智能体驱动的 AI 安全知识情报系统</p>
         <p class="hero-desc">
@@ -250,6 +219,34 @@ const toolsByTier = computed(() => {
           :coverage-ratio="metrics?.enrich.coverage_ratio ?? null"
           :chunks="metrics?.knowledge.chunks ?? null"
         />
+        <TerminalWindow
+          class="factory-term"
+          title="safe_trace@pipeline: ./run --watch"
+          :status="`▮ 点击 ⤢ 可放大查看数据流转日志 · Esc 还原`"
+        >
+          <div class="term-line">
+            <span class="term-prompt">root@safetrace</span><span class="term-dim">:</span><span class="term-path">~/pipeline</span><span class="term-dim">$</span>
+            <span class="term-cmd">./run --collect --enrich --alert</span>
+          </div>
+          <div class="term-line">
+            <span class="term-ok">▮</span> 采集线 Y · 原始条目 <b>{{ fmt(metrics?.collect.raw_items) }}</b>
+            → 漏洞 <b>{{ fmt(metrics?.collect.vulns) }}</b>
+            <span class="term-dim">（去重合并 {{ ratio(metrics?.collect.merge_ratio) }}）</span>
+          </div>
+          <div class="term-line">
+            <span class="term-ok">▮</span> 富化线 F · 七维覆盖率
+            <b>{{ ratio(metrics?.enrich.coverage_ratio) }}</b>
+          </div>
+          <div class="term-line">
+            <span class="term-ok">▮</span> 底座线 S · 知识库分块
+            <b>{{ fmt(metrics?.knowledge.chunks) }}</b>
+          </div>
+          <div class="term-line">
+            <span class="term-ok">▮</span> 问答线 Q · 智能体运行
+            <b>{{ fmt(metrics?.agents.runs) }}</b> 次
+            <span class="term-dim">（失败 {{ fmt(metrics?.agents.failed) }}，未运行则显示「未运行」）</span>
+          </div>
+        </TerminalWindow>
         <div class="flow-legend">
           <span class="legend-chip"><b>Y</b> 监测线</span>
           <span class="legend-arrow">→</span>
@@ -326,7 +323,8 @@ const toolsByTier = computed(() => {
 .hero {
   position: relative;
   text-align: center;
-  padding: 104px 24px 274px;
+  /* 下方 274px 是球冠带（canvas 高度 250px）+ 一点呼吸余量 */
+  padding: 96px 24px 286px;
   border-radius: 16px;
   overflow: hidden;
   margin-bottom: 0;
@@ -355,85 +353,48 @@ const toolsByTier = computed(() => {
   position: absolute;
   border-radius: 50%;
 }
+/* 光晕：静态径向渐变。
+   原来三颗 460/620/800px 的 orb 都在跑 scale 动画 —— 每帧缩放会重新光栅化
+   整块大面积渐变，是首页 CPU 占用的大头。这里改为静态渐变，视觉几乎无差别。 */
 .orb-a {
   width: 460px; height: 460px;
   top: -90px; left: 50%;
   transform: translateX(-50%);
   background: radial-gradient(circle, rgba(56, 189, 248, 0.16), transparent 68%);
-  animation: orbFloat 9s ease-in-out infinite;
 }
 .orb-b {
   width: 620px; height: 620px;
   top: -160px; left: 50%;
   transform: translateX(-50%);
   background: radial-gradient(circle, rgba(129, 140, 248, 0.1), transparent 68%);
-  animation: orbFloat 13s ease-in-out infinite reverse;
 }
 .orb-c {
   width: 800px; height: 800px;
   top: -260px; left: 50%;
   transform: translateX(-50%);
   background: radial-gradient(circle, rgba(167, 139, 250, 0.07), transparent 68%);
-  animation: orbFloat 17s ease-in-out infinite;
 }
-@keyframes orbFloat {
-  0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
-  50% { transform: translateX(-50%) translateY(14px) scale(1.04); }
-}
-/* 品牌地球（Kaspersky 式威胁地图·克制冷调版）：放大到整页宽的巨球，
-   只在 hero 底部露出顶部球冠，暗色细线条为主、低调不抢标题 */
+/* 球冠带：hero 底部露出的 ThreatGlobe canvas 区域 */
 .globe-viewport {
   position: absolute;
   bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
   z-index: 0;
-  width: min(1280px, 220vw);
-  height: 230px;
-  overflow: hidden;
-  cursor: pointer;
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 58%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 0%, #000 58%, transparent 100%);
+  height: 250px;
+  pointer-events: none;
 }
-.globe-inner {
-  width: 100%;
-  transform: translateY(-4.5%);
-}
-.globe-svg {
-  width: 100%;
-  height: auto;
-  display: block;
-  overflow: visible;
-}
-.globe-rim {
-  fill: rgba(8, 13, 25, 0.7);
-  stroke: rgba(148, 197, 255, 0.34);
-  stroke-width: 1;
-}
-.globe-meridian,
-.globe-parallel {
-  stroke: rgba(148, 197, 255, 0.2);
-  stroke-width: 0.8;
-}
-.globe-rim-arc {
-  fill: none;
-  stroke: rgba(148, 197, 255, 0.28);
-  stroke-width: 1;
-}
-/* 地表信号点：纯填充、无滤镜（避免每帧重绘滤镜造成的卡顿），低调闪烁 */
-.globe-dot {
-  animation: gtwinkle 3.6s ease-in-out infinite;
-}
-.globe-dot.neutral { fill: rgba(125, 211, 252, 0.8); }
-.globe-dot.defend { fill: rgba(52, 211, 153, 0.85); }
-.globe-dot.attack { fill: rgba(251, 113, 133, 0.85); }
-@keyframes gtwinkle {
-  0%, 100% { opacity: 0.18; }
-  50% { opacity: 0.7; }
+.globe-viewport > * {
+  pointer-events: auto;
 }
 .hero-content {
   position: relative;
   z-index: 1;
+  /* 显式居中：badge / 标题 / 副标题 / 按钮全部以中轴对齐 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
 }
 .hero-badge {
   display: inline-flex;
@@ -449,7 +410,6 @@ const toolsByTier = computed(() => {
   border-radius: 20px;
   padding: 5px 16px;
   margin-bottom: 24px;
-  backdrop-filter: blur(4px);
 }
 .hero-badge-dot {
   width: 6px; height: 6px;
@@ -463,15 +423,20 @@ const toolsByTier = computed(() => {
   50% { transform: scale(0.6); opacity: 0.6; }
 }
 .hero-title {
-  position: relative;
-  display: inline-block;
   font-size: 82px;
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.1;
   margin: 0 0 10px;
 }
+/* 标题叠层：父级 block + text-align:center 居中；glow 层绝对定位覆盖在 base 上 */
+.ht-stack {
+  position: relative;
+  display: inline-block;
+}
 .ht-base {
+  position: relative;
+  z-index: 1;
   font: inherit;
   background: linear-gradient(
     178deg,
@@ -510,10 +475,11 @@ const toolsByTier = computed(() => {
   -webkit-text-fill-color: transparent;
   color: transparent;
   pointer-events: none;
-  animation: htSweep 4.6s ease-in-out infinite;
+  /* 扫光周期拉到 9s：观感不变，但每秒重绘帧数少一半 */
+  animation: htSweep 9s ease-in-out infinite;
 }
 @keyframes htSweep {
-  0% { background-position: -260px 0; }
+  0%, 12% { background-position: -260px 0; }
   55% { background-position: 620px 0; }
   100% { background-position: 1020px 0; }
 }
@@ -795,6 +761,29 @@ const toolsByTier = computed(() => {
 .factory-panel:hover .panel-go {
   opacity: 1;
 }
+/* 终端日志：贴在数据流转图下方，读数与图一一对应 */
+.factory-term {
+  margin-top: 20px;
+  cursor: default;
+}
+.factory-term :deep(.tw-body) {
+  max-height: 220px;
+}
+.term-line {
+  padding: 4px 10px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: #9cc8f2;
+  border-bottom: 1px dashed rgba(42, 64, 96, 0.3);
+}
+.term-line:last-child { border-bottom: none; }
+.term-line b { color: #e2e8f0; font-weight: 600; }
+.term-prompt { color: #34d399; }
+.term-path { color: #7dd3fc; }
+.term-cmd { color: #e2e8f0; }
+.term-ok { color: #34d399; }
+.term-dim { color: #5b6b85; }
 .flow-legend {
   display: flex;
   align-items: center;
