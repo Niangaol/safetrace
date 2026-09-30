@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -17,6 +18,10 @@ from aiintel.services.enrich.nvd import cve_body, parse_nvd
 from aiintel.services.ingest.text import truncate
 
 logger = logging.getLogger(__name__)
+
+#: CVE 编号的**完整匹配**用（不是搜索）。用于判断 `external_id` 能否当 CVE 用 ——
+#: 只做 `fullmatch`，避免把 "CVE-2024-1234-extra" 这类当合法编号。
+_CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.I)
 
 EXTRACT_SYSTEM_PROMPT = (
     "你是漏洞情报结构化助手。从给定的安全公告/漏洞描述中抽取结构化字段，"
@@ -58,9 +63,30 @@ async def _llm_extract(item: dict) -> dict:
 
 
 def _rule_extract(item: dict) -> dict:
+    """规则抽取（LLM 不可用/输出被截断时的兜底）。
+
+    ⚠️ `cve_id` 必须能从 **`external_id`** 兜底取到 —— 这是实测踩出来的：
+    `NvdCollector._to_item()` 把 CVE 编号放在 `external_id`
+    （`raw` 里**没有** `cve_id` 字段），而这里原先只读 `raw.cve_id` / `item.cve_id`
+    → NVD 来源的条目 `cve_id` **恒为 None**。
+
+    为什么以前没暴露：正常路径走 LLM 抽取，LLM 会自己认出来；
+    只有当 LLM 不可用或输出被 `max_tokens` 截断时才会落到这条规则路径 ——
+    而本机实测 LLM 抽取正好一直被截断（思维 token 占满 800），
+    于是**所有真实 NVD 条目都丢了 CVE 编号**。
+
+    `external_id` 只在**形如 CVE 编号**时才采用：其它源（RSS、arXiv）的
+    external_id 是普通标识，当成 CVE 会把脏数据写进底座。
+    """
+
     raw = item.get("raw") or {}
+    cve_id = raw.get("cve_id") or item.get("cve_id")
+    if not cve_id:
+        candidate = str(item.get("external_id") or "").strip()
+        if _CVE_ID_RE.fullmatch(candidate):
+            cve_id = candidate
     return {
-        "cve_id": raw.get("cve_id") or item.get("cve_id"),
+        "cve_id": cve_id,
         "severity": (raw.get("severity") or item.get("severity") or "unknown").lower(),
         "cvss_vector": item.get("cvss_vector") or raw.get("cvss_vector"),
         "cwe": item.get("cwe") or raw.get("cwe") or [],

@@ -111,12 +111,29 @@ class BaseCollector:
         return resp.text
 
     def watermark(self) -> dt.datetime | None:
+        """上次同步水位线。**保证返回带时区的时间**（naive 一律按 UTC 补上）。
+
+        ⚠️ 这个补时区不是可选的：SQLite（以及部分驱动）读回
+        `DateTime(timezone=True)` 列时会**丢掉 tzinfo**，于是水位线变成 naive。
+        而下游 `NvdCollector._page_url()` 会做 `now - start`（`now` 是 aware），
+        naive 减 aware 直接抛
+        `TypeError: can't subtract offset-naive and offset-aware datetimes`
+        —— 实测**增量采集整条链路因此失败**（`fetch('incremental')` 报这个错，
+        `fetch('full')` 正常，所以只在增量模式下暴露）。
+
+        时区语义：库里存的就是 UTC（写入时是 aware UTC），所以补 `dt.UTC` 是正确的，
+        不是"猜一个时区"。
+        """
+
         from aiintel.db.base import get_sessionmaker
         from aiintel.db.models import SyncWatermark
 
         with get_sessionmaker()() as session:
             row = session.get(SyncWatermark, self.name)
-            return row.last_published_at if row else None
+            if row is None or row.last_published_at is None:
+                return None
+            value = row.last_published_at
+            return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
 
     def save_watermark(
         self,
