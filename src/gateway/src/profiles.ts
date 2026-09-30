@@ -18,8 +18,16 @@ export interface ModelProfile {
   max_concurrency: number;
   timeout_ms: number;
   fallback_chain: string[];
+  /** C-05：该角色默认数据域；缺省 public。调用方可在请求里显式指定。 */
+  data_domain?: DataDomain;
   capability_flags: Record<string, unknown>;
 }
+
+/** C-05：provider 信任边界。cloud=外部云 API；local=本机自建；cache=确定性占位。 */
+export type TrustBoundary = "cloud" | "local" | "cache";
+
+/** C-05：数据域。private 数据禁止流入 cloud provider（A-03 硬拒）。 */
+export type DataDomain = "public" | "private";
 
 export interface ProviderDef {
   type: ProviderType;
@@ -27,6 +35,8 @@ export interface ProviderDef {
   base_url_default?: string;
   api_key_env?: string;
   capability_flags?: Record<string, unknown>;
+  /** C-05：缺省按 type 推断（openai_compat→cloud，cache→cache）；显式声明优先。 */
+  trust_boundary?: TrustBoundary;
 }
 
 export interface ModelsConfig {
@@ -62,6 +72,7 @@ export function loadModelsConfig(path = resolve(process.env.MODELS_CONFIG_PATH ?
       base_url_default: body.match(/base_url_default:\s*(\S+)/)?.[1],
       api_key_env: body.match(/api_key_env:\s*(\S+)/)?.[1],
       capability_flags: parseInlineFlags(body),
+      trust_boundary: parseTrustBoundary(body, type as ProviderType),
     };
   }
 
@@ -82,10 +93,21 @@ export function loadModelsConfig(path = resolve(process.env.MODELS_CONFIG_PATH ?
       timeout_ms: Number(body.match(/timeout_ms:\s*(\d+)/)?.[1] ?? 30000),
       fallback_chain: parseChain(body) ?? ["cache", "template"],
       capability_flags: parseInlineFlags(body),
+      data_domain: parseDataDomain(body),
     };
   }
 
   return { version, providers, default_fallback_chain, roles };
+}
+
+function parseTrustBoundary(body: string, type: ProviderType): TrustBoundary {
+  const raw = body.match(/trust_boundary:\s*(\S+)/)?.[1];
+  if (raw === "cloud" || raw === "local" || raw === "cache") return raw;
+  return type === "cache" ? "cache" : "cloud";
+}
+
+function parseDataDomain(body: string): DataDomain {
+  return body.match(/data_domain:\s*private/) ? "private" : "public";
 }
 
 function parseChain(body: string): string[] | undefined {

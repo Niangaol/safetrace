@@ -6,7 +6,7 @@
 import { degrade, nowIso, sha256Json } from "@safetrace/shared";
 import type { EventBus, FallbackEvent, LineageArtifactRef } from "@safetrace/shared";
 import { CircuitBreaker, type CircuitState } from "./circuit.js";
-import { loadModelsConfig, type ModelProfile, type ModelsConfig, type RoleName } from "./profiles.js";
+import { loadModelsConfig, type DataDomain, type ModelProfile, type ModelsConfig, type RoleName } from "./profiles.js";
 import { Semaphore, TokenBucket } from "./limiter.js";
 import { cacheChat, hashEmbedding, hashRerank } from "./providers/cache.js";
 import { compatChat, compatEmbed, compatRerankUnsupported, OpenAiCompatError, resolveConfig } from "./providers/openai-compat.js";
@@ -124,11 +124,12 @@ export class ModelGateway {
     return this.usage.totals();
   }
 
-  async chat(role: RoleName, messages: ChatMessage[], params: ChatParams = {}, traceId = "tr_ad-hoc"): Promise<LlmReply> {
+  async chat(role: RoleName, messages: ChatMessage[], params: ChatParams = {}, traceId = "tr_ad-hoc", dataDomain?: DataDomain): Promise<LlmReply> {
     const rt = this.mustRole(role);
     await rt.bucket.take(1);
     const release = await rt.semaphore.acquire();
     const t0 = Date.now();
+    const requestedDomain = dataDomain ?? rt.profile.data_domain ?? "public";
     try {
       return await this.withFallback<LlmReply>(role, "chat", async (providerName, modelId) => {
         const key = role + "|" + providerName + "|" + modelId + "|" + normalizePrompt(messages);
@@ -139,17 +140,18 @@ export class ModelGateway {
         const out = await this.callChat(providerName, modelId, rt, messages, params);
         this.cache.set(key, out);
         return out;
-      }, traceId, [{ kind: "ChatMessages", id: traceId, sha256: sha256Json({ messages, params }) }]);
+      }, traceId, [{ kind: "ChatMessages", id: traceId, sha256: sha256Json({ messages, params }) }], requestedDomain);
     } finally {
       release();
     }
   }
 
-  async embed(role: RoleName, texts: string[], traceId = "tr_ad-hoc"): Promise<Embedding> {
+  async embed(role: RoleName, texts: string[], traceId = "tr_ad-hoc", dataDomain?: DataDomain): Promise<Embedding> {
     const rt = this.mustRole(role);
     await rt.bucket.take(1);
     const release = await rt.semaphore.acquire();
     const t0 = Date.now();
+    const requestedDomain = dataDomain ?? rt.profile.data_domain ?? "public";
     const rawDim = rt.profile.capability_flags.dim;
     const expectedDim = typeof rawDim === "number" && Number.isInteger(rawDim) && rawDim > 0 ? rawDim : undefined;
     try {
@@ -166,7 +168,7 @@ export class ModelGateway {
         const vectors = await compatEmbed(cfg, texts);
         assertEmbeddingVectors(vectors, texts.length, expectedDim);
         return { vectors, model_id: modelId, model_version: rt.profile.model_version, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
-      }, traceId, [{ kind: "EmbeddingBatch", id: traceId, sha256: sha256Json(texts) }]);
+      }, traceId, [{ kind: "EmbeddingBatch", id: traceId, sha256: sha256Json(texts) }], requestedDomain);
     } finally {
       release();
     }
@@ -226,6 +228,7 @@ export class ModelGateway {
     fn: (providerName: string, modelId: string) => Promise<T>,
     traceId: string,
     inputRefs: LineageArtifactRef[],
+    requestedDomain: DataDomain = "public",
   ): Promise<T> {
     const rt = this.mustRole(role);
     const chain = this.opts.forceProvider
@@ -268,6 +271,34 @@ export class ModelGateway {
       const isPrimary = i === 0;
       const br = this.breakerFor(role, providerName);
       const modelId = providerName === rt.profile.provider ? rt.profile.model_id : providerName + "-fallback";
+      // C-05 数据隔离闸门：private 数据禁止流向 cloud provider。硬拒（非 warning），
+      // 不降级改投云端，只逐级尝试 local/cache；全链无 local provider 时显式失败。
+      if (requestedDomain === "private") {
+        const boundary = this.cfg.providers[providerName]?.trust_boundary;
+        if (boundary === "cloud") {
+          await degrade({
+            layer: "L3",
+            trigger: "data_domain=private 遇到 trust_boundary=cloud provider: " + providerName,
+            degradedOf: "isolation:private->cloud",
+            traceId,
+            label: "数据隔离闸门：私有数据不得送云端模型，已拒绝该通道",
+            recoveryHint: "改用 trust_boundary=local 的 provider，或把数据域改为 public",
+            emit: async (event) => { await this.emitFallback(event); },
+          });
+          await this.opts.bus?.recordLineage({
+            trace_id: traceId,
+            parent_lineage_ids: parentLineageIds,
+            stage: "mg1.isolation_gate",
+            operation_version: "isolation." + call + ".v1",
+            status: "rejected",
+            input_refs: inputRefs,
+            execution: { provider: providerName, model_id: modelId, config_sha256: sha256Json({ role, call, provider: providerName, requested_domain: requestedDomain, boundary }) },
+            decision: { reason: "private data must not reach cloud provider", fallback_to: ordered[i + 1] ?? "cache" },
+            error: "isolation gate rejected cloud channel for private data",
+          });
+          continue;
+        }
+      }
       const startedAt = nowIso();
       if (!br.allow()) {
         lastError = new Error("provider " + providerName + " 熔断中");

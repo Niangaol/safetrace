@@ -8,23 +8,28 @@ version: 1
 providers:
   cache:
     type: cache            # 确定性假模型：演示与离线开发用，输出可复现
+    trust_boundary: cache
   deepseek:
     type: openai_compat
+    trust_boundary: cloud
     base_url_env: DEEPSEEK_BASE_URL
     base_url_default: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY
   glm:
     type: openai_compat
+    trust_boundary: cloud
     base_url_env: GLM_BASE_URL
     base_url_default: https://open.bigmodel.cn/api/paas/v4
     api_key_env: GLM_API_KEY
   vllm:
     type: openai_compat
+    trust_boundary: local
     base_url_env: VLLM_BASE_URL
     base_url_default: http://127.0.0.1:8000/v1
     api_key_env: VLLM_API_KEY
   ollama:
     type: openai_compat
+    trust_boundary: local
     base_url_env: OLLAMA_BASE_URL
     base_url_default: http://127.0.0.1:11434/v1
     api_key_env: OLLAMA_API_KEY
@@ -36,6 +41,7 @@ default_fallback_chain: [deepseek, vllm, cache, template]
 roles:
   planner:
     provider: cache
+    data_domain: public
     model_id: cache-planner
     model_version: v0
     max_rpm: 600
@@ -47,6 +53,7 @@ roles:
 
   answerer:
     provider: cache
+    data_domain: public
     model_id: cache-answerer
     model_version: v0
     max_rpm: 600
@@ -58,6 +65,7 @@ roles:
 
   embedder:
     provider: cache
+    data_domain: public
     model_id: hash-256        # cache 占位；语义检索需 provider:vllm + 服务实际 model_id
     # 例如 BGE-M3：model_id 与 vLLM 注册名一致，capability_flags.dim 改为模型实测维度（常见 1024）；Q2 会拒绝 cache 降级向量
     model_version: v0
@@ -69,6 +77,7 @@ roles:
 
   reranker:
     provider: cache
+    data_domain: public
     model_id: cache-reranker
     model_version: v0
     max_rpm: 600
@@ -78,6 +87,7 @@ roles:
 
   decision:                 # D4：Y5分级/Q1路由/Q3充分性 的结构化判断
     provider: cache
+    data_domain: private
     model_id: rule-fallback-v0   # P0 为规则通道；Jev 通道留 decided_by 枚举位
     model_version: v0
     max_rpm: 1200

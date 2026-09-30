@@ -53,6 +53,7 @@ paths:
                     temperature: { type: number }
                     max_tokens: { type: integer }
                 provider_hint: { type: string, description: 可选强制 provider（演练用） }
+                data_domain: { type: string, enum: [public, private], description: 调用方数据域声明；private 时禁止流向 trust_boundary=cloud 的 provider（缺省按角色配置） }
                 trace_id: { type: string }
       responses:
         '200':
@@ -86,6 +87,7 @@ paths:
               properties:
                 role: { type: string }
                 texts: { type: array, items: { type: string } }
+                data_domain: { type: string, enum: [public, private], description: 调用方数据域声明；private 时禁止流向 trust_boundary=cloud 的 provider（缺省按角色配置） }
                 trace_id: { type: string }
       responses:
         '200':

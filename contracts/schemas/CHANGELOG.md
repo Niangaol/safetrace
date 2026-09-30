@@ -3,6 +3,12 @@
 > 纪律（docs/GITHUB-FLOW.md 第五节）：只允许「新字段追加 + 旧字段标 deprecated」；
 > 禁止改语义、改枚举值含义、删字段。每次契约改动必须在此登记，并在 PR 中三线 sign-off。
 
+## v1.1.4（2026-09-30，D6 冻结前增量；C-05）
+
+| 契约/配置 | 生产者 → 消费者 | 变更与兼容性 |
+|---|---|---|
+| 模型清单 + openapi 请求体（C-05，非 schemas/ 目录，登记备查） | MG1 调用方 → MG1 | `config/models.yml` 的 provider 追加可声明 `trust_boundary`(cloud/local/cache)、role 追加 `data_domain`(public/private)；openapi `/v1/chat/complete` 与 `/v1/embed` 请求体追加可选 `data_domain`。均为**新增可选字段**，缺省向后兼容（trust_boundary 按 provider type 推断、data_domain 缺省 public）。隔离闸门行为：`data_domain=private` 遇到 `trust_boundary=cloud` 的 provider 时**硬拒**（非 warning）并登记 FallbackEvent（degraded_of=`isolation:private->cloud`）与 lineage，不降级改投云端；仅逐级尝试 local/cache，全链无 local provider 时显式失败。数据隔离的完整实现（private 标记扫描、全链无 local 的显式失败路径）归 A-03。 |
+
 ## v1.1.3（2026-09-30，D6 冻结前增量；C-04）
 
 | 契约 | 生产者 → 消费者 | 变更与兼容性 |

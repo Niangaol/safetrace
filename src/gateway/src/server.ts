@@ -45,13 +45,15 @@ export function createGatewayServer(opts: ServerOptions = {}) {
         const messages = (body.messages ?? []) as ChatMessage[];
         const params = (body.params ?? {}) as ChatParams;
         const traceId = String(body.trace_id ?? nextId("tr"));
-        const reply = await gw.chat(role as never, messages, params, traceId);
+        const dataDomain = body.data_domain === "private" ? "private" : body.data_domain === "public" ? "public" : undefined;
+        const reply = await gw.chat(role as never, messages, params, traceId, dataDomain);
         sendJson(res, 200, reply);
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/embed") {
         const body = await readJson(req);
-        const emb = await gw.embed(String(body.role ?? "") as never, (body.texts ?? []) as string[], String(body.trace_id ?? nextId("tr")));
+        const dataDomain = body.data_domain === "private" ? "private" : body.data_domain === "public" ? "public" : undefined;
+        const emb = await gw.embed(String(body.role ?? "") as never, (body.texts ?? []) as string[], String(body.trace_id ?? nextId("tr")), dataDomain);
         sendJson(res, 200, emb);
         return;
       }
