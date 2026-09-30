@@ -16,6 +16,8 @@ import { fetchKev } from "./sources/kev.js";
 import { fetchNvd } from "./sources/nvd.js";
 import { fetchOsv } from "./sources/osv.js";
 import { fetchCveOrg } from "./sources/cveorg.js";
+import { fetchUsn } from "./sources/usn.js";
+import { parseUsn } from "./adapters/usn.js";
 import { dedupeAll } from "./dedupe.js";
 import { assessQualityVerdict } from "./dq1.js";
 import type { FetchOpts, ParseResult } from "./common.js";
@@ -27,6 +29,8 @@ export interface RunIngestOnceOpts {
   offline?: boolean;
   /** 只跑指定源（source_id 列表）；缺省为全部已就绪源。 */
   sourceIds?: string[];
+  /** 单轮抓取条目上限，透传给各源采集器（未实现的源忽略）。 */
+  limit?: number;
 }
 
 export interface IngestRunResult {
@@ -59,6 +63,7 @@ const SOURCE_RUNNERS: SourceRunner[] = [
   { id: "nvd_cve", run: (o) => fetchNvd(o), parse: parseNvd },
   { id: "osv", run: (o) => fetchOsv(o), parse: parseOsv },
   { id: "cve_org", run: (o) => fetchCveOrg(o), parse: parseCveOrg },
+  { id: "ubuntu_usn", run: (o) => fetchUsn(o), parse: parseUsn },
 ];
 
 export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunResult> {
@@ -78,6 +83,7 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
     const raw = await runner.run({
       offline: opts.offline,
       traceId,
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
       emit: (event) => {
         sourceEvents.push(event);
       },
