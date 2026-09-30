@@ -123,7 +123,11 @@ async def cvss_and_impact(vuln: dict[str, Any], trace_id: str | None = None) -> 
             },
         ],
         task="enrich",
-        max_tokens=700,
+        # ⚠️ 700 偏低：`enrich` 属于 `THINKING_TASKS`，思维**计入 completion_tokens**，
+        # 实测该档思维可达 1500+。预算不足时正文为空，`judged` 为空 → 静默降级到
+        # 规则生成的通用影响说明（不报错，只是 LLM 那一路从不生效）。
+        # 与 `qa.answer` 的 3000 对齐：这里输入更长（含描述 2000 字）。
+        max_tokens=3000,
         node="enrich.cvss",
         agent="EnrichAgent",
     )

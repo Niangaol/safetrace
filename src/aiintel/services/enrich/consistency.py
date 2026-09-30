@@ -348,7 +348,13 @@ async def consistency_check(
                 },
             ],
             task="reason",
-            max_tokens=200,
+            # ⚠️ 200 是**错的**：`reason` 属于 `THINKING_TASKS`，会开思维且思维
+            # **计入 completion_tokens**。实测同一模型在 `reason` 档思维可达
+            # **1591** token，所以 200 预算会被思维吃光 → 正文为空 →
+            # 走到下面的 `degraded_to="rule"` 分支。后果是**静默**的：
+            # 不报错，只是"冲突理由永远是模板句"，LLM 路径实际上从不生效。
+            # 理由本身要求"不超过 60 字"，所以给足思维余量即可。
+            max_tokens=1500,
             node="enrich.consistency",
             agent="EnrichAgent",
         )
