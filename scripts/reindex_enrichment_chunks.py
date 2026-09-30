@@ -42,6 +42,11 @@ async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--batch", type=int, default=50)
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help='强制重建**所有**有富化的漏洞（不只是"完全没有切片"的）',
+    )
     args = ap.parse_args()
 
     from sqlalchemy import text
@@ -50,19 +55,29 @@ async def main() -> int:
     from aiintel.services.knowledge.indexer import enrichment_chunk_text, index_owner
 
     with get_sessionmaker()() as s:
-        # 缺 enrichment 切片的漏洞（有富化 + 有 evidence）
+        # 默认只挑"完全没有 enrichment 切片"的漏洞。
+        #
+        # ⚠️ 但**逐段 replace 的 bug**（见下）会让一个漏洞只剩**最后 1 维**的切片
+        # —— 它"有切片"所以不会被这条 SQL 选中，于是 bug 修好之后旧数据仍是残的。
+        # 这种情况要用 `--all` 强制重建。
+        cond = (
+            "1=1"
+            if args.all
+            else "not exists (select 1 from chunk c "
+            "where c.owner_type='enrichment' and c.owner_id = v.cve_id)"
+        )
         rows = s.execute(
             text(
                 "select distinct v.id, v.cve_id, v.title "
                 "from enrichment e join vuln v on v.id = e.vuln_id "
                 "where e.evidence is not null and e.evidence != '[]' "
-                "  and not exists (select 1 from chunk c "
-                "                  where c.owner_type='enrichment' and c.owner_id = v.cve_id) "
+                f"  and {cond} "
                 "order by v.cve_id"
             )
         ).all()
 
-    print(f"  有富化但缺 enrichment 切片的漏洞: {len(rows)} 条")
+    label = "所有有富化的漏洞（--all）" if args.all else "有富化但完全缺 enrichment 切片的漏洞"
+    print(f"  {label}: {len(rows)} 条")
     if args.dry_run:
         for _vid, cve, title in rows[:12]:
             print(f"    {cve:18} {str(title)[:60]}")
@@ -90,6 +105,7 @@ async def main() -> int:
                     {"vid": vid},
                 ).all()
                 total = 0
+                next_no = 0
                 for dim, value, evidence in items:
                     if evidence is None or evidence == "[]":
                         continue
@@ -105,9 +121,22 @@ async def main() -> int:
                             ev = json.loads(evidence)
                         except ValueError:
                             ev = []
-                    text_blob = enrichment_chunk_text(str(dim or ""), val, ev)
+                    text_blob = enrichment_chunk_text(str(dim or ""), val, ev, identity=cve)
                     if text_blob:
-                        total += await index_owner(s, "enrichment", cve, title or "", text_blob)
+                        # ⚠️ 同一 owner 写多段：首段 replace=True 清旧数据，
+                        # 之后 replace=False + 递增 offset。
+                        # 逐段都用 replace=True 会互相删（实测：7 维只活下来 1 维）。
+                        written = await index_owner(
+                            s,
+                            "enrichment",
+                            cve,
+                            title or "",
+                            text_blob,
+                            replace=(next_no == 0),
+                            chunk_no_offset=next_no,
+                        )
+                        next_no += written
+                        total += written
                 s.commit()
             chunks += total
             done += 1

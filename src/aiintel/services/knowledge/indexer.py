@@ -110,8 +110,17 @@ def embedding_col_type(session) -> str | None:
     ).scalar()
 
 
-async def index_owner(session, owner_type: str, owner_id: str, title: str, content: str) -> int:
-    """写入分块 + 全文索引 + 向量（幂等：先删后写）。
+async def index_owner(
+    session,
+    owner_type: str,
+    owner_id: str,
+    title: str,
+    content: str,
+    *,
+    replace: bool = True,
+    chunk_no_offset: int = 0,
+) -> int:
+    """写入分块 + 全文索引 + 向量（默认幂等：先删后写）。
 
     `embedding` / `tsv` 两列**按库能力写入**：SQLite 没有向量列、也没有
     `to_tsvector` 函数，缺列时自动退化，不阻断主链路（降级语义见 `chunk_columns`）。
@@ -120,6 +129,16 @@ async def index_owner(session, owner_type: str, owner_id: str, title: str, conte
     （`sqlite3.OperationalError` 之后外层事务在退出时回滚，
     连带丢掉已 flush 的结构化数据）。所以这里做的是"能力探测 + 体面跳过"，
     而不是"试一下、失败再回滚"。
+
+    ## `replace=False` + `chunk_no_offset`：同一 owner 追加多段
+
+    同一 owner 需要写**多段内容**时（如 7 个富化维度各成一段），调用方必须：
+    - 第一段 `replace=True`（清掉旧数据）；
+    - 之后每段 `replace=False`，并传入递增的 `chunk_no_offset`。
+
+    两个参数都必需：只用 `replace=False` 会让每段的 `chunk_no` 都从 0 开始，
+    产生重复编号（`chunk_key` 是 `owner_type::owner_id::chunk_no`，
+    重复编号会让切片互相覆盖/错位）。
     """
 
     columns = chunk_columns(session)
@@ -151,12 +170,18 @@ async def index_owner(session, owner_type: str, owner_id: str, title: str, conte
             has_embedding = False
     has_tsv = "tsv" in columns
 
-    session.query(Chunk).filter_by(owner_type=owner_type, owner_id=owner_id).delete()
+    # ⚠️ `replace=False` 是给**同一 owner 写多段内容**用的（如 7 个富化维度各成一段）。
+    # 默认 True 保持原幂等语义；但调用方若循环写入同一 owner，
+    # 必须只在**第一次** replace=True、之后 replace=False ——
+    # 否则每一轮都会删掉上一轮，最后只剩最后一个维度。
+    # （实测踩过：7 维富化只活下来 1 维，而且是最后一个。）
+    if replace:
+        session.query(Chunk).filter_by(owner_type=owner_type, owner_id=owner_id).delete()
     for idx, part in enumerate(parts):
         row = Chunk(
             owner_type=owner_type,
             owner_id=owner_id,
-            chunk_no=idx,
+            chunk_no=chunk_no_offset + idx,
             content=part,
         )
         if has_embedding:
@@ -272,14 +297,32 @@ def _persist_enrichments(session, row: Vuln, enrichments: list[dict]) -> None:
         )
 
 
-def enrichment_chunk_text(dimension: str, value: dict[str, Any], evidence: list[dict]) -> str:
+def enrichment_chunk_text(
+    dimension: str,
+    value: dict[str, Any],
+    evidence: list[dict],
+    *,
+    identity: str = "",
+) -> str:
     """把富化结论压成可检索文本。
 
     这一步是"富化 → 问答"的关键：没有它，Q 线问"这个漏洞怎么修"召回不到 F5 的结论。
     只索引**结论本身**，不索引内部溯源字段（那属于证据链，走 `/evidence` 接口）。
+
+    ## `identity`：必须带上漏洞身份（CVE 编号）
+
+    ⚠️ 早期版本**不带**任何身份信息，产出的是纯结论文本（"修复建议：升级到 X"）。
+    后果实测：问 `CVE-2026-xxxxx 怎么修复？` 时，关键词召回按 **CVE 编号**匹配，
+    而富化切片里没有这个编号 → **该切片段永远进不了候选集**，
+    于是"富化结论有没有被问答用上"实际答案是"没有"。
+
+    带上身份后，按 CVE 编号提问也能召回到对应漏洞的富化结论。
+    身份放**段首**：切片有长度上限，放末尾可能被截掉。
     """
 
     lines: list[str] = []
+    if identity:
+        lines.append(identity)
     if dimension == "fix":
         upgrade = value.get("upgrade") or {}
         if upgrade.get("target_version"):
@@ -455,14 +498,28 @@ async def persist_vuln(vuln: dict[str, Any], enrichments: list[dict]) -> str:
         # 所以换成 CVE 编号不会破坏任何查询路径。
         owner_id = row.cve_id or row.id
         try:
+            # ⚠️ 正文里**必须带上 CVE 编号**：`index_owner` 拼的是 `title\n\ncontent`，
+            # 而 title 常常是英文原始描述（NVD 的 title 就是 description 截断），
+            # 里面**没有编号**。于是按编号提问（`CVE-xxxx 怎么修复？`）时，
+            # 关键词召回匹配不上该漏洞自己的切片 —— 实测"问某个 CVE 却检索不到它自己"。
+            vuln_body = f"{row.description}\n{row.summary or ''}"
+            if row.cve_id and row.cve_id not in f"{row.title or ''}{vuln_body}":
+                vuln_body = f"{row.cve_id} {row.title or ''}\n{vuln_body}"
             await index_owner(
                 session,
                 "vuln",
                 owner_id,
                 row.title or "",
-                f"{row.description}\n{row.summary or ''}",
+                vuln_body,
             )
             # 富化结论单独成 chunk：否则 Q 线问"这个漏洞怎么修"召回不到 F5 的结论
+            #
+            # ⚠️ 这里**必须**第一次 replace=True、之后 replace=False + 递增 offset：
+            # `index_owner` 默认"先删后写"（幂等），而本循环对**每个维度**都调一次 ——
+            # 逐次 replace=True 会把上一维度的切片删掉，**7 维只剩最后 1 维存活**。
+            # 实测踩到：库里 enrichment 切片内容只剩 `ai_risk`，问"怎么修"永远召回不到 fix。
+            enrich_no = 0
+            first = True
             for item in enrichments:
                 if item.get("error") or not item.get("evidence"):
                     continue
@@ -470,9 +527,25 @@ async def persist_vuln(vuln: dict[str, Any], enrichments: list[dict]) -> str:
                     str(item.get("dimension") or ""),
                     item.get("value") or {},
                     item.get("evidence") or [],
+                    identity=owner_id,
                 )
-                if text:
-                    await index_owner(session, "enrichment", owner_id, row.title or "", text)
+                if not text:
+                    continue
+                written = await index_owner(
+                    session,
+                    "enrichment",
+                    owner_id,
+                    row.title or "",
+                    text,
+                    replace=first,
+                    chunk_no_offset=enrich_no,
+                )
+                enrich_no += written
+                first = False
+            if first:
+                # 一个维度都没写成（全被跳过）时，仍需清掉该 owner 的旧切片，
+                # 否则上一轮的陈旧结论会留在检索空间里。
+                session.query(Chunk).filter_by(owner_type="enrichment", owner_id=owner_id).delete()
         except Exception as exc:  # noqa: BLE001 - 索引失败不阻断结构化落库
             indexed = False
             logger.warning("分块写入失败，该漏洞检索索引降级（结构化与富化结论仍已落库）: %s", exc)

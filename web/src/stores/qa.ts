@@ -78,19 +78,37 @@ export const useQaStore = defineStore('qa', () => {
    */
   const staleWarning = ref<{ threshold_days: number; note: string } | null>(null)
   /**
-   * C-04 注入筛查状态。`screened` 恒为 false（本仓无检测器），
-   * 必须显示，否则会被读成"已筛查干净"。
+   * C-04 注入筛查状态（A-04 已落地：screened=true 表示本轮做过规则筛查，检出危险时也是 true；
+   * 仅无引用时为 false）。字段原样保留，不补默认值——会把"未知"伪装成"没问题"。
    */
-  const injectionGuard = ref<{ screened: boolean; untrusted_evidence: number; note: string } | null>(
-    null,
-  )
+  const injectionGuard = ref<{
+    screened: boolean
+    max_score?: number
+    flags?: string[]
+    untrusted_evidence: number
+    note: string
+  } | null>(null)
   const error = ref('')
   const history = ref<{ question: string; answer: string }[]>([])
   const lastCost = ref<number | null>(null)
   const meta = ref<RunMeta | null>(null)
   /** 最近一次提问，供演示页回显 */
   const question = ref('')
+  /**
+   * C-05 数据域（public/private）：后端 `/qa/chat` 的 `data_domain` 字段。
+   * `private` 只会检索本地边界/内部数据——隔离与出网由后端 C-05/A-03 强制，
+   * 前端只是**把选择如实发过去**，不做任何"保证私有"的承诺（红线：禁止静默兜底）。
+   * 默认 public（与后端缺省一致）；跟随 `sessionStorage`，刷新后保留用户上一次选择。
+   */
+  const domain = ref<'public' | 'private'>(
+    sessionStorage.getItem('qa_domain') === 'private' ? 'private' : 'public',
+  )
   let abort: (() => void) | null = null
+
+  function setDomain(d: 'public' | 'private', persist = true) {
+    domain.value = d
+    if (persist) sessionStorage.setItem('qa_domain', d)
+  }
 
   function reset() {
     answer.value = ''
@@ -111,13 +129,14 @@ export const useQaStore = defineStore('qa', () => {
     meta.value = null
   }
 
-  function ask(q: string) {
+  function ask(q: string, dataDomain?: 'public' | 'private') {
     stop()
     reset()
     question.value = q
     const asked = q
+    if (dataDomain) setDomain(dataDomain)
     abort = streamChat(
-      { question: q, stream: true },
+      { question: q, stream: true, data_domain: domain.value },
       (event) => {
         // 收到任何一帧就说明请求已被受理：立刻结束"纯空白等待"
         started.value = true
@@ -272,6 +291,8 @@ export const useQaStore = defineStore('qa', () => {
     lastCost,
     meta,
     question,
+    domain,
+    setDomain,
     metrics,
     ask,
     stop,

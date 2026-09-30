@@ -237,6 +237,8 @@ onMounted(async () => {
     // C-04：样例也带上时效与注入筛查状态，否则验收时看不到这两条提示
     qa.staleWarning = SAMPLE_STALE_WARNING
     qa.injectionGuard = SAMPLE_INJECTION_GUARD
+    // 样例内容是公开域一次真实问答的产出，如实显示"公开域"（不覆盖用户已选的数据域）
+    qa.setDomain('public', false)
     return
   }
 
@@ -266,6 +268,25 @@ onMounted(async () => {
       {{ qa.thinking ? '生成中…' : '提问' }}
     </button>
     <button class="secondary" :disabled="!qa.thinking" @click="qa.stop()">中断</button>
+    <!-- C-05 数据域：public/private 由后端强制隔离与出网，前端只如实把选择发过去。
+         私有态按钮区的 title 说清语义，避免"选了私有=数据绝对安全"的误解。 -->
+    <div class="domain-switch" :class="{ private: qa.domain === 'private' }" role="group" aria-label="数据域">
+      <button
+        v-for="d in (['public', 'private'] as const)"
+        :key="d"
+        type="button"
+        :class="{ active: qa.domain === d }"
+        :disabled="isSample"
+        :title="
+          d === 'public'
+            ? '公开域：检索全部公开情报源（默认）'
+            : '私有域：仅检索本地边界/内部数据；后端按 C-05 隔离、出网策略拒绝（A-03），前端不做安全承诺'
+        "
+        @click="qa.setDomain(d)"
+      >
+        {{ d === 'public' ? '公开域' : '私有域' }}
+      </button>
+    </div>
   </div>
 
   <div style="display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px">
@@ -330,20 +351,39 @@ onMounted(async () => {
     ，请对照下方证据判断可信度。
   </div>
   <div v-if="qa.error" class="notice error" style="margin-bottom: 14px">{{ qa.error }}</div>
+  <!-- C-05 私有域意图提示：只要本次处于 private，就常驻说明"只查本地边界"，
+       后端策略拒绝时会由上面的 qa.error 如实透出（4xx 业务错误不做 mock 回退）。 -->
+  <div v-if="qa.domain === 'private'" class="notice warn" style="margin-bottom: 14px">
+    <strong>私有域问答（仅本地边界）。</strong>
+    本轮以 <code>data_domain=private</code> 提交：只检索本地索引/内部数据，不访问外部源；
+    输出可能更稀疏，若查询超出本地可用证据会被如实说明，不会用公开数据顶替。
+  </div>
   <!-- C-04 时效提示：契约要求"过龄或未知必须显式可见"。
        stale_warning 为 null 表示证据新鲜且时效全已知——那是唯一不用提示的情况。 -->
   <div v-if="qa.staleWarning" class="notice warn" style="margin-bottom: 14px">
     {{ qa.staleWarning.note }}
   </div>
-  <!-- C-04 注入筛查状态：screened 恒为 false（本仓无检测器），必须显示出来，
-       否则用户会把"没筛查"读成"已筛查干净"。 -->
+  <!-- C-04 注入筛查状态（契约 v1.1.3；A-04 已落地，本仓有检测器）：
+       screened=true = 本轮做过规则筛查（筛出危险时也是 true，含义是"筛过"而非"干净"，
+       检出时 note 写"检出 N/total…"并给出 flags）；
+       screened=false 只在"无引用"时出现（没有输入就没有筛查动作），必须显式说"未筛查"。
+       note 结尾如实声明"不保证覆盖全部注入手法"——界面不得替后端把"没检出"读成"一定安全"。 -->
   <div
     v-if="qa.injectionGuard"
     class="notice"
-    :class="{ warn: qa.injectionGuard.untrusted_evidence > 0 }"
+    :class="{ warn: (qa.injectionGuard.flags?.length ?? 0) > 0 }"
     style="margin-bottom: 14px"
   >
-    {{ qa.injectionGuard.note }}
+    <strong>{{
+      qa.injectionGuard.screened ? '注入筛查：已执行' : '注入筛查：未执行'
+    }}</strong>
+    <span v-if="qa.injectionGuard.screened === false">（本轮无引用证据，无筛查动作）</span>
+    <template v-if="(qa.injectionGuard.flags?.length ?? 0) > 0">
+      <span class="inject-flags">
+        <span v-for="f in qa.injectionGuard.flags" :key="f" class="badge warn">{{ f }}</span>
+      </span>
+    </template>
+    <div style="margin-top: 4px">{{ qa.injectionGuard.note }}</div>
   </div>
 
   <!-- 轨迹：过程可视化（干到哪一步显示到哪一步） -->
@@ -603,6 +643,10 @@ onMounted(async () => {
         <span v-if="qa.meta.costCny === 0" class="muted" style="font-size: 11px">（cache 占位，未真实调用）</span>
       </div>
       <div><span class="label">降级</span><strong>{{ qa.meta.degraded ? '是' : '否' }}</strong></div>
+      <div>
+        <span class="label">数据域</span>
+        <strong>{{ qa.domain === 'private' ? '私有域' : '公开域' }}</strong>
+      </div>
       <div><span class="label">会话</span><code style="font-size: 11px">{{ qa.meta.sessionId }}</code></div>
     </div>
     <p v-if="qa.metrics" class="muted" style="font-size: 11px; margin: 10px 0 0">
@@ -735,6 +779,12 @@ onMounted(async () => {
 }
 
 /* [S1] 引用号：做成可点徽标，点一下把对应证据高亮并滚到可见处 */
+.inject-flags {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
 .cite-chip {
   display: inline-block;
   margin: 0 2px;
@@ -857,6 +907,40 @@ onMounted(async () => {
 }
 .meta-grid > div { display: flex; flex-direction: column; gap: 2px; }
 .meta-grid .label { font-size: 11px; }
+
+/* ── C-05 数据域切换 ───────────────────────────────────── */
+
+.domain-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(100, 116, 139, 0.08);
+}
+.domain-switch button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: calc(var(--radius-sm) - 3px);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.domain-switch button.active {
+  color: var(--text);
+  background: rgba(56, 189, 248, 0.18);
+}
+.domain-switch.private button.active {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.16);
+}
+.domain-switch button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 .notice {
   padding: 10px 14px;

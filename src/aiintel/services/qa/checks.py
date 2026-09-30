@@ -44,9 +44,14 @@ async def check_answer(
             {"role": "user", "content": f"问题：{question}\n\n证据：\n{context}\n\n回答：{answer}"},
         ],
         task="judge",
-        # 同 qa.plan：思维 token 计入 completion，500 会被推理吃满导致 content 为空
-        # （实测 reasoning_tokens=500、finish_reason=length），自检因此永远解析失败。
-        max_tokens=2500,
+        # 这个数字提过两次，每次都是"被推理吃满导致 content 为空"（静默失败）：
+        #   500  → 实测 reasoning_tokens=500、finish_reason=length；
+        #   2500 → 仍然被吃满（实测 2500 用尽、正文为空，`truncated` 告警）。
+        # 该提示要同时判断幻觉/引用编号/是否回答问题三项，输入又是"问题+全部证据+答案"，
+        # 推理量偏大。给到 4000 留出正文空间；再不够要看提示词本身（是否要求了过长输出）。
+        # 注意 `judge` 既不在 THINKING_TASKS 也不在 PRO_TASKS —— 也就是**没开思维、
+        # 走 flash 档**，但本仓模型连 flash 档也会输出推理，所以仍需留预算。
+        max_tokens=4000,
         node="qa.check",
         agent="QAAgent",
         data_domain=data_domain,

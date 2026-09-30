@@ -9,7 +9,7 @@ import logging
 import re
 from typing import Any
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, select, text
 
 from aiintel.config import get_settings
 from aiintel.db.base import get_sessionmaker
@@ -116,21 +116,68 @@ async def _keyword_recall(
 async def _fallback_recall(
     session, query: str, top_k: int, owner_type: str | None
 ) -> list[tuple[str, float]]:
-    """无全文索引时的模糊兜底：ILIKE。
+    """无全文索引时的模糊兜底：ILIKE。**按词的选择性优先**。
 
     必须先分词再 OR：直接拿整句做 ILIKE 只会在"切片内容恰好等于整个问题"时命中，
     实际等于永远检索不到。中文没有空格，按 2-gram 切；ASCII 词整体保留。
+
+    ## 为什么不能一把 `OR` 再 LIMIT（实测踩到的严重问题）
+
+    原先实现是 `WHERE content ILIKE %t1% OR ... OR %tn%` 然后 `LIMIT top_k`。
+    问题是**词与词的区分度差了几个数量级**，`OR` 把它们拉平，LIMIT 又被弱词占满：
+
+    实测查 `CVE-2026-102697`，分词得到
+    `['CVE', '2026', '102697', 'CVE-2026-102697', 'CVE-']`：
+
+    | 词 | 全库命中 |
+    | --- | --- |
+    | `2026` | **976** |
+    | `CVE` | 660 |
+    | `102697` | **2** ← 真正定位的那条 |
+
+    50 条限额被 `2026`/`CVE` 这类弱匹配占满，**精确的 `102697` 永远进不来** ——
+    于是"问某个 CVE 却检索不到这个 CVE 自己"。
+
+    ## 修法
+
+    **逐个词单独查**，按"命中数从少到多"（= 选择性从高到低）依次取，
+    精确词先占名额；同一 owner 去重。这样有限名额优先给最有信息量的词。
     """
 
     terms = query_terms(query)
     if not terms:
         return []
-    stmt = select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content).where(
-        or_(*[Chunk.content.ilike(f"%{t}%") for t in terms])
-    )
-    if owner_type:
-        stmt = stmt.where(Chunk.owner_type == owner_type)
-    return [(doc_key(r[0], r[1], r[2]), 1.0) for r in session.execute(stmt.limit(top_k)).all()]
+
+    # 先统计每个词的全库命中数（只 count，代价低），据此排序
+    counted: list[tuple[str, int]] = []
+    for term in terms:
+        count_stmt = select(func.count()).select_from(Chunk).where(Chunk.content.ilike(f"%{term}%"))
+        if owner_type:
+            count_stmt = count_stmt.where(Chunk.owner_type == owner_type)
+        n = session.execute(count_stmt).scalar() or 0
+        if n:
+            counted.append((term, n))
+    counted.sort(key=lambda kv: kv[1])  # 命中少的（更具区分度）优先
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for term, _n in counted:
+        if len(out) >= top_k:
+            break
+        stmt = select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content).where(
+            Chunk.content.ilike(f"%{term}%")
+        )
+        if owner_type:
+            stmt = stmt.where(Chunk.owner_type == owner_type)
+        for r in session.execute(stmt.limit(top_k)).all():
+            doc = doc_key(r[0], r[1], r[2])
+            if doc in seen:
+                continue
+            seen.add(doc)
+            out.append(doc)
+            if len(out) >= top_k:
+                break
+    return [(doc, 1.0) for doc in out]
 
 
 def _rrf_fuse(rankings: list[list[str]], k: int = RRF_K) -> list[str]:

@@ -89,9 +89,10 @@ export const SAMPLE_META = {
  * C-04 样例：时效提示与注入筛查状态。
  *
  * 刻意让样例**带上提示**而不是留空：契约要求
- * 「过龄或未知必须显式可见」「screened=false 必须显式出现」，
- * 样例页要能把这两条展示出来，验收时才看得到效果。
- * 数值取自一次真实问答的形状（1 条 untrusted 引用）。
+ * 「过龄或未知必须显式可见」「screened=false 必须显式出现」。
+ * 数值形态取自 A-04 落地后后端真实产出（`services/qa/freshness.py`：
+ * 有引用即真筛，screened=true，检出时附 max_score/flags；无引用才 false）。
+ * 这里特意给「检出 flag」这一档，让验收能看到 ⚠️ 红色路径与 flag 样本。
  */
 export const SAMPLE_STALE_WARNING = {
   threshold_days: 365,
@@ -101,9 +102,11 @@ export const SAMPLE_STALE_WARNING = {
 }
 
 export const SAMPLE_INJECTION_GUARD = {
-  screened: false,
+  screened: true,
+  max_score: 0.62,
+  flags: ['prompt_override'],
   untrusted_evidence: 1,
-  note: '⚠️ 未做注入筛查（screened=false）：本轮引用了 1/3 条外部文本（trust=untrusted）证据，其内容可能含误导性指令，请勿当作操作依据。',
+  note: '⚠️ 检出 1/3 条证据含注入迹象（最高分 0.62）：prompt_override；其中 1 条来自外部文本（trust=untrusted）。筛查为规则匹配，不保证覆盖全部注入手法。',
 }
 
 export const SAMPLE_TRACES: TraceStep[] = [

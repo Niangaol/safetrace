@@ -305,7 +305,13 @@ function mockStreamChat(
       ai += chunkSize
       setTimeout(streamAnswer, 30)
     } else {
-      onEvent({ event: 'done', cost_cny: mockQaResponse.cost_cny, degraded: mockQaResponse.degraded })
+      onEvent({
+        event: 'done',
+        cost_cny: mockQaResponse.cost_cny,
+        degraded: mockQaResponse.degraded,
+        stale_warning: mockQaResponse.stale_warning,
+        injection_guard: mockQaResponse.injection_guard,
+      })
     }
   }
 

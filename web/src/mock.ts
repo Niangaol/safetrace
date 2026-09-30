@@ -289,11 +289,27 @@ export const mockQaResponse = {
 
 建议立即升级 vLLM 至 0.6.2 以上版本，并在 API 网关层对请求参数做严格过滤。`,
   citations: [
-    { id: 'S1', title: 'CVE-2026-12345 详情 — NVD', url: 'https://nvd.nist.gov/vuln/detail/CVE-2026-12345', score: 0.92 },
-    { id: 'S2', title: 'vLLM Security Advisory — GitHub', url: 'https://github.com/vllm-project/vllm/security/advisories', score: 0.87 },
-    { id: 'S3', title: 'Adversarial Attacks on LLM Serving Frameworks — arXiv:2510.01234', url: 'https://arxiv.org/abs/2510.01234', score: 0.81 },
-    { id: 'S4', title: 'PoC: vLLM API Injection — GitHub', url: 'https://github.com/poc-corp/cve-2026-12345', score: 0.79 },
+    { id: 'S1', title: 'CVE-2026-12345 详情 — NVD', url: 'https://nvd.nist.gov/vuln/detail/CVE-2026-12345', score: 0.92, trust: 'trusted', published_at: '2026-09-20T08:00:00+00:00' },
+    { id: 'S2', title: 'vLLM Security Advisory — GitHub', url: 'https://github.com/vllm-project/vllm/security/advisories', score: 0.87, trust: 'trusted', published_at: '2026-09-22T09:30:00+00:00' },
+    { id: 'S3', title: 'Adversarial Attacks on LLM Serving Frameworks — arXiv:2510.01234', url: 'https://arxiv.org/abs/2510.01234', score: 0.81, trust: 'untrusted' },
+    { id: 'S4', title: 'PoC: vLLM API Injection — GitHub', url: 'https://github.com/poc-corp/cve-2026-12345', score: 0.79, trust: 'untrusted' },
   ],
   cost_cny: 0.031,
   degraded: false,
+  // C-04/A-04：mock 演示也要求与当前后端契约一致——有引用即真筛，
+  // screened=true（检出危险时也是 true，含义是"筛过"）；"未发现迹象"这档在此展示，
+  // "检出 flags"那档见 qaSample（/qa?demo=1）。
+  stale_warning: {
+    threshold_days: 365,
+    oldest_published_at: '2026-09-20T08:00:00+00:00',
+    unknown_published_at: 2,
+    note: '⚠️ 证据时效提示：2 条证据缺上游发布时间，时效未知。结论请结合最新通告核对。',
+  },
+  injection_guard: {
+    screened: true,
+    max_score: 0,
+    flags: [],
+    untrusted_evidence: 2,
+    note: '已筛查 4 条引用证据，未发现注入迹象；其中 2 条来自外部文本（trust=untrusted）。筛查为规则匹配，不保证覆盖全部注入手法。',
+  },
 }
