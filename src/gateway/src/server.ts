@@ -4,16 +4,26 @@
  * D4 的 /v1/decide 由问答线编排层接入后在此挂载（P0 预留路由位）。
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { EventBus, nextId, SqliteEventStore } from "@safetrace/shared";
+import type { EventBus as EventBusType } from "@safetrace/shared";
 import { ModelGateway } from "./index.js";
 import type { ChatMessage, ChatParams } from "./types.js";
 
 export interface ServerOptions {
   port?: number;
   gateway?: ModelGateway;
+  bus?: EventBusType;
 }
 
 export function createGatewayServer(opts: ServerOptions = {}) {
-  const gw = opts.gateway ?? new ModelGateway();
+  const ownsStore = opts.bus === undefined && opts.gateway === undefined;
+  const dbPath = resolve(process.env.SQLITE_PATH ?? "./var/safetrace.sqlite");
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const store = ownsStore ? new SqliteEventStore(dbPath) : undefined;
+  const bus = opts.bus ?? (store ? new EventBus({ store }) : undefined);
+  const gw = opts.gateway ?? new ModelGateway({ ...(bus ? { bus } : {}) });
   const port = opts.port ?? Number(process.env.PORT ?? 8317);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -34,20 +44,20 @@ export function createGatewayServer(opts: ServerOptions = {}) {
         const role = String(body.role ?? "");
         const messages = (body.messages ?? []) as ChatMessage[];
         const params = (body.params ?? {}) as ChatParams;
-        const traceId = String(body.trace_id ?? "tr_http");
+        const traceId = String(body.trace_id ?? nextId("tr"));
         const reply = await gw.chat(role as never, messages, params, traceId);
         sendJson(res, 200, reply);
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/embed") {
         const body = await readJson(req);
-        const emb = await gw.embed(String(body.role ?? "") as never, (body.texts ?? []) as string[], String(body.trace_id ?? "tr_http"));
+        const emb = await gw.embed(String(body.role ?? "") as never, (body.texts ?? []) as string[], String(body.trace_id ?? nextId("tr")));
         sendJson(res, 200, emb);
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/rerank") {
         const body = await readJson(req);
-        const ranked = await gw.rerank(String(body.role ?? "") as never, String(body.query ?? ""), (body.docs ?? []) as string[], String(body.trace_id ?? "tr_http"));
+        const ranked = await gw.rerank(String(body.role ?? "") as never, String(body.query ?? ""), (body.docs ?? []) as string[], String(body.trace_id ?? nextId("tr")));
         sendJson(res, 200, ranked);
         return;
       }
@@ -59,6 +69,7 @@ export function createGatewayServer(opts: ServerOptions = {}) {
     }
   });
 
+  if (store) server.once("close", () => store.close());
   return { server, port, listen: () => new Promise<void>((resolve) => server.listen(port, resolve)) };
 }
 

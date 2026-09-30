@@ -52,6 +52,7 @@ async function postJson(url: string, body: unknown, cfg: OpenAiCompatConfig): Pr
   try {
     const res = await fetch(url, {
       method: "POST",
+      redirect: "error",
       headers: {
         "content-type": "application/json",
         authorization: "Bearer " + cfg.apiKey,
@@ -98,9 +99,22 @@ export async function compatEmbed(cfg: OpenAiCompatConfig, texts: string[]): Pro
   }, cfg);
   const data = json?.data;
   if (!Array.isArray(data) || data.length !== texts.length) {
-    throw new OpenAiCompatError("provider embeddings 返回结构不符");
+    throw new OpenAiCompatError("provider embeddings 返回数量与输入不符");
   }
-  return data.map((d: any) => (d?.embedding ?? []) as number[]);
+  const ordered: Array<number[] | undefined> = Array.from({ length: texts.length });
+  for (const [position, row] of data.entries()) {
+    const index = Number.isInteger(row?.index) ? Number(row.index) : position;
+    if (index < 0 || index >= texts.length || ordered[index] !== undefined) {
+      throw new OpenAiCompatError("provider embeddings index 无效或重复");
+    }
+    const vector = row?.embedding;
+    if (!Array.isArray(vector) || vector.length === 0 || vector.some((value: unknown) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new OpenAiCompatError("provider embeddings 向量为空或包含非数值");
+    }
+    ordered[index] = vector as number[];
+  }
+  if (ordered.some((vector) => vector === undefined)) throw new OpenAiCompatError("provider embeddings 缺少输入项");
+  return ordered.map((vector) => vector!);
 }
 
 /** rerank 无标准 OpenAI 兼容端点：能力缺失必须显式报错。 */

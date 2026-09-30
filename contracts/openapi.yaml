@@ -206,6 +206,8 @@ components:
       required: [query_id, chunks, retrieval_ms, embedder_model_id, trace_id, schema_version]
       properties:
         query_id: { type: string }
+        # chunk 对象另含可选字段 published_at（date-time）与 trust（trusted/untrusted），
+        # 定义见 contracts/schemas/RetrievalResponse.json；缺省表示"未知"，不得按 trusted 或新鲜处理
         chunks: { type: array, items: { type: object } }
         retrieval_ms: { type: integer }
         embedder_model_id: { type: string }

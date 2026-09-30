@@ -2,7 +2,7 @@
 
 > **建立于 D2 = 2026-09-29**。本文件是唯一可执行任务清单，替代原先只存在于 `README.md` 一句话里的「D2 起任务单」。
 > 出处：`plan-bubbly-karp.md`（本目录 `docs/` 无该文件，plan 存放在队长本地计划目录）。
-> **纪律**：任务只在这里增删改；每次 PR 必须同步更新对应行状态；周五对齐会直接照本文件过，不靠口述。
+> **职责**：`TEAM-PLAN.md` 是 D3 起的唯一分工/优先级/协作口径；本文件维护细化任务、依赖、状态和验收证据。每次代码提交同步更新对应行；周五对齐会照本文件过。
 > 每行标注的「PR #N」可在 GitHub 上回溯到实际改动；无标注的表示尚未动手。
 
 ## 0. 怎么用这份台账
@@ -45,8 +45,8 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 | 第 3 阶段 证据链（D7–D18） | 7 | 5 | 0 | 0 | 2 |
 | 第 4 阶段 文档口径同步 | 13 | 12 | 0 | 1 | 0 |
 | 第 5 阶段 冻结与交件（D19–D22） | 4 | 4 | 0 | 0 | 0 |
-| 第 6 阶段 PRD v1.0 需求补齐 | 9 | 7 | 2 | 0 | 0 |
-| **合计** | **51** | **39** | **3** | **7** | **2** |
+| 第 6 阶段 PRD v1.0 需求补齐 | 10 | 7 | 3 | 0 | 0 |
+| **合计** | **52** | **39** | **4** | **7** | **2** |
 
 > 本表随 PR 更新。任何一项转 `已砍` 必须在 PR 描述里写清「保留下什么证据」。
 
@@ -69,8 +69,8 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 
 | id | 线 | 标题 | 依赖 | 状态 | 砍单层级 | 验收命令 / 证据 |
 |---|---|---|---|---|---|---|
-| C-01 | 丙 | `contracts/schemas/DecisionReply.json` 的 `decided_by` 枚举追加 `human`（四层兜底阶梯的"人工"层契约位）。同步 OpenAPI、类型、样例及 CHANGELOG v1.1.0；仅扩契约，不代表 A-02 人工兜底已实现 | — | 进行中 | 禁砍 | `contract/` PR 待三线 sign-off；`python3 scripts/validate_contracts.py` 验证人工作为有效值；待合并后转已完成 |
-| C-02 | 丙 | `RetrievalResponse.json` 的 chunk 增 `published_at` + `trust`(trusted/untrusted)。已知限制⑤的地基 + 注入防护"证据信封"的载体（`EvidenceChunk` 现无时间字段、无信任标记） | — | 待办 | 基础 | 校验器绿；`shared/types.ts` 同步；fixture 样本更新 |
+| C-01 | 丙 | `contracts/schemas/DecisionReply.json` 的 `decided_by` 枚举追加 `human`（四层兜底阶梯的"人工"层契约位）。同步 OpenAPI、类型、样例及 CHANGELOG v1.1.0；仅扩契约，不代表 A-02 人工兜底已实现 | — | **代码侧已完成，待三线 sign-off 后转已完成** | 禁砍 | 已合入 main（commit 2455623）：schema/OpenAPI/TS 镜像/`fixtures/decisionreply.human.sample.json` 齐备，`npm run validate:contracts` 校验 human 为有效值；新增 `src/shared/test/contracts-c01.test.ts` 3 条断言（枚举未回退、样例通过且未知通道被拒、CHANGELOG 影响面已登记），全量 204 项测试与 typecheck 通过。已用反向验证确认测试非空转（把 `human` 改为他值 → 2 条断言失败）。**剩余：三线 sign-off**，队长/甲/乙各确认一次后把状态改为已完成 |
+| C-02 | 丙 | `RetrievalResponse.json` 的 chunk 增 `published_at` + `trust`(trusted/untrusted)。已知限制⑤的地基 + 注入防护"证据信封"的载体（`EvidenceChunk` 现无时间字段、无信任标记） | — | **代码侧已完成，待三线 sign-off 后转已完成** | 基础 | 已落地：schema/OpenAPI 注释/`shared/types.ts`（含 `TrustLevel`）/`fixtures/retrievalresponse.sample.json` 同步；CHANGELOG 记 v1.1.1（纯追加、旧生产者兼容）。生产者：ingest 证据块 `published_at` 只取已归一化的 `IntelItem.published_at`（缺失留空不猜），`trust` 按来源类型判定；Q2 在 Qdrant 载荷双向携带并回填。测试：`contracts-c02.test.ts`（2 条，含"旧形状仍合法/未知 trust 被拒"）+ `evidence-metadata.test.ts`（4 条，含 6 个种子块日期来自 fixture）。**附带修复**：运行时校验器 `validateInstance` 此前不遍历 `items`，数组内对象（如 chunks）字段约束实际未被校验；已与 `validate_contracts.py` 对齐。全量测试与 typecheck 通过。**剩余：三线 sign-off** |
 | C-03 | 丙 | `QualityVerdict` 内联契约增 `injection_score` + `injection_flags`（内联契约，追加式） | C-02 | 待办 | 砍② | 校验器 green；`fixtures/qualityverdict.sample.json` 补样本 |
 | C-04 | 丙 | `Answer` 接口增 `stale_warning?` + `injection_guard?`（时效提示与注入筛查计数要显式出现在响应对象上，符合"兜底必须显式可见"） | C-02 | 待办 | 砍⑤ | 运行时校验测试；冒烟断言非拒答条可带 `stale_warning` |
 | C-05 | 丙(H) | `config/models.yml` 增 provider `trust_boundary`(cloud/local/cache) + role `data_domain`(public/private)；`openapi.yaml` 请求体增 `data_domain` | — | 待办 | 禁砍 | 隔离闸门测试：private 数据 + cloud provider → 硬拒 + FallbackEvent |
@@ -205,9 +205,10 @@ cd ops && docker compose up -d qdrant postgres && bash scripts/wait-healthy.sh &
 | P-04 | 丙 | FR-S03 | 证据增加 document_id、source_url、fetched_at、content_hash、chunk_id、索引版本；更新/撤销可定位并使旧索引失效，历史可审计 | C-02、存储方案 | 待办 | 基础 |
 | P-05 | 丙 | FR-Q02/Q03、AT-04/05 | 混合查询结构化事实与多份独立来源；答案保留来源冲突、证据不足状态和原文页/段定位，不能把冲突压成单一结论 | P-03、P-04、A-05 | 待办 | 保 |
 | P-06 | 乙+丙 | FR-F06、FR-Q04、FR-S401 | POC 仅展示引用/元数据且不执行；修复建议无可靠来源时标“待核实”；攻击链和工具注册若展示须标为静态演示，不宣称自动推理/热注册 | 报告披露口径 | 待办 | 砍⑤ |
-| P-07 | 丙 | PRD 7.3 界面清单 | PR #3 已有大屏、列表、详情、问答的 Vue 页面；本轮补全局演示提示。下一步接真实采集/问答 API 并验收来源、引用、待核实和降级态，再做 Trace/诊断页；F2 资产页待 R1 确认。当前所有页面仍为预置样例 | P-03、P-05、A-06；R1 | 进行中 | 砍④ |
+| P-07 | KKK9747human | PRD 7.3 界面清单 | 接 Q 线 HTTP 真数据；实现一屏完整问答与可展开推理链；展示降级；对接 compose 演示环境。当前 main 页面仍是预置样例，真实 API 接线与验收未完成；F2 资产页待 R1 确认 | P-03、P-05、A-06；R1 | 进行中 | 砍④ |
 | P-08 | 全 | NFR-03/08、AT-07、DoD | 定义每个指标的样本规模、时间窗和统计方法；补 provider 配置切换可复现记录及边界样本结果。≤60 秒只是 PRD 建议目标；前端预置看板值不能充当实测，任何准确率/完成度不得在无实测时写成已达成 | A-03、R-04、E-07 | 待办 | 基础 |
 | P-09 | 全 | PRD 第 11 节 R1–R8 | 形成负责人决策记录：F2 是否提 P0、7 类源及完成判定、24h/72h、D6/D8、Jev 定位、“推理链”口径、矛盾统计来源、完成度仅作内部估算 | 负责人确认；分别关联 E-01/E-07/D-02/A-02 | 待办 | 禁砍 |
+| P-10 | 李念（MG1/Q2）；与 Xue 对齐来源，KKK 接前端 | FR-Y01/S02/S03/Q02/Q04 | 受控单页 Firecrawl + 规则→受控 LLM→人工复核 + Qdrant 真实 embedding/BM25 混合检索。当前本地小切片已实现 allowlist/robots、direct→Firecrawl→last-good、证据校验、MG1→Qdrant RRF；新增 SQLite append-only lineage_records 覆盖 ingest fetch/parse/dedupe/DQ1、enrich F1/F4/F6、Q2 index/search/fusion、crawler/extractor、MG1 provider attempts 与 CLI/HTTP Q&A。已有默认离线的 ingest:once SQLite runner，网页→DQ1 显式来源 API 与 crawl:page 独立入库开关已实现（元数据文件联网前校验，默认预览；见 [本地指南](P10-LOCAL-VERIFY.md)），并有零网络 page:demo，stale/待复核/证据不符不自动放行；sqlite-page→来源证据块→BM25 适配已验证（缺快照/URL不符拒绝）；正式 SourceRegistry 调度及网页原文富化适配仍待办；SQLite last-good、按 SHA 保留的历史快照与 review queue 已持久化（跨 URL 更新/数据库重启保留审核证据），但人工决定不自动写入 DQ1；来源 EvidenceChunk 构建与临时 BM25 预览已接入 ingest:once（DQ1 放行、单来源 URL/hash、全步骤 lineage）；来源 Qdrant 持久入库 opt-in 入口已实现，拒绝离线/fixture/cache/hash，写失败不报告成功；pilot:doctor 可 GET-only 检查本地前置条件（不生成 embedding）；默认仍 cache；独立 Tokendance qwen3.7-text-embedding profile 已经 API/MG1 单文本实测为1024维且无降级，密钥仅本地；Qdrant 不可达，持久索引/召回和语义质量仍待验收；MemoryEventStore 仅用于测试/smoke。A-03/A-04 前不将不可信网页送云 LLM，外部 API 默认关闭 | C-02/C-04、A-03/A-04；来源白名单确认；不得挤占 R-04/R-05/A-02 | 进行中（lineage + 小切片） | 砍④ |
 
 ### 13.3 需求覆盖索引
 
@@ -220,12 +221,12 @@ PRD 条款按当前台账唯一归属，避免重复开任务；“待办/阻塞
 | FR-F01/F02/F03 | `src/enrich` F1/F4/F6 | 基础模块已实现；真实运行与特定冲突验收样本仍按 E-02/P-05 跟踪 |
 | FR-F04/F05 | P-01 | 本次改动仅新增静态合成数据匹配原型；团队未确认范围，不接真实资产 |
 | FR-F06 | P-06、S-03 | 只保留 Mock/披露要求，尚无 POC 执行或修复建议生产链路 |
-| FR-S01 | E-05 | 内存索引与 Qdrant REST 路径已有；Compose/Qdrant 真服务验收阻塞 |
+| FR-S01 | P-10/E-05 | Qdrant 查询/写入已拒绝 hash/cache embedding，Q2 通过 MG1 真实 provider 并支持 BM25-lite RRF；索引、查询和融合写 append-only lineage。默认仍是 BM25，正式来源索引和 Qdrant/模型实测待办 |
 | FR-S02/S03 | P-03/P-04 | 结构化事实检索、证据版本与失效处理待办 |
 | FR-Q01 | R-04 | 20 条黄金问答已接入回归；未知/攻击/冲突样本继续由 A-04、P-05、P-08 补齐 |
-| FR-Q02/Q03 | P-05 | 多来源检索、原文定位和显式冲突/不足仍待办 |
+| FR-Q02/Q03 | P-05/P-10 | 多来源检索、原文定位和显式冲突/不足仍待办；P-10 先做单源受控抓取及 hybrid retrieval 小切片 |
 | FR-Q04/Q05 | P-06、A-04 | Q3 仅后续演示；外部内容注入防护仍为禁砍待办 |
-| FR-MG01/AG01/D401/A101 | A-03/A-01/A-02/A-06，R-03 | 网关基础已实现；隔离、编排替换、决策旁路、自愈与完整 Trace 未完成 |
+| FR-MG01/AG01/D401/A101 | A-03/A-01/A-02/A-06，R-03，P-10 | 网关基础与 MG1 provider attempt lineage 已实现；数据隔离、编排替换、决策旁路、自愈及 Langfuse 完整 Trace 未完成 |
 | FR-S401 | P-06 | 静态工具注册与可见披露；不把热注册作为本轮闭环前提 |
 | NFR-01/02/04/05/06/07 | E-05/E-07/A-06/A-03/A-04/S-04 | Compose、运行时长、Trace、安全和脱敏按既有行验收；不可用文档声明替代实测 |
 | NFR-03/08 | P-08、R-04、A-04 | 建立指标统计口径；黄金集以外的未见/恶意样本结果尚待实测 |
@@ -234,5 +235,6 @@ PRD 条款按当前台账唯一归属，避免重复开任务；“待办/阻塞
 | AT-06/07/08/10 | R-04/P-08/A-03/A-06/A-04 | 黄金问答拒答已覆盖；Provider 切换、降级 Trace、攻击 fixture 仍需完成相应任务 |
 | PRD 7.3 页面清单 | P-07 | 大屏、列表、详情、问答页面已合入，但全为预置样例；真实接口接线与 Trace/诊断页仍待办 |
 | PRD 第 11 节 R1–R8 | P-09 | 未把讨论稿建议误记为团队决策；需负责人逐项定案 |
+| FR-Y/Q 受控采集与语义检索 | P-10 | 计划按单域名 Firecrawl + 规则/MG1/人工兜底 + Qdrant hybrid 小步验收；不得把占位 hash 向量写成真实语义能力 |
 
-**新增任务计数**：本节 9 项，P-01、P-07 进行中，其余 7 项待办。纳入第 2 节总览后，全台账 51 项：40 待办、2 进行中、7 已完成、2 阻塞（已完成 7 项含 PR #2 转入的 D-04）。
+**新增任务计数**：本节 10 项，P-01、P-07、P-10 进行中，其余 7 项待办。纳入第 2 节总览后，全台账 52 项：39 待办、4 进行中、7 已完成、2 阻塞（已完成 7 项含 PR #2 转入的 D-04）。

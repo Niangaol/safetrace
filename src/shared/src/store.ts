@@ -4,8 +4,86 @@
  * compose 起 PostgreSQL 后同一接口切 Postgres（实现类随后补）。
  * 事件表按 event_id 幂等去重；死信自动重试 3 次后留档。
  */
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { Envelope, Topic } from "./envelope.js";
+
+export type LineageStatus = "success" | "degraded" | "rejected" | "review" | "failed";
+export interface LineageArtifactRef { kind: string; id: string; sha256?: string; url?: string }
+export interface LineageRecord {
+  lineage_id: string;
+  trace_id: string;
+  parent_lineage_ids: string[];
+  causation_id: string | null;
+  stage: string;
+  operation_version: string;
+  status: LineageStatus;
+  started_at: string;
+  completed_at: string;
+  recorded_at: string;
+  input_refs: LineageArtifactRef[];
+  output_refs: LineageArtifactRef[];
+  source?: { source_id?: string; source_type?: string; url?: string; fetched_at?: string; etag?: string };
+  execution?: { component_version?: string; provider?: string; model_id?: string; model_version?: string; config_sha256?: string; prompt_sha256?: string; latency_ms?: number; cached?: boolean; input_tokens?: number; output_tokens?: number; vector_dimension?: number };
+  decision?: { reason?: string; fallback_to?: string; review_required?: boolean; quality_score?: number };
+  error?: string;
+}
+export interface StoredPageSnapshot {
+  source_url: string;
+  final_url: string;
+  title: string;
+  text: string;
+  fetched_at: string;
+  provider: "direct" | "firecrawl";
+  content_sha256: string;
+  lineage_ids: string[];
+}
+
+export type ReviewCaseStatus = "pending" | "deferred" | "accepted" | "rejected";
+export interface ReviewCaseDraft {
+  review_id: string;
+  trace_id: string;
+  source_url: string;
+  page_sha256: string;
+  title: string;
+  reason: string;
+  candidate_sha256?: string;
+  lineage_id: string;
+  created_at: string;
+}
+export interface ReviewCase extends ReviewCaseDraft {
+  status: ReviewCaseStatus;
+  updated_at: string;
+  reviewer_id?: string;
+  rationale?: string;
+  decision_lineage_id?: string;
+}
+export interface ReviewCaseDecision {
+  review_id: string;
+  trace_id: string;
+  action: "deferred" | "accepted" | "rejected";
+  reviewer_id: string;
+  rationale: string;
+  lineage_id: string;
+  recorded_at: string;
+}
+
+export interface LineageDraft {
+  trace_id: string;
+  stage: string;
+  operation_version: string;
+  status: LineageStatus;
+  parent_lineage_ids?: string[];
+  causation_id?: string | null;
+  started_at?: string;
+  completed_at?: string;
+  input_refs?: LineageArtifactRef[];
+  output_refs?: LineageArtifactRef[];
+  source?: LineageRecord["source"];
+  execution?: LineageRecord["execution"];
+  decision?: LineageRecord["decision"];
+  error?: string;
+}
 
 export interface EventStore {
   /** 写入事件。返回是否为新事件（false = 重复投递被幂等去重）。 */
@@ -16,6 +94,15 @@ export interface EventStore {
   markDeadLetter(eventId: string, reason: string): Promise<void>;
   /** 死信队列内容（A1 看板消费）。 */
   deadLetters(): Promise<Array<{ event_id: string; reason: string; envelope: Envelope }>>;
+  appendLineage(record: LineageRecord): Promise<boolean>;
+  readLineage(traceId: string, offset?: number, limit?: number): Promise<LineageRecord[]>;
+  getLastGoodPageSnapshot(sourceUrl: string): Promise<StoredPageSnapshot | undefined>;
+  saveLastGoodPageSnapshot(snapshot: StoredPageSnapshot): Promise<boolean>;
+  getLastGoodPageSnapshotByHash(contentSha256: string): Promise<StoredPageSnapshot | undefined>;
+  enqueueReviewCase(review: ReviewCaseDraft): Promise<boolean>;
+  getReviewCase(reviewId: string): Promise<ReviewCase | undefined>;
+  listPendingReviewCases(offset?: number, limit?: number): Promise<ReviewCase[]>;
+  appendReviewCaseDecision(decision: ReviewCaseDecision): Promise<boolean>;
   close(): void;
 }
 
@@ -31,6 +118,62 @@ CREATE TABLE IF NOT EXISTS events (
   seq          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_topic_seq ON events(topic, seq);
+CREATE TABLE IF NOT EXISTS lineage_records (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  lineage_id TEXT NOT NULL UNIQUE,
+  trace_id TEXT NOT NULL,
+  parent_lineage_ids TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lineage_trace_seq ON lineage_records(trace_id, seq);
+CREATE TABLE IF NOT EXISTS last_good_pages (
+  source_url TEXT PRIMARY KEY,
+  final_url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  text TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  lineage_ids TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS page_snapshot_history (
+  source_url TEXT NOT NULL,
+  final_url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  text TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  lineage_ids TEXT NOT NULL,
+  PRIMARY KEY (source_url, content_sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_history_hash ON page_snapshot_history(content_sha256);
+INSERT OR IGNORE INTO page_snapshot_history
+  SELECT source_url, final_url, title, text, fetched_at, provider, content_sha256, lineage_ids FROM last_good_pages;
+CREATE TABLE IF NOT EXISTS review_cases (
+  review_id TEXT PRIMARY KEY,
+  trace_id TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  page_sha256 TEXT NOT NULL,
+  title TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  candidate_sha256 TEXT,
+  lineage_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_case_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  review_id TEXT NOT NULL,
+  trace_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reviewer_id TEXT,
+  rationale TEXT,
+  lineage_id TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_review_case_event_seq ON review_case_events(review_id, seq);
 CREATE TABLE IF NOT EXISTS dead_letters (
   event_id  TEXT PRIMARY KEY,
   reason    TEXT NOT NULL,
@@ -43,11 +186,13 @@ export class SqliteEventStore implements EventStore {
   private db: DatabaseSync;
   private seq = 0;
 
+
   constructor(path = ":memory:") {
     this.db = new DatabaseSync(path);
     this.db.exec(SCHEMA_SQL);
     const row = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS m FROM events").get() as { m: number };
     this.seq = row.m;
+
   }
 
   async append<T>(env: Envelope<T>): Promise<boolean> {
@@ -78,6 +223,138 @@ export class SqliteEventStore implements EventStore {
       payload: JSON.parse(r.payload as string) as T,
       schema_version: r.schema_version as string,
     }));
+  }
+
+  async appendLineage(record: LineageRecord): Promise<boolean> {
+    const result = this.db.prepare("INSERT OR IGNORE INTO lineage_records (lineage_id, trace_id, parent_lineage_ids, stage, recorded_at, payload) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(record.lineage_id, record.trace_id, JSON.stringify(record.parent_lineage_ids), record.stage, record.recorded_at, JSON.stringify(record));
+    return result.changes > 0;
+  }
+
+  async readLineage(traceId: string, offset = 0, limit = 100): Promise<LineageRecord[]> {
+    const rows = this.db.prepare("SELECT payload FROM lineage_records WHERE trace_id = ? ORDER BY seq LIMIT ? OFFSET ?")
+      .all(traceId, limit, offset) as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as LineageRecord);
+  }
+
+  async getLastGoodPageSnapshot(sourceUrl: string): Promise<StoredPageSnapshot | undefined> {
+    const row = this.db.prepare("SELECT * FROM last_good_pages WHERE source_url = ?").get(sourceUrl) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const snapshot: StoredPageSnapshot = {
+      source_url: row.source_url as string,
+      final_url: row.final_url as string,
+      title: row.title as string,
+      text: row.text as string,
+      fetched_at: row.fetched_at as string,
+      provider: row.provider as StoredPageSnapshot["provider"],
+      content_sha256: row.content_sha256 as string,
+      lineage_ids: JSON.parse(row.lineage_ids as string) as string[],
+    };
+    if (createHash("sha256").update(snapshot.text, "utf8").digest("hex") !== snapshot.content_sha256) throw new Error("last-good page snapshot SHA-256 mismatch");
+    return snapshot;
+  }
+
+  async saveLastGoodPageSnapshot(snapshot: StoredPageSnapshot): Promise<boolean> {
+    if (createHash("sha256").update(snapshot.text, "utf8").digest("hex") !== snapshot.content_sha256) throw new Error("refusing to persist a page snapshot with invalid SHA-256");
+    const sql = "INSERT INTO last_good_pages (source_url, final_url, title, text, fetched_at, provider, content_sha256, lineage_ids) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT(source_url) DO UPDATE SET final_url=excluded.final_url, title=excluded.title, text=excluded.text, fetched_at=excluded.fetched_at, provider=excluded.provider, content_sha256=excluded.content_sha256, lineage_ids=excluded.lineage_ids " +
+      "WHERE excluded.fetched_at >= last_good_pages.fetched_at";
+    const values = [snapshot.source_url, snapshot.final_url, snapshot.title, snapshot.text, snapshot.fetched_at, snapshot.provider, snapshot.content_sha256, JSON.stringify(snapshot.lineage_ids)];
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT OR IGNORE INTO page_snapshot_history (source_url, final_url, title, text, fetched_at, provider, content_sha256, lineage_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(...values);
+      const result = this.db.prepare(sql).run(...values);
+      this.db.exec("COMMIT");
+      return result.changes > 0;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  async enqueueReviewCase(review: ReviewCaseDraft): Promise<boolean> {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const inserted = this.db.prepare("INSERT OR IGNORE INTO review_cases (review_id, trace_id, source_url, page_sha256, title, reason, candidate_sha256, lineage_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(review.review_id, review.trace_id, review.source_url, review.page_sha256, review.title, review.reason, review.candidate_sha256 ?? null, review.lineage_id, review.created_at);
+      if (inserted.changes === 0) {
+        this.db.exec("ROLLBACK");
+        return false;
+      }
+      this.db.prepare("INSERT INTO review_case_events (review_id, trace_id, action, reviewer_id, rationale, lineage_id, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(review.review_id, review.trace_id, "pending", null, null, review.lineage_id, review.created_at);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  async getReviewCase(reviewId: string): Promise<ReviewCase | undefined> {
+    const base = this.db.prepare("SELECT * FROM review_cases WHERE review_id = ?").get(reviewId) as Record<string, unknown> | undefined;
+    if (!base) return undefined;
+    const event = this.db.prepare("SELECT * FROM review_case_events WHERE review_id = ? ORDER BY seq DESC LIMIT 1").get(reviewId) as Record<string, unknown> | undefined;
+    if (!event) return undefined;
+    return {
+      review_id: base.review_id as string,
+      trace_id: base.trace_id as string,
+      source_url: base.source_url as string,
+      page_sha256: base.page_sha256 as string,
+      title: base.title as string,
+      reason: base.reason as string,
+      ...(typeof base.candidate_sha256 === "string" ? { candidate_sha256: base.candidate_sha256 } : {}),
+      lineage_id: base.lineage_id as string,
+      created_at: base.created_at as string,
+      status: event.action as ReviewCaseStatus,
+      updated_at: event.recorded_at as string,
+      ...(typeof event.reviewer_id === "string" ? { reviewer_id: event.reviewer_id } : {}),
+      ...(typeof event.rationale === "string" ? { rationale: event.rationale } : {}),
+      ...(typeof event.lineage_id === "string" ? { decision_lineage_id: event.lineage_id } : {}),
+    };
+  }
+
+  async listPendingReviewCases(offset = 0, limit = 100): Promise<ReviewCase[]> {
+    const rows = this.db.prepare("SELECT c.*, e.action, e.reviewer_id, e.rationale, e.lineage_id AS decision_lineage_id, e.recorded_at AS updated_at FROM review_cases c JOIN review_case_events e ON e.seq = (SELECT MAX(latest.seq) FROM review_case_events latest WHERE latest.review_id = c.review_id) WHERE e.action IN ('pending', 'deferred') ORDER BY c.created_at LIMIT ? OFFSET ?")
+      .all(limit, offset) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      review_id: row.review_id as string,
+      trace_id: row.trace_id as string,
+      source_url: row.source_url as string,
+      page_sha256: row.page_sha256 as string,
+      title: row.title as string,
+      reason: row.reason as string,
+      ...(typeof row.candidate_sha256 === "string" ? { candidate_sha256: row.candidate_sha256 } : {}),
+      lineage_id: row.lineage_id as string,
+      created_at: row.created_at as string,
+      status: row.action as ReviewCaseStatus,
+      updated_at: row.updated_at as string,
+      ...(typeof row.reviewer_id === "string" ? { reviewer_id: row.reviewer_id } : {}),
+      ...(typeof row.rationale === "string" ? { rationale: row.rationale } : {}),
+      ...(typeof row.decision_lineage_id === "string" ? { decision_lineage_id: row.decision_lineage_id } : {}),
+    }));
+  }
+
+  async appendReviewCaseDecision(decision: ReviewCaseDecision): Promise<boolean> {
+    const current = await this.getReviewCase(decision.review_id);
+    if (!current || current.status === "accepted" || current.status === "rejected") return false;
+    const result = this.db.prepare("INSERT INTO review_case_events (review_id, trace_id, action, reviewer_id, rationale, lineage_id, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(decision.review_id, decision.trace_id, decision.action, decision.reviewer_id, decision.rationale, decision.lineage_id, decision.recorded_at);
+    return result.changes > 0;
+  }
+
+  async getLastGoodPageSnapshotByHash(contentSha256: string): Promise<StoredPageSnapshot | undefined> {
+    const row = this.db.prepare("SELECT * FROM page_snapshot_history WHERE content_sha256 = ? ORDER BY fetched_at DESC LIMIT 1").get(contentSha256) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const snapshot: StoredPageSnapshot = {
+      source_url: row.source_url as string, final_url: row.final_url as string,
+      title: row.title as string, text: row.text as string,
+      fetched_at: row.fetched_at as string, provider: row.provider as StoredPageSnapshot["provider"],
+      content_sha256: row.content_sha256 as string, lineage_ids: JSON.parse(row.lineage_ids as string) as string[],
+    };
+    if (createHash("sha256").update(snapshot.text, "utf8").digest("hex") !== contentSha256) throw new Error("historical page snapshot SHA-256 mismatch");
+    return snapshot;
   }
 
   async markDeadLetter(eventId: string, reason: string): Promise<void> {
@@ -119,6 +396,10 @@ function toEnvelope(row: Record<string, unknown>): Envelope {
 export class MemoryEventStore implements EventStore {
   private events: Envelope[] = [];
   private dead: Array<{ event_id: string; reason: string; envelope: Envelope }> = [];
+  private lineage: LineageRecord[] = [];
+  private lastGoodPages = new Map<string, StoredPageSnapshot>();
+  private pageHistory = new Map<string, StoredPageSnapshot>();
+  private reviewCases = new Map<string, ReviewCase>();
 
   async append<T>(env: Envelope<T>): Promise<boolean> {
     if (this.events.some((e) => e.event_id === env.event_id)) return false;
@@ -130,6 +411,70 @@ export class MemoryEventStore implements EventStore {
     return this.events
       .filter((e) => e.topic === topic)
       .slice(offset, offset + limit) as unknown as Envelope<T>[];
+  }
+
+  async appendLineage(record: LineageRecord): Promise<boolean> {
+    if (this.lineage.some((item) => item.lineage_id === record.lineage_id)) return false;
+    this.lineage.push(record);
+    return true;
+  }
+
+  async readLineage(traceId: string, offset = 0, limit = 100): Promise<LineageRecord[]> {
+    return this.lineage.filter((item) => item.trace_id === traceId).slice(offset, offset + limit);
+  }
+
+  async getLastGoodPageSnapshot(sourceUrl: string): Promise<StoredPageSnapshot | undefined> {
+    const row = this.lastGoodPages.get(sourceUrl);
+    if (!row) return undefined;
+    const snapshot = row;
+    if (createHash("sha256").update(snapshot.text, "utf8").digest("hex") !== snapshot.content_sha256) throw new Error("last-good page snapshot SHA-256 mismatch");
+    return { ...snapshot, lineage_ids: [...snapshot.lineage_ids] };
+  }
+
+  async saveLastGoodPageSnapshot(snapshot: StoredPageSnapshot): Promise<boolean> {
+    if (createHash("sha256").update(snapshot.text, "utf8").digest("hex") !== snapshot.content_sha256) throw new Error("refusing to persist a page snapshot with invalid SHA-256");
+    const historyKey = snapshot.source_url + "|" + snapshot.content_sha256;
+    if (!this.pageHistory.has(historyKey)) this.pageHistory.set(historyKey, { ...snapshot, lineage_ids: [...snapshot.lineage_ids] });
+    const previous = this.lastGoodPages.get(snapshot.source_url);
+    if (previous && previous.fetched_at > snapshot.fetched_at) return false;
+    this.lastGoodPages.set(snapshot.source_url, { ...snapshot, lineage_ids: [...snapshot.lineage_ids] });
+    return true;
+  }
+
+  async enqueueReviewCase(review: ReviewCaseDraft): Promise<boolean> {
+    if (this.reviewCases.has(review.review_id)) return false;
+    this.reviewCases.set(review.review_id, { ...review, status: "pending", updated_at: review.created_at });
+    return true;
+  }
+
+  async getReviewCase(reviewId: string): Promise<ReviewCase | undefined> {
+    const review = this.reviewCases.get(reviewId);
+    return review ? { ...review } : undefined;
+  }
+
+  async listPendingReviewCases(offset = 0, limit = 100): Promise<ReviewCase[]> {
+    return [...this.reviewCases.values()].filter((review) => review.status === "pending" || review.status === "deferred")
+      .slice(offset, offset + limit).map((review) => ({ ...review }));
+  }
+
+  async appendReviewCaseDecision(decision: ReviewCaseDecision): Promise<boolean> {
+    const review = this.reviewCases.get(decision.review_id);
+    if (!review || review.status === "accepted" || review.status === "rejected") return false;
+    this.reviewCases.set(decision.review_id, {
+      ...review,
+      status: decision.action,
+      updated_at: decision.recorded_at,
+      reviewer_id: decision.reviewer_id,
+      rationale: decision.rationale,
+      decision_lineage_id: decision.lineage_id,
+    });
+    return true;
+  }
+
+  async getLastGoodPageSnapshotByHash(contentSha256: string): Promise<StoredPageSnapshot | undefined> {
+    const snapshot = [...this.pageHistory.values()].find((candidate) => candidate.content_sha256 === contentSha256);
+    if (snapshot && createHash("sha256").update(snapshot.text, "utf8").digest("hex") !== contentSha256) throw new Error("historical page snapshot SHA-256 mismatch");
+    return snapshot ? { ...snapshot, lineage_ids: [...snapshot.lineage_ids] } : undefined;
   }
 
   async markDeadLetter(eventId: string, reason: string): Promise<void> {

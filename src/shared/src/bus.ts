@@ -5,7 +5,8 @@
  * - Trace：publish 可传 trace_id/causation_id，贯穿 采集→富化→入库→问答
  */
 import { makeEnvelope, type Envelope, type Topic } from "./envelope.js";
-import type { EventStore } from "./store.js";
+import { recordLineage as persistLineage } from "./lineage.js";
+import type { EventStore, LineageDraft, LineageRecord, ReviewCase, ReviewCaseDecision, ReviewCaseDraft, StoredPageSnapshot } from "./store.js";
 
 export type Handler<T = unknown> = (payload: T, env: Envelope<T>) => Promise<void> | void;
 
@@ -43,6 +44,43 @@ export class EventBus {
     if (!accepted) return env; // 重复事件不重复投递
     await this.deliver(env);
     return env;
+  }
+
+  /** Append-only processing record; does not alter frozen public event topics/schemas. */
+  async recordLineage(draft: LineageDraft): Promise<LineageRecord> {
+    return persistLineage(this.opts.store, draft);
+  }
+
+  async readLineage(traceId: string, offset = 0, limit = 100): Promise<LineageRecord[]> {
+    return this.opts.store.readLineage(traceId, offset, limit);
+  }
+
+  async getLastGoodPageSnapshot(sourceUrl: string): Promise<StoredPageSnapshot | undefined> {
+    return this.opts.store.getLastGoodPageSnapshot(sourceUrl);
+  }
+
+  async saveLastGoodPageSnapshot(snapshot: StoredPageSnapshot): Promise<boolean> {
+    return this.opts.store.saveLastGoodPageSnapshot(snapshot);
+  }
+
+  async getLastGoodPageSnapshotByHash(contentSha256: string): Promise<StoredPageSnapshot | undefined> {
+    return this.opts.store.getLastGoodPageSnapshotByHash(contentSha256);
+  }
+
+  async enqueueReviewCase(review: ReviewCaseDraft): Promise<boolean> {
+    return this.opts.store.enqueueReviewCase(review);
+  }
+
+  async getReviewCase(reviewId: string): Promise<ReviewCase | undefined> {
+    return this.opts.store.getReviewCase(reviewId);
+  }
+
+  async listPendingReviewCases(offset = 0, limit = 100): Promise<ReviewCase[]> {
+    return this.opts.store.listPendingReviewCases(offset, limit);
+  }
+
+  async appendReviewCaseDecision(decision: ReviewCaseDecision): Promise<boolean> {
+    return this.opts.store.appendReviewCaseDecision(decision);
   }
 
   private async deliver<T>(env: Envelope<T>): Promise<void> {

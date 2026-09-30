@@ -22,6 +22,7 @@ export interface LlmReply {
 export interface Embedding {
   vectors: number[][];
   model_id: string;
+  model_version?: string;
   provider: string;
   latency_ms: number;
   cached: boolean;

@@ -37,7 +37,7 @@ export interface ModelsConfig {
 }
 
 /** 解析 models.yml（无 YAML 库，按本项目配置子集手写解析，零依赖）。 */
-export function loadModelsConfig(path = resolve("config/models.yml")): ModelsConfig {
+export function loadModelsConfig(path = resolve(process.env.MODELS_CONFIG_PATH ?? "config/models.yml")): ModelsConfig {
   const text = readFileSync(path, "utf8");
   // 顶层 sections
   const sections = splitSections(text);

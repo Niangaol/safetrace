@@ -29,7 +29,7 @@ function makeEvidence(chunks: EvidenceChunk[], over: Partial<RetrievalResponse> 
     query_id: "q_t",
     chunks,
     retrieval_ms: 1,
-    embedder_model_id: "hash-256",
+    embedder_model_id: "bm25-lite-v1",
     trace_id: "tr_t",
     schema_version: "1.0",
     ...over,
@@ -98,6 +98,14 @@ test("Q4：abstain —— 最高 score_rerank 低于阈值", async () => {
   assert.equal(ans.abstained, true);
   assert.ok(ans.text_md.includes("低于阈值"));
   assert.deepEqual(ans.citations, []);
+});
+
+test("Q4：没有 reranker 时使用最高可用 dense/sparse 分数", async () => {
+  const question = "Log4Shell 影响哪些版本？";
+  const plan = classifyIntent(turn(question));
+  const chunks = [makeChunk("chunk_sparse", { score_dense: 0.15, score_sparse: 0.82 })];
+  const answer = await synthesizeAnswer(question, plan, makeEvidence(chunks));
+  assert.equal(answer.abstained, false, "高 BM25 分数不应被较低的 dense 分数遮蔽");
 });
 
 test("Q4：abstain —— 证据不覆盖问题指定的 CVE（答非所问拒答）", async () => {

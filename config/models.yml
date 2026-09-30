@@ -58,7 +58,8 @@ roles:
 
   embedder:
     provider: cache
-    model_id: hash-256        # 开发用确定性向量；真实接入改为 bge-m3（见 S3 索引-模型绑定）
+    model_id: hash-256        # cache 占位；语义检索需 provider:vllm + 服务实际 model_id
+    # 例如 BGE-M3：model_id 与 vLLM 注册名一致，capability_flags.dim 改为模型实测维度（常见 1024）；Q2 会拒绝 cache 降级向量
     model_version: v0
     max_rpm: 1200
     max_concurrency: 8

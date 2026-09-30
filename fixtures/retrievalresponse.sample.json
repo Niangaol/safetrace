@@ -9,6 +9,8 @@
       "score_sparse": 0.88,
       "score_rerank": 0.95,
       "quality_score": 0.98,
+      "published_at": "2021-12-10T10:15:08.540Z",
+      "trust": "trusted",
       "provenance": {
         "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-44228",
         "section": "description",

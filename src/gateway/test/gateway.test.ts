@@ -1,11 +1,44 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ModelGateway } from "../src/index.js";
+import { createGatewayServer } from "../src/server.js";
 import { MemoryUsageStore } from "../src/usage-store.js";
 import { CircuitBreaker } from "../src/circuit.js";
 import { TokenBucket, Semaphore } from "../src/limiter.js";
 import { hashEmbedding, hashRerank, tokenize } from "../src/providers/cache.js";
+import { EventBus, MemoryEventStore, SqliteEventStore } from "@safetrace/shared";
 import type { FallbackEvent } from "@safetrace/shared";
+
+test("Gateway HTTP：SQLite 保存 model attempt lineage，重启后可读", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const dbPath = path.join(process.cwd(), "tmp", "gateway-lineage-" + process.pid + "-" + Date.now() + ".sqlite");
+  await fs.mkdir(path.dirname(dbPath), { recursive: true });
+  const oldSqlite = process.env.SQLITE_PATH;
+  process.env.SQLITE_PATH = dbPath;
+  let store: SqliteEventStore | undefined;
+  const { server, listen } = createGatewayServer({ port: 0 });
+  try {
+    await listen();
+    const addr = server.address() as { port: number };
+    const res = await fetch("http://127.0.0.1:" + addr.port + "/v1/chat/complete", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "answerer", messages: [{ role: "user", content: "private gateway input" }], trace_id: "tr_gateway_persist" }),
+    });
+    assert.equal(res.status, 200);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store = new SqliteEventStore(dbPath);
+    const lineage = await store.readLineage("tr_gateway_persist");
+    assert.ok(lineage.some((row) => row.stage === "mg1.chat" && row.status === "success"));
+    assert.ok(!JSON.stringify(lineage).includes("private gateway input"));
+  } finally {
+    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+    store?.close();
+    if (oldSqlite === undefined) delete process.env.SQLITE_PATH;
+    else process.env.SQLITE_PATH = oldSqlite;
+    for (const suffix of ["", "-wal", "-shm"]) await fs.rm(dbPath + suffix, { force: true });
+  }
+});
 
 test("profiles：models.yml 五角色与降级链加载", () => {
   const gw = new ModelGateway();
@@ -14,6 +47,30 @@ test("profiles：models.yml 五角色与降级链加载", () => {
   const answerer = roles.find((r) => r.role === "answerer")!;
   assert.equal(answerer.provider, "cache");
   assert.ok(answerer.fallback_chain.includes("cache"));
+});
+
+test("MG1 lineage：每次 provider 尝试记录 input/output hash、版本与 fallback", async () => {
+  const store = new MemoryEventStore();
+  const bus = new EventBus({ store });
+  const gateway = new ModelGateway({ forceProvider: "not-configured", bus });
+  const chatTrace = "tr_mg1_lineage_chat";
+  const chat = await gateway.chat("answerer", [{ role: "user", content: "private-question-marker" }], {}, chatTrace);
+  assert.equal(chat.degraded_to, "cache");
+  const chatRows = (await bus.readLineage(chatTrace)).filter((row) => row.stage === "mg1.chat");
+  assert.ok(chatRows.some((row) => row.status === "failed"));
+  const chatFallback = chatRows.find((row) => row.status === "degraded")!;
+  assert.equal(chatFallback.execution?.provider, "cache");
+  assert.ok(chatFallback.output_refs[0]?.sha256?.length === 64);
+  assert.ok(chatFallback.parent_lineage_ids.length > 0, "fallback attempt links to failed attempt");
+  assert.ok(!JSON.stringify(chatRows).includes("private-question-marker"));
+
+  const embedTrace = "tr_mg1_lineage_embed";
+  const embedding = await gateway.embed("embedder", ["private-embedding-marker"], embedTrace);
+  assert.equal(embedding.provider, "cache");
+  const embedRows = (await bus.readLineage(embedTrace)).filter((row) => row.stage === "mg1.embed");
+  assert.ok(embedRows.some((row) => row.status === "failed"));
+  assert.ok(embedRows.some((row) => row.status === "degraded" && row.execution?.model_version === "v0"));
+  assert.ok(!JSON.stringify(embedRows).includes("private-embedding-marker"));
 });
 
 test("chat：cache provider 确定性输出（同输入同输出）", async () => {
@@ -62,6 +119,55 @@ test("embed/rerank：cache provider 确定性与维度", async () => {
   const ranked = await gw.rerank("reranker", "log4j rce", ["log4j rce vulnerability", "unrelated text"], "tr_5");
   assert.equal(ranked.ranked[0]!.index, 0);
   assert.ok(ranked.ranked[0]!.score > ranked.ranked[1]!.score);
+});
+
+test("embedder profile：模型 ID 与声明维度来自角色配置", () => {
+  const profile = new ModelGateway().embeddingProfile();
+  assert.deepEqual(profile, { provider: "cache", model_id: "hash-256", model_version: "v0", dimension: 256 });
+});
+
+test("embed：OpenAI-compatible 响应按 index 对齐到输入顺序", async () => {
+  const realFetch = globalThis.fetch;
+  const first = new Array(256).fill(0);
+  const second = new Array(256).fill(0);
+  first[0] = 1;
+  second[1] = 1;
+  let requestUrl = "";
+  let requestBody: { model: string; input: string[] } | undefined;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    requestUrl = String(input);
+    requestBody = JSON.parse(String(init?.body)) as { model: string; input: string[] };
+    return new Response(JSON.stringify({
+      data: [
+        { index: 1, embedding: second },
+        { index: 0, embedding: first },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await new ModelGateway({ forceProvider: "deepseek" }).embed("embedder", ["first text", "second text"], "tr_embed_alignment");
+    assert.ok(requestUrl.endsWith("/embeddings"));
+    assert.deepEqual(requestBody?.input, ["first text", "second text"]);
+    assert.equal(result.provider, "deepseek");
+    assert.deepEqual(result.vectors, [first, second]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("embed：维度不符不被误标为真实向量，显式退回 cache", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    data: [{ index: 0, embedding: [0.2, 0.8] }],
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    const result = await new ModelGateway({ forceProvider: "deepseek" }).embed("embedder", ["test"], "tr_embed_bad_dim");
+    assert.equal(result.provider, "cache");
+    assert.equal(result.degraded_to, "cache");
+    assert.equal(result.vectors[0]!.length, 256);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("计量：usage 记录与 totals", async () => {

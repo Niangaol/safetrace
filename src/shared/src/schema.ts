@@ -16,6 +16,7 @@ export interface SchemaLike {
   minimum?: number;
   maximum?: number;
   minItems?: number;
+  items?: SchemaLike | SchemaLike[];
   format?: string;
 }
 
@@ -56,6 +57,15 @@ export function validateInstance(value: unknown, schema: SchemaLike, path = "$")
   }
   if (Array.isArray(value) && schema.minItems !== undefined && value.length < schema.minItems) {
     errors.push(`${path}: 少于 minItems ${schema.minItems}`);
+  }
+  // items 遍历：与 scripts/validate_contracts.py 同口径（此前只查 minItems，
+  // 导致数组内对象（如 RetrievalResponse.chunks）的字段约束在运行期完全不被校验）。
+  if (Array.isArray(value) && schema.items) {
+    const items = schema.items;
+    value.forEach((element, index) => {
+      const sub = Array.isArray(items) ? items[index] : items;
+      if (sub) errors.push(...validateInstance(element, sub, `${path}[${index}]`));
+    });
   }
   if (schema.enum && !schema.enum.includes(value as string)) {
     errors.push(`${path}: 不在枚举 ${JSON.stringify(schema.enum)}`);

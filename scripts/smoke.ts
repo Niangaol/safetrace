@@ -14,7 +14,7 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { MemoryEventStore, MemoryEventStore as Store, EventBus } from "@safetrace/shared";
+import { MemoryEventStore, MemoryEventStore as Store, EventBus, sha256, sha256Json } from "@safetrace/shared";
 import type { Answer, FallbackEvent, IntelItem, QueryTurn } from "@safetrace/shared";
 import { runIngestOnce } from "@safetrace/ingest";
 import { runEnrichment } from "@safetrace/enrich";
@@ -81,7 +81,13 @@ async function main(): Promise<number> {
 
   // ---------- 2) F 线：论文 + CVSS/EPSS（fixture 回放） ----------
   console.log("\n[2] F 富化线 runEnrichment(offline)");
-  const enrichResults = await runEnrichment(items, { offline: true, bus });
+  const enrichResults = await runEnrichment(items, {
+    offline: true,
+    bus,
+    traceId: ingestSummary.trace_id,
+    lineage_parent_by_intel_id: ingestSummary.lineage_parent_by_intel_id,
+    causation_by_intel_id: ingestSummary.causation_by_intel_id,
+  });
   check(enrichResults.length === items.length, "每条放行情报都有富化结果");
   const completed = enrichResults.flatMap((r) => r.dimensions_completed);
   console.log("  dimensions_completed=" + JSON.stringify([...new Set(completed)]));
@@ -90,22 +96,26 @@ async function main(): Promise<number> {
     (r.artifacts.papers ?? []).every((p) => p.source.length > 0) ||
     (r.artifacts.score_assessment?.source_of_score ?? "").length > 0);
   check(withSource.length === enrichResults.length, "每个富化结果带 source（禁无源富化）");
+  const processingLineage = await store.readLineage(ingestSummary.trace_id);
+  const lineageStages = new Set(processingLineage.map((record) => record.stage));
+  check(["ingest.fetch", "ingest.parse", "ingest.dedupe", "ingest.dq1", "enrich.f1", "enrich.f4", "enrich.f6"].every((stage) => lineageStages.has(stage)), "采集→DQ1→富化每个阶段均有持久 lineage");
+  check(processingLineage.every((record) => record.trace_id === ingestSummary.trace_id), "采集与富化使用同一 trace_id");
 
   // ---------- 3) S1 索引：fixture 种子 + 富化产物 ----------
-  console.log("\n[3] S1 统一索引 MemoryIndex（hash-256 占位嵌入，S3 绑定登记）");
-  const engine = new MemoryIndex();
+  console.log("\n[3] S1 统一索引 MemoryIndex（BM25-lite 词法兜底，S3 元数据登记）");
+  const engine = new MemoryIndex({ bus });
   const seedChunks = readFixtureChunks();
   await indexChunks(engine, seedChunks, {
     collection_name: "safetrace_chunks_p0",
     model_id: engine.modelId,
     dim: 256,
     metric: "cosine",
-  });
-  check(engine.modelId === "hash-256", "embedder_model_id 与 S3 CollectionMeta 绑定一致");
+  }, { trace_id: "tr_smoke_seed" });
+  check(engine.modelId === "bm25-lite-v1", "词法索引 ID 与 S3 CollectionMeta 绑定一致");
 
   // ---------- 4) MG1 接线点：AnswerSynthesizer 注入 + 一次真实调用 ----------
   console.log("\n[4] MG1 接线（AnswerSynthesizer 经 /v1/chat/complete 语义调用 cache provider）");
-  const gw = new ModelGateway();
+  const gw = new ModelGateway({ bus });
   const mg1 = await gw.chat("answerer", [
     { role: "system", content: "你是安全情报问答合成器，只依据给定证据作答。" },
     { role: "user", content: "基于证据合成答案（冒烟MG1接线验证）" },
@@ -115,6 +125,8 @@ async function main(): Promise<number> {
   check(mg1.provider === "cache" && mg1.degraded_to === "", "首选 cache 通道无降级标记");
   const usageTotals = await gw.usageTotals();
   check(usageTotals.calls >= 1, "MG1 计量落账（calls>=1）");
+  const mg1Lineage = await store.readLineage("tr_smoke_mg1");
+  check(mg1Lineage.some((record) => record.stage === "mg1.chat" && record.status === "success"), "MG1 provider call 写入 lineage（只存输入输出 hash）");
 
   // ---------- 5) 黄金问答 20 条（R-04：意图/槽位/答案要素全部硬断言） ----------
   console.log("\n[5] 黄金问答（fixtures/golden-qa.v0.json，20 条）");
@@ -125,19 +137,32 @@ async function main(): Promise<number> {
   for (const q of golden.cases) {
     const turn: QueryTurn = { session_id: "sess_smoke", turn_id: q.qid, text: q.text };
     const plan = classifyIntent(turn);
+    const traceId = "tr_" + q.qid;
+    const q1Lineage = await bus.recordLineage({
+      trace_id: traceId,
+      stage: "qa.q1_classify",
+      operation_version: "q1-rules.v1",
+      status: "success",
+      input_refs: [{ kind: "Query", id: q.qid, sha256: sha256(q.text) }],
+      output_refs: [{ kind: "QueryPlan", id: q.qid, sha256: sha256Json(plan) }],
+      execution: { component_version: "q1-rules.v1" },
+    });
     const req = {
       query_id: "q_" + q.qid,
       query_text: plan.rewrite_text,
       top_k: 5,
       // R-04：CVE 槽位必须透传成 Q2 过滤条件（问题指定的漏洞必须被证据覆盖）
       ...(plan.slots.cve_ids.length > 0 ? { cve_ids: plan.slots.cve_ids } : {}),
-      trace_id: "tr_" + q.qid,
+      trace_id: traceId,
       schema_version: "1.0",
     };
-    const evidence = await engine.search(req);
+    const evidence = await engine.search(req, { parent_lineage_ids: [q1Lineage.lineage_id] });
+    const q2Lineage = (await bus.readLineage(traceId)).filter((record) => record.stage === "q2.bm25_search").at(-1);
     const ans = await synthesizeAnswer(q.text, plan, evidence, {
       session_id: turn.session_id,
       turn_id: turn.turn_id,
+      bus,
+      parent_lineage_ids: [q1Lineage.lineage_id, ...(q2Lineage ? [q2Lineage.lineage_id] : [])],
       synth: undefined, // P0 默认模板合成器；LLM 合成经 MG1 注入（见第 4 步）
     });
     answers.push(ans);
@@ -164,6 +189,13 @@ async function main(): Promise<number> {
         (missing.length > 0 ? " 缺失：" + missing.join("、") : ""));
     }
   }
+  const queryLineageComplete = await Promise.all(golden.cases.map(async (q) => {
+    const records = await bus.readLineage("tr_" + q.qid);
+    const stages = new Set(records.map((record) => record.stage));
+    return stages.has("qa.q1_classify") && stages.has("q2.bm25_search") && stages.has("qa.q4_answer") && records.every((record) => !JSON.stringify(record).includes(q.text));
+  }));
+  check(queryLineageComplete.every(Boolean), "20 条黄金问答均保存 Q1/Q2/Q4 lineage，且不重复存原始 query");
+
   const expectAnswerCount = golden.cases.filter((q) => !q.expect_abstain).length;
   const withCitations = answers.filter((a) => a.citations.length > 0).length;
   check(withCitations === expectAnswerCount,
@@ -175,17 +207,21 @@ async function main(): Promise<number> {
   // ---------- 6) 四 Agent 任务图 ----------
   console.log("\n[6] 编排层四 Agent 任务图（监测→富化→问答）");
   check(Object.keys(AGENT_ROLES).length === 4, "四角色登记在册");
+  let taskIngest: Awaited<ReturnType<typeof runIngestOnce>> | undefined;
   const graph: TaskGraph = {
     nodes: [
-      { id: "monitor", role: "monitor", run: async () => { await runIngestOnce({ store, offline: true }); } },
+      { id: "monitor", role: "monitor", run: async () => { taskIngest = await runIngestOnce({ store, offline: true }); } },
       { id: "enricher", role: "enricher", deps: ["monitor"], on_fail: "degrade",
         run: async () => { const its = (await store.read<IntelItem>("intel.items")).map((e) => e.payload);
-          await runEnrichment(its, { offline: true, bus }); } },
+          await runEnrichment(its, { offline: true, bus, traceId: taskIngest?.trace_id, lineage_parent_by_intel_id: taskIngest?.lineage_parent_by_intel_id, causation_by_intel_id: taskIngest?.causation_by_intel_id }); } },
       { id: "qa", role: "qa", deps: ["enricher"],
         run: async () => { const t: QueryTurn = { session_id: "sess_tg", turn_id: "t1", text: "Log4Shell 影响哪些版本？" };
+          const traceId = "tr_tg";
           const p = classifyIntent(t);
-          const ev = await engine.search({ query_id: "q_tg", query_text: p.rewrite_text, top_k: 3, trace_id: "tr_tg", schema_version: "1.0" });
-          await synthesizeAnswer(t.text, p, ev, { session_id: t.session_id, turn_id: t.turn_id }); } },
+          const q1 = await bus.recordLineage({ trace_id: traceId, stage: "qa.q1_classify", operation_version: "q1-rules.v1", status: "success", input_refs: [{ kind: "Query", id: t.turn_id, sha256: sha256(t.text) }], output_refs: [{ kind: "QueryPlan", id: t.turn_id, sha256: sha256Json(p) }] });
+          const ev = await engine.search({ query_id: "q_tg", query_text: p.rewrite_text, top_k: 3, trace_id: traceId, schema_version: "1.0" }, { parent_lineage_ids: [q1.lineage_id] });
+          const q2 = (await bus.readLineage(traceId)).filter((record) => record.stage === "q2.bm25_search").at(-1);
+          await synthesizeAnswer(t.text, p, ev, { session_id: t.session_id, turn_id: t.turn_id, bus, parent_lineage_ids: [q1.lineage_id, ...(q2 ? [q2.lineage_id] : [])] }); } },
     ],
   };
   const tgResult = await runTaskGraph(graph, { bus, traceId: "tr_smoke_tg" });

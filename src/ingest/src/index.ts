@@ -18,3 +18,8 @@ export * from "./adapters/usn.js";
 export * from "./dedupe.js";
 export * from "./dq1.js";
 export * from "./pipeline.js";
+export * from "./firecrawl.js";
+export * from "./extraction-fallback.js";
+export * from "./evidence-chunks.js";
+export * from "./page-ingest.js";
+export * from "./controlled-page.js";

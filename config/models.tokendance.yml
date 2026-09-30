@@ -1,0 +1,91 @@
+# ==========================================================================
+# SafeTrace · MG1 模型清单（ModelProfile）
+# 红线：业务代码只认 role 名，禁止 import provider SDK；切 provider 只改本文件
+# provider 枚举：cache（离线确定性）| openai_compat（DeepSeek/GLM/vLLM/Ollama 通用）
+# ==========================================================================
+version: 1
+
+providers:
+  tokendance:
+    type: openai_compat
+    base_url_env: TOKENDANCE_BASE_URL
+    base_url_default: https://tokendance.space/gateway/v1
+    api_key_env: TOKENDANCE_API_KEY
+  cache:
+    type: cache            # 确定性假模型：演示与离线开发用，输出可复现
+  deepseek:
+    type: openai_compat
+    base_url_env: DEEPSEEK_BASE_URL
+    base_url_default: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+  glm:
+    type: openai_compat
+    base_url_env: GLM_BASE_URL
+    base_url_default: https://open.bigmodel.cn/api/paas/v4
+    api_key_env: GLM_API_KEY
+  vllm:
+    type: openai_compat
+    base_url_env: VLLM_BASE_URL
+    base_url_default: http://127.0.0.1:8000/v1
+    api_key_env: VLLM_API_KEY
+  ollama:
+    type: openai_compat
+    base_url_env: OLLAMA_BASE_URL
+    base_url_default: http://127.0.0.1:11434/v1
+    api_key_env: OLLAMA_API_KEY
+    capability_flags: { rerank: false }   # Ollama 无 rerank 端点，禁静默降级为 chat
+
+# 默认降级链（云端 → 本地 → 缓存 → 模板），每次降级必须显式留痕
+default_fallback_chain: [deepseek, vllm, cache, template]
+
+roles:
+  planner:
+    provider: cache
+    model_id: cache-planner
+    model_version: v0
+    max_rpm: 600
+    max_tpm: 2000000
+    max_concurrency: 4
+    timeout_ms: 30000
+    fallback_chain: [cache, template]
+    capability_flags: { tools: false }
+
+  answerer:
+    provider: cache
+    model_id: cache-answerer
+    model_version: v0
+    max_rpm: 600
+    max_tpm: 2000000
+    max_concurrency: 4
+    timeout_ms: 30000
+    fallback_chain: [cache, template]
+    # 真实模型接入时改为：provider: deepseek, model_id: deepseek-chat
+
+  embedder:
+    provider: tokendance
+    model_id: qwen3.7-text-embedding
+    # API 返回模型名但不提供 revision；服务换版时应重建集合，不宣称模型修订已固定。
+    model_version: unversioned-api
+    max_rpm: 60
+    max_concurrency: 2
+    timeout_ms: 20000
+    fallback_chain: [cache]
+    capability_flags: { dim: 1024 }
+
+  reranker:
+    provider: cache
+    model_id: cache-reranker
+    model_version: v0
+    max_rpm: 600
+    max_concurrency: 4
+    timeout_ms: 20000
+    fallback_chain: [cache]
+
+  decision:                 # D4：Y5分级/Q1路由/Q3充分性 的结构化判断
+    provider: cache
+    model_id: rule-fallback-v0   # P0 为规则通道；Jev 通道留 decided_by 枚举位
+    model_version: v0
+    max_rpm: 1200
+    max_concurrency: 8
+    timeout_ms: 10000
+    fallback_chain: [cache]

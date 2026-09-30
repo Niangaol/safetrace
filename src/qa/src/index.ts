@@ -4,6 +4,7 @@
  */
 export * from "./q1-intent.js";
 export * from "./q2-retrieval.js";
+export * from "./source-index.js";
 export * from "./q4-answer.js";
 export * from "./orchestrator/roles.js";
 export * from "./orchestrator/taskgraph.js";

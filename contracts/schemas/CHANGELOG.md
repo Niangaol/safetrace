@@ -3,6 +3,12 @@
 > 纪律（docs/GITHUB-FLOW.md 第五节）：只允许「新字段追加 + 旧字段标 deprecated」；
 > 禁止改语义、改枚举值含义、删字段。每次契约改动必须在此登记，并在 PR 中三线 sign-off。
 
+## v1.1.1（2026-09-30，D6 冻结前增量；C-02）
+
+| 契约 | 生产者 → 消费者 | 变更与兼容性 |
+|---|---|---|
+| RetrievalResponse（chunk） | Q2/来源证据构建 → Q3/Q4、前端 | chunk 追加**可选** `published_at`（date-time）与 `trust`（trusted/untrusted）；`required` 与既有字段不变，旧生产者仍合法（纯追加、无破坏性）。`published_at` 只取上游已归一化的 IntelItem.published_at（适配器已按 UTC 归一化无时区值），缺失即留空；`trust` 按来源判定：结构化权威源（NVD/KEV/CVE.org/OSV/GHSA/arXiv）及其系统派生为 trusted，网页/文档类外部文本为 untrusted。**缺省 = 未知**，消费者不得把缺省当作 trusted 或新鲜。迁移动作：Q2 已在 Qdrant 载荷中同步携带并回填两字段；消费方可在过滤/展示中按需读取，无需立即改造。 |
+
 ## v1.1.0（2026-09-29，D2；契约冻结前增量）
 
 | 契约 | 生产者 → 消费者 | 变更与兼容性 |

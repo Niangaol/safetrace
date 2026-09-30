@@ -5,6 +5,7 @@ import type { EvidenceChunk, RetrievalRequest } from "@safetrace/shared";
 import {
   MemoryIndex,
   QdrantEngine,
+  fuseHybrid,
   indexChunks,
   readFixtureChunks,
 } from "../src/q2-retrieval.js";
@@ -57,17 +58,17 @@ test("MemoryIndex：recall@3 命中 Log4Shell 文档且分数归一降序", asyn
   assert.equal(res.chunks.length, 3);
   for (const c of res.chunks) {
     assert.ok(/Log4Shell|CVE-2021-44228/.test(c.text), "top3 应全部命中 Log4Shell 文档");
-    assert.ok(typeof c.score_rerank === "number" && c.score_rerank > 0);
+    assert.ok(typeof c.score_sparse === "number" && c.score_sparse > 0);
   }
   assert.ok(
     res.chunks.some((c) => c.chunk_id === "chunk_nvd_cve_2021_44228_desc"),
     "NVD 漏洞通告应进入 top3",
   );
   assert.ok(res.chunks.some((c) => c.doc_type === "vuln_advisory"));
-  const scores = res.chunks.map((c) => c.score_rerank ?? 0);
+  const scores = res.chunks.map((c) => c.score_sparse ?? 0);
   assert.ok(Math.abs(scores[0]! - 1) < 1e-9, "榜首归一为 1");
   for (let i = 1; i < scores.length; i += 1) assert.ok(scores[i]! <= scores[i - 1]!);
-  assert.equal(res.embedder_model_id, "hash-256");
+  assert.equal(res.embedder_model_id, "bm25-lite-v1");
   assert.ok(Number.isInteger(res.retrieval_ms) && res.retrieval_ms >= 0);
   assert.equal(res.trace_id, "tr_t");
   // 确定性：重复检索顺序一致
@@ -159,7 +160,13 @@ test("QdrantEngine：fetch 失败 → degrade 到 MemoryIndex", async () => {
     throw new Error("connect ECONNREFUSED 127.0.0.1:6333");
   }) as unknown as typeof fetch;
   try {
-    const engine = new QdrantEngine({ url: "http://127.0.0.1:6333", fetch_impl: failingFetch });
+    const engine = new QdrantEngine({
+      url: "http://127.0.0.1:6333",
+      model_id: "test-embed-v1",
+      embedding_dim: 2,
+      embedder: async (texts) => ({ vectors: texts.map(() => [1, 0]), model_id: "test-embed-v1", provider: "vllm", degraded_to: "" }),
+      fetch_impl: failingFetch,
+    });
     const res = await engine.search(req({}));
     assert.equal(res.degraded_to, "memory_index");
     assert.ok(res.chunks.length > 0);
@@ -188,7 +195,7 @@ test("QdrantEngine：正常路径打 REST（POST .../points/search，named vecto
               doc_type: "vuln_advisory",
               text: "CVE-2021-44228 Log4Shell Qdrant 回放 chunk",
               quality_score: 0.9,
-              provenance: { url: "https://nvd.nist.gov/vuln/detail/CVE-2021-44228", section: "description" },
+              provenance: { url: "https://nvd.nist.gov/vuln/detail/CVE-2021-44228", section: "description", page: 3, sha256: "a".repeat(64) },
               cve_ids: ["CVE-2021-44228"],
             },
           },
@@ -198,18 +205,30 @@ test("QdrantEngine：正常路径打 REST（POST .../points/search，named vecto
     );
   }) as unknown as typeof fetch;
   try {
-    const engine = new QdrantEngine({ url: "http://127.0.0.1:6333", collection: "c1", fetch_impl: stubFetch });
+    const engine = new QdrantEngine({
+      url: "http://127.0.0.1:6333",
+      collection: "configured_elsewhere",
+      model_id: "test-embed-v1",
+      embedding_dim: 2,
+      embedder: async (texts) => ({ vectors: texts.map(() => [0.25, 0.75]), model_id: "test-embed-v1", provider: "vllm", degraded_to: "" }),
+      fetch_impl: stubFetch,
+    });
+    engine.bindCollection({ collection_name: "c1", model_id: "test-embed-v1", dim: 2, metric: "cosine" });
     const res = await engine.search(req({ query_text: "Log4Shell", top_k: 3 }));
     assert.equal(calls.length, 1);
     assert.equal(calls[0]!.url, "http://127.0.0.1:6333/collections/c1/points/search");
     assert.equal(calls[0]!.method, "POST");
-    const body = calls[0]!.body as { vector: { name: string }; limit: number; with_payload: boolean };
+    const body = calls[0]!.body as { vector: { name: string; vector: number[] }; limit: number; with_payload: boolean; filter: { must: Array<{ key: string }> } };
     assert.equal(body.vector.name, "dense");
+    assert.deepEqual(body.vector.vector, [0.25, 0.75]);
+    assert.ok(body.filter.must.some((clause) => clause.key === "embedding_model_id"));
     assert.equal(body.limit, 3);
     assert.equal(body.with_payload, true);
     assert.equal(res.chunks.length, 1);
     assert.equal(res.chunks[0]!.chunk_id, "chunk_qdrant_1");
-    assert.ok((res.chunks[0]!.score_rerank ?? 0) > 0);
+    assert.equal(res.chunks[0]!.provenance.page, 3);
+    assert.equal(res.chunks[0]!.provenance.sha256, "a".repeat(64));
+    assert.ok((res.chunks[0]!.score_dense ?? 0) > 0);
     assert.equal(res.degraded_to, undefined, "正常路径不得出现降级标记");
   } finally {
     if (savedUrl !== undefined) process.env.QDRANT_URL = savedUrl;
@@ -217,11 +236,133 @@ test("QdrantEngine：正常路径打 REST（POST .../points/search，named vecto
   }
 });
 
+
+test("QdrantEngine：cache embedding 不写假向量，查询显式降级为 BM25", async () => {
+  const savedOffline = process.env.OFFLINE_FIXTURES;
+  delete process.env.OFFLINE_FIXTURES;
+  let requests = 0;
+  const fetchImpl = (async (): Promise<Response> => {
+    requests += 1;
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const engine = new QdrantEngine({
+      url: "http://127.0.0.1:6333",
+      model_id: "hash-256",
+      embedding_dim: 256,
+      embedder: async (texts) => ({ vectors: texts.map(() => new Array(256).fill(0)), model_id: "hash-256", provider: "cache", degraded_to: "" }),
+      fetch_impl: fetchImpl,
+    });
+    const res = await engine.search(req({}));
+    assert.equal(res.degraded_to, "memory_index");
+    assert.ok(res.chunks.length > 0);
+    assert.equal(requests, 0, "cache hash 不得请求语义 Qdrant 集合");
+  } finally {
+    if (savedOffline !== undefined) process.env.OFFLINE_FIXTURES = savedOffline;
+    else delete process.env.OFFLINE_FIXTURES;
+  }
+});
+
+test("QdrantEngine：hash-256 ID 即使伪报 provider 也不能写入", async () => {
+  let requests = 0;
+  const fetchImpl = (async () => { requests += 1; return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
+  const engine = new QdrantEngine({
+    url: "http://127.0.0.1:6333",
+    model_id: "hash-256",
+    embedding_dim: 256,
+    embedder: async (texts) => ({ vectors: texts.map(() => new Array(256).fill(0.1)), model_id: "hash-256", provider: "vllm", degraded_to: "" }),
+    fetch_impl: fetchImpl,
+  });
+  await assert.rejects(engine.upsert([DIRTY_CHUNK]), /hash-256/);
+  assert.equal(requests, 0);
+});
+
+test("QdrantEngine：upsert 使用 MG1 原向量并写入 model_id", async () => {
+  const calls: Array<{ url: string; method: string; body: unknown }> = [];
+  const fetchImpl = (async (input: string, init?: RequestInit): Promise<Response> => {
+    calls.push({ url: input, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+  const chunk: EvidenceChunk = { ...DIRTY_CHUNK, chunk_id: "chunk_embed_upsert" };
+  const engine = new QdrantEngine({
+    url: "http://127.0.0.1:6333",
+    collection: "c_embed",
+    model_id: "bge-m3",
+    model_version: "v2026.09",
+    embedding_dim: 2,
+    embedder: async (texts) => ({ vectors: texts.map(() => [0.1, 0.9]), model_id: "bge-m3", model_version: "v2026.09", provider: "vllm", degraded_to: "" }),
+    fetch_impl: fetchImpl,
+  });
+  engine.bindCollection({ collection_name: "c_embed", model_id: "bge-m3", model_version: "v2026.09", dim: 2, metric: "cosine" });
+  await engine.upsert([chunk]);
+  assert.equal(calls.length, 2);
+  const points = calls[1]!.body as { points: Array<{ vector: { dense: number[] }; payload: { embedding_model_id: string; embedding_model_version?: string } }> };
+  assert.deepEqual(points.points[0]!.vector.dense, [0.1, 0.9]);
+  assert.equal(points.points[0]!.payload.embedding_model_id, "bge-m3");
+  assert.equal(points.points[0]!.payload.embedding_model_version, "v2026.09");
+});
+
+test("QdrantEngine：BM25 和 dense 以 RRF 融合并分别保留分数", () => {
+  const dense = [{ ...DIRTY_CHUNK, chunk_id: "shared", score_dense: 0.8 }, { ...DIRTY_CHUNK, chunk_id: "dense-only", score_dense: 0.7 }];
+  const sparse = [{ ...DIRTY_CHUNK, chunk_id: "shared", score_sparse: 1 }, { ...DIRTY_CHUNK, chunk_id: "sparse-only", score_sparse: 0.7 }];
+  const fused = fuseHybrid(dense, sparse, 3);
+  assert.equal(fused.length, 3);
+  assert.ok(fused[0]!.score_dense !== undefined && fused[0]!.score_sparse !== undefined);
+  assert.equal(fused[0]!.chunk_id, "shared");
+  assert.equal(fused[0]!.score_rerank, undefined, "RRF 不得伪装成 reranker 分数");
+});
+test("QdrantEngine：index、dense、BM25 与 RRF 每一步都落 lineage", async () => {
+  const store = new MemoryEventStore();
+  const bus = new EventBus({ store });
+  const payloadChunk: EvidenceChunk = {
+    ...DIRTY_CHUNK,
+    chunk_id: "chunk_lineage_q2",
+    provenance: { url: "https://vendor.example/advisory", section: "body", sha256: "c".repeat(64) },
+  };
+  const requests: Array<{ url: string; body: any }> = [];
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    requests.push({ url: String(_input), body: init?.body ? JSON.parse(String(init.body)) : null });
+    if (init?.method === "POST") {
+      return new Response(JSON.stringify({ result: [{ id: 1, score: 0.88, payload: {
+        chunk_id: payloadChunk.chunk_id,
+        doc_type: payloadChunk.doc_type,
+        text: payloadChunk.text,
+        quality_score: payloadChunk.quality_score,
+        provenance: payloadChunk.provenance,
+      } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const engine = new QdrantEngine({
+    url: "http://127.0.0.1:6333", collection: "c_lineage", model_id: "bge-m3", model_version: "v2026.09", embedding_dim: 2,
+    embedder: async (texts) => ({ vectors: texts.map(() => [0.2, 0.8]), model_id: "bge-m3", model_version: "v2026.09", provider: "vllm", degraded_to: "" }),
+    fetch_impl: fetchImpl, bus,
+  });
+  const context = { trace_id: "tr_q2_lineage", parent_lineage_ids: ["ln_dq_parent"], causation_id: "ev_dq_parent" };
+  await indexChunks(engine, [payloadChunk], { collection_name: "c_lineage", model_id: "bge-m3", model_version: "v2026.09", dim: 2, metric: "cosine" }, context);
+  await engine.search(req({ query_text: "Log4Shell 影响版本", trace_id: context.trace_id }));
+  const records = await bus.readLineage(context.trace_id);
+  const stages = records.map((record) => record.stage);
+  assert.ok(stages.includes("q2.bm25_index"));
+  assert.ok(stages.includes("q2.qdrant_index"));
+  assert.ok(stages.includes("q2.qdrant_search"));
+  assert.ok(stages.includes("q2.bm25_search"));
+  assert.ok(stages.includes("q2.hybrid_fusion"));
+  const vectorIndex = records.find((record) => record.stage === "q2.qdrant_index")!;
+  assert.ok(vectorIndex.output_refs.some((ref) => ref.kind === "QdrantPoint" && ref.sha256?.length === 64));
+  const fusion = records.find((record) => record.stage === "q2.hybrid_fusion")!;
+  assert.equal(fusion.parent_lineage_ids.length, 2);
+  assert.equal(vectorIndex.execution?.model_id, "bge-m3");
+  assert.equal(vectorIndex.execution?.model_version, "v2026.09");
+  const searchBody = requests[2]!.body as { filter: { must: Array<{ key: string; match?: { value?: string } }> } };
+  assert.ok(searchBody.filter.must.some((clause) => clause.key === "embedding_model_version" && clause.match?.value === "v2026.09"));
+});
+
 test("indexChunks：S3 绑定登记 + 模型冲突抛错（禁止静默混用）", async () => {
   const idx = new MemoryIndex();
   const meta = await indexChunks(idx, readFixtureChunks(), {
     collection_name: "c_p0",
-    model_id: "hash-256",
+    model_id: "bm25-lite-v1",
     dim: 256,
     metric: "cosine",
   });
