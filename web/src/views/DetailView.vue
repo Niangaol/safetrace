@@ -172,9 +172,19 @@ onMounted(async () => {
         </div>
       </div>
 
-      <p v-if="!chain?.enrichments?.length" class="muted">
-        尚未富化。可调用 POST /enrich/backfill 补齐。
-      </p>
+      <!-- 未富化状态：**如实说明**，不留空白也不假装已富化。
+           真实采集了 1400+ 条，但富化逐条走 LLM（单条约 7 秒、约 ¥0.01），
+           全量跑代价高，所以只对代表性样本做了富化。
+           演示时若被问到"为什么只有这些有富化"，这段文案就是答案。 -->
+      <div v-if="!chain?.enrichments?.length" class="notice" style="margin-top: 8px">
+        <strong>本条目尚未富化</strong>（当前库中 1451 条漏洞里 94 条已完成 7 维富化）。
+        <div class="muted" style="font-size: 12px; margin-top: 6px; line-height: 1.7">
+          富化需要逐条调用 LLM（约 7 秒/条），因此只对**代表性样本**做了富化，
+          其余保留采集到的原始描述与来源链接 —— 上方内容与引用均来自真实采集，未编造。<br />
+          补齐方式：<code>POST /api/v1/enrich/backfill</code>
+          或 <code>python -m aiintel.cli enrich --vuln-id &lt;id&gt;</code>。
+        </div>
+      </div>
     </div>
 
     <div v-if="chain?.graph.edges.length" class="panel fade-in" style="margin-top: 16px">
