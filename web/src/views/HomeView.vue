@@ -77,21 +77,20 @@ const STAT_ICONS: Record<string, string> = {
 
 interface GlobeDot { x: number; y: number; r: number; kind: string; o: number; delay: string }
 
-/** 地球表面“星星点点”的威胁/防御信号（确定性生成，纯装饰） */
+/** 地球表面“星星点点”的威胁/防御信号：集中在上半球球冠可见区（确定性生成，纯装饰） */
 const globeDots = computed<GlobeDot[]>(() => {
   const arr: GlobeDot[] = []
   const R = 168
-  const golden = 0.6180339887
-  for (let i = 0; i < 96; i++) {
-    const u = (i * golden) % 1
-    const theta = Math.acos(1 - 2 * u)
+  for (let i = 0; i < 90; i++) {
+    // 只铺球冠区（θ∈≈[0.04, 0.48] rad，对应顶部可见区），phi 全覆盖
+    const theta = 0.04 + ((i * 0.2394) % 1) * 0.44
     const phi = (i * 2.399963) % (Math.PI * 2)
     const x = 200 + R * Math.sin(theta) * Math.cos(phi)
     const y = 200 - R * Math.cos(theta)
     const z = R * Math.sin(theta) * Math.sin(phi)
     const o = 0.3 + ((z + R) / (2 * R)) * 0.7
     const kind = i % 7 === 0 ? 'attack' : i % 3 === 0 ? 'defend' : 'neutral'
-    const r = kind === 'attack' ? 1.9 + (i % 3) * 0.4 : kind === 'defend' ? 1.6 : 1.1
+    const r = kind === 'attack' ? 2.1 + (i % 3) * 0.5 : kind === 'defend' ? 1.7 : 1.2
     arr.push({ x, y, r, kind, o, delay: `-${((i % 23) * 0.21 + (i % 5) * 0.06).toFixed(2)}s` })
   }
   return arr
@@ -104,32 +103,32 @@ const globePings = computed<GlobeDot[]>(() =>
 
 interface GlobeArc { d: string; kind: string; delay: string; dur: string }
 
-/** 卡巴斯基式“实时威胁地图”：球面上城市间飞行的攻击/防御流线（确定性生成） */
+/** 卡巴斯基式“实时威胁地图”：球冠上城市间飞行的攻击/防御流线（确定性生成） */
 const globeArcs = computed<GlobeArc[]>(() => {
   const pts = globeDots.value
   if (!pts.length) return []
   const kinds = ['threat', 'threat', 'threat', 'attack', 'threat', 'defend', 'threat']
   const arcs: GlobeArc[] = []
-  const pick = (i: number) => pts[(i * 13 + 5) % pts.length]
-  for (let k = 0; k < 14; k++) {
+  const pick = (i: number) => pts[(i * 7 + 3) % pts.length]
+  for (let k = 0; k < 12; k++) {
     const a = pick(k)
-    const b = pick(k + 3 + (k % 5))
+    const b = pick(k + 4 + (k % 3))
     const dx = b.x - a.x
     const dy = b.y - a.y
     const d = Math.hypot(dx, dy)
-    if (d < 44 || d > 200) continue
+    if (d < 26 || d > 120) continue
     const mx = (a.x + b.x) / 2
     const my = (a.y + b.y) / 2
     const len = d || 1
     // 沿弦垂线抬高控制点，形成跨越球面的弓形流线
     const px = -dy / len
     const py = dx / len
-    const lift = d * 0.36
+    const lift = d * 0.5
     arcs.push({
       d: `M ${a.x.toFixed(1)} ${a.y.toFixed(1)} Q ${(mx + px * lift).toFixed(1)} ${(my + py * lift).toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`,
       kind: kinds[k % kinds.length],
-      delay: `-${((k * 1.7) % 4.2).toFixed(2)}s`,
-      dur: `${(2.2 + (k % 3) * 0.7).toFixed(2)}s`,
+      delay: `-${((k * 1.7) % 3.6).toFixed(2)}s`,
+      dur: `${(2 + (k % 3) * 0.6).toFixed(2)}s`,
     })
   }
   return arcs
@@ -185,53 +184,54 @@ const toolsByTier = computed(() => {
         <div class="orb orb-a"></div>
         <div class="orb orb-b"></div>
         <div class="orb orb-c"></div>
-        <div class="globe-wrap" @click="router.push('/dashboard')" title="点击进入态势大屏">
-          <svg viewBox="0 0 400 400" class="globe-svg" role="img" aria-label="全球威胁与防御信号（示意）">
-            <g transform="rotate(-18 200 200)">
-              <circle cx="200" cy="200" r="178" class="globe-rim" />
-              <ellipse cx="200" cy="200" rx="156" ry="178" class="globe-meridian" />
-              <ellipse cx="200" cy="200" rx="102" ry="178" class="globe-meridian" />
-              <line x1="200" y1="22" x2="200" y2="378" class="globe-meridian" />
-              <line x1="22" y1="200" x2="378" y2="200" class="globe-parallel" />
-              <line x1="46" y1="111" x2="354" y2="111" class="globe-parallel" />
-              <line x1="46" y1="289" x2="354" y2="289" class="globe-parallel" />
-              <line x1="111" y1="46" x2="289" y2="46" class="globe-parallel" />
-              <line x1="111" y1="354" x2="289" y2="354" class="globe-parallel" />
-              <path d="M 60 200 A 140 140 0 0 1 156 68" class="globe-rim-arc" />
-              <!-- 威胁流线：静态半透明轨道 + 流动亮粒子 -->
-              <g class="globe-arcs">
-                <path
-                  v-for="(arc, i) in globeArcs"
-                  :key="'rail' + i"
-                  :d="arc.d"
-                  class="globe-arc-rail"
+        <div class="globe-viewport" @click="router.push('/dashboard')" title="点击进入态势大屏">
+          <div class="globe-inner">
+            <svg viewBox="0 0 400 400" class="globe-svg" role="img" aria-label="全球威胁与防御信号（示意）">
+              <g transform="rotate(-18 200 200)">
+                <circle cx="200" cy="200" r="178" class="globe-rim" />
+                <ellipse cx="200" cy="200" rx="156" ry="178" class="globe-meridian" />
+                <ellipse cx="200" cy="200" rx="102" ry="178" class="globe-meridian" />
+                <line x1="200" y1="22" x2="200" y2="378" class="globe-meridian" />
+                <line x1="22" y1="200" x2="378" y2="200" class="globe-parallel" />
+                <line x1="46" y1="111" x2="354" y2="111" class="globe-parallel" />
+                <line x1="46" y1="289" x2="354" y2="289" class="globe-parallel" />
+                <line x1="111" y1="46" x2="289" y2="46" class="globe-parallel" />
+                <line x1="111" y1="354" x2="289" y2="354" class="globe-parallel" />
+                <path d="M 60 200 A 140 140 0 0 1 156 68" class="globe-rim-arc" />
+                <!-- 威胁流线：静态半透明轨道 + 流动亮粒子 -->
+                <g class="globe-arcs">
+                  <path
+                    v-for="(arc, i) in globeArcs"
+                    :key="'rail' + i"
+                    :d="arc.d"
+                    class="globe-arc-rail"
+                  />
+                  <path
+                    v-for="(arc, i) in globeArcs"
+                    :key="'stream' + i"
+                    :d="arc.d"
+                    class="globe-arc-stream"
+                    :class="arc.kind"
+                    :style="{ animationDelay: arc.delay, animationDuration: arc.dur }"
+                  />
+                </g>
+                <circle
+                  v-for="(d, i) in globeDots"
+                  :key="'d' + i"
+                  :cx="d.x" :cy="d.y" :r="d.r"
+                  class="globe-dot" :class="d.kind"
+                  :style="{ animationDelay: d.delay, opacity: d.o }"
                 />
-                <path
-                  v-for="(arc, i) in globeArcs"
-                  :key="'stream' + i"
-                  :d="arc.d"
-                  class="globe-arc-stream"
-                  :class="arc.kind"
-                  :style="{ animationDelay: arc.delay, animationDuration: arc.dur }"
+                <circle
+                  v-for="(p, i) in globePings"
+                  :key="'p' + i"
+                  :cx="p.x" :cy="p.y" :r="3"
+                  class="globe-ping" :class="p.kind"
+                  :style="{ animationDelay: p.delay }"
                 />
               </g>
-              <circle
-                v-for="(d, i) in globeDots"
-                :key="'d' + i"
-                :cx="d.x" :cy="d.y" :r="d.r"
-                class="globe-dot" :class="d.kind"
-                :style="{ animationDelay: d.delay, opacity: d.o }"
-              />
-              <circle
-                v-for="(p, i) in globePings"
-                :key="'p' + i"
-                :cx="p.x" :cy="p.y" :r="3"
-                class="globe-ping" :class="p.kind"
-                :style="{ animationDelay: p.delay }"
-              />
-            </g>
-          </svg>
-          <span class="globe-caption">全球威胁与防御信号</span>
+            </svg>
+          </div>
         </div>
       </div>
       <div class="hero-content">
@@ -239,7 +239,10 @@ const toolsByTier = computed(() => {
           <span class="hero-badge-dot"></span>
           AI Security Intelligence
         </div>
-        <h1 class="hero-title">SafeTrace</h1>
+        <h1 class="hero-title">
+          <span class="ht-base">SafeTrace</span>
+          <span class="ht-glow" aria-hidden="true">SafeTrace</span>
+        </h1>
         <p class="hero-subtitle">智能体驱动的 AI 安全知识情报系统</p>
         <p class="hero-desc">
           多源采集 · 七维富化 · 证据链追溯 · 混合检索 · 自动降级
@@ -382,7 +385,7 @@ const toolsByTier = computed(() => {
 .hero {
   position: relative;
   text-align: center;
-  padding: 96px 24px 88px;
+  padding: 206px 24px 88px;
   border-radius: 16px;
   overflow: hidden;
   margin-bottom: 0;
@@ -436,22 +439,34 @@ const toolsByTier = computed(() => {
   0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
   50% { transform: translateX(-50%) translateY(14px) scale(1.04); }
 }
-/* 品牌地球：3D 轮廓（经线椭圆 + 纬线横线）+ 地表信号点光 */
-.globe-wrap {
-  position: relative;
-  cursor: pointer;
+/* 品牌地球：放大到整页宽的巨球，只露顶部球冠（≈1/7），不与标题重合 */
+.globe-viewport {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 0;
-  animation: globeBob 11s ease-in-out infinite;
+  width: min(1280px, 220vw);
+  height: 172px;
+  overflow: hidden;
+  cursor: pointer;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 62%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 62%, transparent 100%);
+}
+.globe-inner {
+  width: 100%;
+  transform: translateY(-4.5%);
+}
+.globe-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+  animation: globeBob 13s ease-in-out infinite;
 }
 @keyframes globeBob {
   0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(10px) scale(1.018); }
-}
-.globe-svg {
-  width: 440px;
-  max-width: 94vw;
-  height: auto;
-  overflow: visible;
+  50% { transform: translateY(5px) scale(1.006); }
 }
 .globe-rim {
   fill: rgba(8, 13, 25, 0.6);
@@ -523,24 +538,6 @@ const toolsByTier = computed(() => {
   60% { transform: scale(1.6); opacity: 0.2; }
   100% { transform: scale(1.9); opacity: 0; }
 }
-.globe-caption {
-  position: absolute;
-  left: 50%;
-  bottom: 4%;
-  transform: translateX(-50%);
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: #64748b;
-  background: rgba(8, 13, 25, 0.65);
-  border: 1px solid rgba(56, 189, 248, 0.18);
-  border-radius: 12px;
-  padding: 3px 12px;
-  white-space: nowrap;
-}
-.globe-wrap:hover .globe-caption {
-  color: #7dd3fc;
-  border-color: rgba(56, 189, 248, 0.45);
-}
 .hero-content {
   position: relative;
   z-index: 1;
@@ -573,22 +570,58 @@ const toolsByTier = computed(() => {
   50% { transform: scale(0.6); opacity: 0.6; }
 }
 .hero-title {
+  position: relative;
+  display: inline-block;
   font-size: 82px;
   font-weight: 800;
-  letter-spacing: -2px;
-  line-height: 1.08;
-  background: linear-gradient(110deg, #f8fafc 0%, #7dd3fc 28%, #38bdf8 46%, #a78bfa 72%, #f8fafc 100%);
-  background-size: 240% 100%;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: titleShine 7s linear infinite;
-  filter: drop-shadow(0 6px 32px rgba(56, 189, 248, 0.35));
+  letter-spacing: -0.02em;
+  line-height: 1.1;
   margin: 0 0 10px;
+  filter: drop-shadow(0 8px 36px rgba(56, 189, 248, 0.35));
 }
-@keyframes titleShine {
-  from { background-position: 0% 0; }
-  to { background-position: -240% 0; }
+.ht-base {
+  font: inherit;
+  background: linear-gradient(
+    178deg,
+    #ffffff 0%,
+    #e8eef7 18%,
+    #9cc8f2 42%,
+    #64b5f6 62%,
+    #1e88e5 82%,
+    #1565c0 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+/* 真实光扫：一道亮带单独扫过文字表面（文字其余部分保持稳态金属渐变） */
+.ht-glow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font: inherit;
+  background: linear-gradient(
+    102deg,
+    transparent 18%,
+    rgba(255, 255, 255, 0.5) 40%,
+    rgba(255, 255, 255, 0.95) 50%,
+    rgba(255, 255, 255, 0.5) 60%,
+    transparent 82%
+  );
+  background-size: 240px 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  pointer-events: none;
+  animation: htSweep 4.6s ease-in-out infinite;
+}
+@keyframes htSweep {
+  0% { background-position: -260px 0; }
+  55% { background-position: 620px 0; }
+  100% { background-position: 1020px 0; }
 }
 .hero-subtitle {
   font-size: 21px;
