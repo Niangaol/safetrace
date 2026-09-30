@@ -35,8 +35,45 @@ onMounted(() => {
     raf = requestAnimationFrame(loop)
   }
   raf = requestAnimationFrame(loop)
+  measure()
+  window.addEventListener('resize', measure)
 })
-onUnmounted(() => cancelAnimationFrame(raf))
+onUnmounted(() => {
+  cancelAnimationFrame(raf)
+  window.removeEventListener('resize', measure)
+})
+
+// ── 悬停工具提示：点位坐标按容器宽度换算（SVG viewBox 520 → 实际像素）──
+const wrapRef = ref<HTMLElement | null>(null)
+const svgScale = ref(W / 560)
+function measure() {
+  const el = wrapRef.value
+  svgScale.value = el ? el.clientWidth / W : W / 560
+}
+const hovered = ref<DimState | null>(null)
+
+const nodePos = computed(() => {
+  const m = new Map<string, { x: number; y: number }>()
+  for (const node of nodes.value) m.set(node.id, { x: node.x, y: node.y })
+  return m
+})
+
+const tooltipStyle = computed(() => {
+  if (!hovered.value) return {}
+  const p = nodePos.value.get(hovered.value.id)
+  const s = svgScale.value
+  const wrapW = wrapRef.value?.clientWidth ?? 340
+  let left = (p?.x ?? 0) * s + 14
+  let top = (p?.y ?? 0) * s - 92
+  if (left + 200 > wrapW) left = wrapW - 208
+  if (left < 8) left = 8
+  if (top < 8) top = 8
+  return { left: `${left}px`, top: `${top}px` }
+})
+
+function statusText(s: DimState['status']): string {
+  return { real: '数据顺畅', mock: 'mock 模拟', degraded: '降级为规则', conflict: '一致性冲突' }[s] ?? s
+}
 
 const nodes = computed(() => {
   const n = props.dims.length
@@ -100,7 +137,7 @@ const legendItems = [
 </script>
 
 <template>
-  <div class="dataflow-container">
+  <div ref="wrapRef" class="dataflow-container">
     <svg :viewBox="`0 0 ${W} ${H}`" class="dataflow-svg" preserveAspectRatio="xMidYMid meet">
       <defs>
         <radialGradient id="coreGrad" cx="50%" cy="50%" r="50%">
@@ -169,18 +206,32 @@ const legendItems = [
       <!-- central node -->
       <g>
         <circle :cx="CX" :cy="CY" :r="50" fill="url(#coreGrad)" :opacity="centralPulse * 0.3 + 0.3" />
-        <circle :cx="CX" :cy="CY" :r="30" fill="#0a0f1a" stroke="#38bdf8" :stroke-width="2" filter="url(#glow)" />
-        <circle :cx="CX" :cy="CY" :r="36" fill="none" stroke="#38bdf8" :stroke-width="1.5" :opacity="centralPulse * 0.4" />
-        <text :x="CX" :y="CY - 4" text-anchor="middle" fill="#f1f5f9" font-size="11" font-weight="700" font-family="JetBrains Mono, monospace">
+        <circle :cx="CX" :cy="CY" :r="34" fill="#0a0f1a" stroke="#38bdf8" :stroke-width="2" filter="url(#glow)" />
+        <circle :cx="CX" :cy="CY" :r="40" fill="none" stroke="#38bdf8" :stroke-width="1.5" :opacity="centralPulse * 0.4" />
+        <!-- 中心仅保留必要信息，放大字号（缩小后唯一仍可读的文字） -->
+        <text :x="CX" :y="CY - 5" text-anchor="middle" fill="#f1f5f9" font-size="17" font-weight="800" font-family="JetBrains Mono, monospace">
           {{ centralLabel || 'CVE' }}
         </text>
-        <text :x="CX" :y="CY + 10" text-anchor="middle" fill="#64748b" font-size="9" font-family="Inter, sans-serif">
-          {{ centralSub || 'IntelItem' }}
+        <text :x="CX" :y="CY + 13" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="JetBrains Mono, monospace">
+          {{ centralSub || '' }}
         </text>
       </g>
 
-      <!-- satellite nodes -->
-      <g v-for="node in nodes" :key="'node' + node.id">
+      <!-- satellite nodes：只保留色点，完整内容在悬停浮层展示 -->
+      <g
+        v-for="node in nodes"
+        :key="'node' + node.id"
+        @mouseenter="hovered = node"
+        @mouseleave="hovered = null"
+        style="cursor: pointer"
+      >
+        <!-- 悬停高亮环 -->
+        <circle
+          v-if="hovered?.id === node.id"
+          :cx="node.x" :cy="node.y" :r="30"
+          fill="none" :stroke="flowColor(node.status)" stroke-width="2"
+          :opacity="0.5 + Math.sin(tick * 4) * 0.2"
+        />
         <!-- degraded pulse ring -->
         <circle
           v-if="node.status === 'degraded'"
@@ -198,64 +249,34 @@ const legendItems = [
         <!-- node body -->
         <circle
           :cx="node.x" :cy="node.y" :r="22"
-          fill="#0f1623"
+          :fill="hovered?.id === node.id ? flowColor(node.status) : '#0f1623'"
           :stroke="flowColor(node.status)"
           :stroke-width="2"
           filter="url(#glow)"
         />
-        <!-- node icon (short label) -->
+        <!-- short code（放大、悬停时高对比） -->
         <text
-          :x="node.x" :y="node.y + 4"
+          :x="node.x" :y="node.y + 5"
           text-anchor="middle"
-          :fill="flowColor(node.status)"
-          font-size="10" font-weight="700"
+          :fill="hovered?.id === node.id ? '#06121f' : flowColor(node.status)"
+          font-size="12" font-weight="700"
           font-family="JetBrains Mono, monospace"
         >
           {{ node.short }}
         </text>
-        <!-- node full label -->
-        <text
-          :x="node.x" :y="node.y + 38"
-          text-anchor="middle"
-          fill="#94a3b8"
-          font-size="9"
-          font-family="Inter, sans-serif"
-        >
-          {{ node.label }}
-        </text>
-        <!-- confidence -->
-        <text
-          :x="node.x" :y="node.y + 50"
-          text-anchor="middle"
-          :fill="flowColor(node.status)"
-          font-size="9" font-weight="500"
-          font-family="JetBrains Mono, monospace"
-          opacity="0.7"
-        >
-          {{ (node.confidence * 100).toFixed(0) }}%
-        </text>
-        <!-- degraded indicator -->
-        <text
-          v-if="node.degraded_to"
-          :x="node.x" :y="node.y - 30"
-          text-anchor="middle"
-          fill="#ff8800" font-size="8" font-weight="600"
-          font-family="Inter, sans-serif"
-        >
-          ⚠ {{ node.degraded_to }}
-        </text>
-        <!-- mock indicator -->
-        <text
-          v-if="node.status === 'mock'"
-          :x="node.x" :y="node.y - 30"
-          text-anchor="middle"
-          fill="#eab308" font-size="8" font-weight="600"
-          font-family="Inter, sans-serif"
-        >
-          ◇ mock
-        </text>
       </g>
+
+      <!-- 悬停浮层：完整内容只在悬停时展示 -->
     </svg>
+
+    <div v-if="hovered" class="df-tooltip" :style="tooltipStyle">
+      <div class="tt-title" :style="{ color: flowColor(hovered.status) }">{{ hovered.label }}</div>
+      <div class="tt-line">状态：{{ statusText(hovered.status) }}</div>
+      <div class="tt-line">置信度：{{ (hovered.confidence * 100).toFixed(0) }}%</div>
+      <div v-if="hovered.degraded_to" class="tt-line tt-warn">⚠ 降级为 {{ hovered.degraded_to }}</div>
+      <div v-if="hovered.status === 'mock'" class="tt-line tt-warn">◇ mock（预置）</div>
+      <div v-if="hovered.status === 'conflict'" class="tt-line tt-crit">! 与其它维度冲突</div>
+    </div>
 
     <!-- legend -->
     <div class="df-legend">
@@ -270,6 +291,7 @@ const legendItems = [
 
 <style scoped>
 .dataflow-container {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -304,4 +326,36 @@ const legendItems = [
 .df-legend-desc {
   color: #64748b;
 }
+
+/* 悬停浮层：完整内容只在悬停时展示 */
+.df-tooltip {
+  position: absolute;
+  min-width: 190px;
+  max-width: 200px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  box-shadow: var(--shadow), var(--shadow-glow);
+  pointer-events: none;
+  z-index: 30;
+  animation: ttIn 0.15s ease-out;
+}
+@keyframes ttIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+.tt-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.tt-line {
+  font-size: 12px;
+  color: var(--text);
+  margin: 3px 0;
+}
+.tt-warn { color: var(--high); }
+.tt-crit { color: var(--critical); }
 </style>

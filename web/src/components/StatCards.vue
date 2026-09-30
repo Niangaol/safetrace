@@ -1,6 +1,16 @@
 <script setup lang="ts">
-defineProps<{
-  items: { label: string; value: string | number | null; hint?: string; icon?: string; variant?: string }[]
+import { onMounted, onUnmounted, ref } from 'vue'
+
+const props = defineProps<{
+  items: {
+    label: string
+    value: string | number | null
+    hint?: string
+    icon?: string
+    variant?: string
+    /** 点击展开后展示的明细行（真实数据），不提供则提示“无更多明细” */
+    detail?: string[]
+  }[]
 }>()
 
 const ICON_PATHS: Record<string, string> = {
@@ -13,24 +23,170 @@ const ICON_PATHS: Record<string, string> = {
   yen: 'M5 3l7 8 7-8 M12 11v10 M8 14h8 M8 17h8',
   refresh: 'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0 1 14.85-3.36L23 10 M1 14l4.64 4.36A9 9 0 0 0 20.49 15',
 }
+
+const expandedLabel = ref<string | null>(null)
+
+function ripple(e: PointerEvent): void {
+  const card = e.currentTarget as HTMLElement
+  const layer = card.querySelector('.ripple-layer') as HTMLElement | null
+  if (!layer) return
+  const rect = card.getBoundingClientRect()
+  const size = Math.max(rect.width, rect.height) * 1.4
+  const span = document.createElement('span')
+  span.className = 'ripple-ink'
+  span.style.width = `${size}px`
+  span.style.height = `${size}px`
+  span.style.left = `${e.clientX - rect.left - size / 2}px`
+  span.style.top = `${e.clientY - rect.top - size / 2}px`
+  layer.appendChild(span)
+  window.setTimeout(() => span.remove(), 650)
+}
+
+function toggle(label: string): void {
+  expandedLabel.value = expandedLabel.value === label ? null : label
+}
+
+function onDocClick(e: MouseEvent): void {
+  if (expandedLabel.value) {
+    const t = e.target as HTMLElement
+    if (!t.closest('.card')) expandedLabel.value = null
+  }
+}
+onMounted(() => document.addEventListener('click', onDocClick))
+onUnmounted(() => document.removeEventListener('click', onDocClick))
 </script>
 
 <template>
   <div class="cards">
     <div
-      v-for="item in items"
+      v-for="item in props.items"
       :key="item.label"
       class="card fade-in"
-      :class="item.variant || ''"
+      :class="[item.variant || '', { expanded: expandedLabel === item.label }]"
+      @pointerdown="ripple"
+      @click="toggle(item.label)"
     >
-      <div class="label">{{ item.label }}</div>
-      <div class="value">{{ item.value ?? '—' }}</div>
-      <div v-if="item.hint" class="hint">{{ item.hint }}</div>
-      <div v-if="item.icon" class="icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path :d="ICON_PATHS[item.icon] || item.icon" />
-        </svg>
+      <div class="ripple-layer"></div>
+      <div class="card-body">
+        <div class="label">{{ item.label }}</div>
+        <div class="value">{{ item.value ?? '—' }}</div>
+        <div v-if="item.hint" class="hint">{{ item.hint }}</div>
+        <div v-if="item.icon" class="icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path :d="ICON_PATHS[item.icon] || item.icon" />
+          </svg>
+        </div>
+      </div>
+
+      <div v-if="expandedLabel === item.label" class="card-detail">
+        <template v-if="item.detail?.length">
+          <div v-for="(line, i) in item.detail" :key="i" class="detail-row">
+            <span class="detail-dot"></span>
+            <span>{{ line }}</span>
+          </div>
+        </template>
+        <div v-else class="detail-none">该指标暂无更多明细</div>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.card {
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.ripple-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+}
+.ripple-ink {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(56, 189, 248, 0.3);
+  transform: scale(0);
+  pointer-events: none;
+  animation: ripple 0.65s ease-out forwards;
+}
+@keyframes ripple {
+  to { transform: scale(2); opacity: 0; }
+}
+
+/* 展开：原地放大 + 浮在页面图层之上 */
+.card.expanded {
+  transform: translateY(-3px) scale(1.06);
+  border-color: var(--border-bright);
+  box-shadow: var(--shadow), var(--shadow-glow);
+  z-index: 60;
+  overflow: visible;
+}
+.card.expanded:hover {
+  transform: translateY(-3px) scale(1.06);
+}
+.card.expanded::before { opacity: 1; }
+.card.expanded .icon { transform: scale(1.15); }
+
+.card-detail {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  min-width: 230px;
+  z-index: 61;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  box-shadow: var(--shadow), var(--shadow-glow);
+  animation: detailIn 0.18s ease-out;
+  cursor: default;
+}
+.card-detail::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 20px;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border-bright);
+  border-top: 1px solid var(--border-bright);
+  transform: rotate(45deg);
+}
+@keyframes detailIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.detail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+  margin: 6px 0;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
+}
+.detail-row:first-child { margin-top: 2px; }
+.detail-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+}
+.detail-none {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 卡片主体内容盖在涟漪层之上 */
+.card-body {
+  position: relative;
+  z-index: 2;
+}
+</style>

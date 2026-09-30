@@ -85,6 +85,19 @@ const flowDims = computed<DimState[]>(() => {
 const flowCentralLabel = computed(() => metrics.value ? 'CVE' : '...')
 const flowCentralSub = computed(() => metrics.value ? `${metrics.value.collect.vulns} vulns` : 'loading')
 
+// 富化各维度平均置信度（真实数据），给「富化覆盖率」卡展开详情用
+const avgConfidence = computed(() => {
+  const dims = metrics.value?.enrich?.per_dimension ?? {}
+  const vals = Object.values(dims).map((d) => d.confidence_avg ?? 0)
+  if (!vals.length) return null
+  return `${((vals.reduce((a, b) => a + b, 0) / vals.length) * 100).toFixed(0)}%`
+})
+
+const watermarksHealthy = computed(() => {
+  const w = status.value?.watermarks ?? []
+  return `${w.filter((x) => x.success).length}/${w.length}`
+})
+
 function fmtLatency(s: number | null): string {
   if (s === null) return '—'
   if (s < 3600) return `${Math.round(s)}s`
@@ -215,14 +228,22 @@ watch(sourceBars, () => { nextTick(() => initSourceChart()) })
 
     <StatCards
       :items="[
-        { label: '漏洞总数', value: metrics?.collect.vulns ?? null, icon: 'shield', variant: 'critical' },
-        { label: '原始条目', value: metrics?.collect.raw_items ?? null, hint: `去重合并率 ${((metrics?.collect.merge_ratio ?? 0) * 100).toFixed(1)}%`, icon: 'docs' },
-        { label: '富化覆盖率', value: metrics ? `${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%` : null, icon: 'spark', variant: 'ok' },
-        { label: '采集延迟 P50', value: fmtLatency(metrics?.latency.p50_seconds ?? null), icon: 'clock' },
-        { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : null, icon: 'zap', variant: 'ok' },
-        { label: '知识库切片', value: metrics?.knowledge.chunks ?? null, icon: 'box' },
-        { label: '今日 LLM 花费', value: metrics ? fmtCny(metrics.cost.total_cny) : null, hint: metrics?.cost.degraded ? '已降级本地模型' : `预算 ${fmtCny(metrics?.cost.daily_budget_cny ?? 0)}`, icon: 'yen', variant: metrics?.cost.degraded ? 'critical' : 'ok' },
-        { label: '在跑任务', value: status?.queue_depth ?? null, icon: 'refresh' },
+        { label: '漏洞总数', value: metrics?.collect.vulns ?? null, icon: 'shield', variant: 'critical',
+          detail: metrics ? [`原始条目 ${metrics.collect.raw_items}`, `去重合并率 ${(metrics.collect.merge_ratio * 100).toFixed(1)}%`] : [] },
+        { label: '原始条目', value: metrics?.collect.raw_items ?? null, hint: `去重合并率 ${((metrics?.collect.merge_ratio ?? 0) * 100).toFixed(1)}%`, icon: 'docs',
+          detail: metrics ? [`去重后保留 ${metrics.collect.vulns}`, `合并率 ${(metrics.collect.merge_ratio * 100).toFixed(1)}%`] : [] },
+        { label: '富化覆盖率', value: metrics ? `${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%` : null, icon: 'spark', variant: 'ok',
+          detail: avgConfidence ? [`共 ${metrics?.enrich.dimensions ?? 7} 个维度`, `平均置信度 ${avgConfidence}`] : [`共 ${metrics?.enrich.dimensions ?? 7} 个维度`] },
+        { label: '采集延迟 P50', value: fmtLatency(metrics?.latency.p50_seconds ?? null), icon: 'clock',
+          detail: metrics?.latency.sla_6h_ratio != null ? [`近 6h 入库占比 ${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%`] : [] },
+        { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : null, icon: 'zap', variant: 'ok',
+          detail: [`P50 采集延迟 ${fmtLatency(metrics?.latency.p50_seconds ?? null)}`] },
+        { label: '知识库切片', value: metrics?.knowledge.chunks ?? null, icon: 'box',
+          detail: metrics ? [`富化覆盖率 ${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%`] : [] },
+        { label: '今日 LLM 花费', value: metrics ? fmtCny(metrics.cost.total_cny) : null, hint: metrics?.cost.degraded ? '已降级本地模型' : `预算 ${fmtCny(metrics?.cost.daily_budget_cny ?? 0)}`, icon: 'yen', variant: metrics?.cost.degraded ? 'critical' : 'ok',
+          detail: [metrics?.cost.degraded ? '⚠ 已降级本地模型' : 'LLM 在线', `日预算 ${fmtCny(metrics?.cost.daily_budget_cny ?? 0)}`] },
+        { label: '在跑任务', value: status?.queue_depth ?? null, icon: 'refresh',
+          detail: status ? [`水位线正常 ${watermarksHealthy}`] : [] },
       ]"
     />
 
