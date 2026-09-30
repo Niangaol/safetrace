@@ -251,6 +251,15 @@ async def hybrid_search(
                 stmt = stmt.where(Chunk.owner_type == owner_type)
             rows = session.execute(stmt.limit(VECTOR_RECALL)).all()
             rankings.append([doc_key(r[0], r[1], r[2]) for r in rows])
+            if not rows:
+                # ⚠️ 列在**不代表有值**：实测容器里 `chunk.embedding` 全为 NULL
+                # （灌数时未回填向量），`WHERE embedding IS NOT NULL` 直接筛空 ——
+                # 而 `if vector` 为真，内存回退就不会被走到，整轮检索返回 0 条。
+                # 所以这里显式回退，而不是"有向量列就当向量召回成功"。
+                semantic = await _semantic_recall(session, query, VECTOR_RECALL, owner_type)
+                if semantic:
+                    rankings.append(semantic)
+                    logger.debug("向量列为空，回退内存余弦，命中 %d 条", len(semantic))
         else:
             semantic = await _semantic_recall(session, query, VECTOR_RECALL, owner_type)
             if semantic:
