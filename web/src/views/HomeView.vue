@@ -317,6 +317,7 @@ const toolsByTier = computed(() => {
   position: relative;
   text-align: center;
   padding: 92px 24px 120px;
+  min-height: 440px;
   border-radius: 16px;
   overflow: hidden;
   margin-bottom: 0;
@@ -369,13 +370,14 @@ const toolsByTier = computed(() => {
 /* 全球线框地球：**居中放在标题后面**当背景装饰。
    - z-index 0 + .hero-content 为 1 → 地球永远在标题/副标题/按钮之下；
    - pointer-events: none（含子元素）→ 不接收拖动/点击，不会误触发导航；
-   - 尺寸取视口较小者并夹在 360–520px：比标题略大但不压过标题。 */
+   - 尺寸同时受宽度和**视口高度**约束（min(…, 46vh)）：矮屏上球不会超出 hero 被
+     overflow:hidden 裁掉上沿；配合 top:50% + translate(-50%,-50%) 上下都留白。 */
 .globe-viewport {
   position: absolute;
-  top: 46%;
+  top: 50%;
   left: 50%;
-  width: clamp(280px, 42vw, 500px);
-  height: clamp(280px, 42vw, 500px);
+  width: min(42vw, 46vh, 460px);
+  height: min(42vw, 46vh, 460px);
   transform: translate(-50%, -50%);
   z-index: 0;
   pointer-events: none;

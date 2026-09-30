@@ -30,14 +30,19 @@ const modeHint = computed(() => (MOCK_MODE === 'always' ? '演示模式' : '后�
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 24px 12px;
-  padding: 10px 14px;
+  /* 与 <main> 正文左对齐：同样的容器宽度 + 同样的左右留白，
+     横幅、正文、顶栏三者构成一条中轴 */
+  margin: 14px max(var(--gutter), calc((100% - var(--content-max)) / 2 + var(--gutter))) 0;
+  padding: 10px 16px;
   border: 1px solid color-mix(in srgb, var(--warn, #f59e0b) 45%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--warn, #f59e0b) 12%, transparent);
   color: var(--warn, #f59e0b);
   font-size: 13px;
   line-height: 1.5;
+}
+@media (max-width: 640px) {
+  .mock-banner { margin: 12px 16px 0; }
 }
 
 .mock-banner strong {

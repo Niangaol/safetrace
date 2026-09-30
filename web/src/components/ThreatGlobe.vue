@@ -227,9 +227,11 @@ function loop(now: number) {
   raf = requestAnimationFrame(loop)
   const dt = Math.min((now - last) / 1000, 0.1)
   last = now
-  if (!visible || document.hidden || reduceMotion) return
+  // 不可见 / 标签页隐藏时停帧；可见时**始终**缓慢自转
+  // （系统"关闭动画"时只把速度减半，不再完全冻结 —— 冻结会被误认为"坏了不动"）
+  if (!visible || document.hidden) return
 
-  yaw += SPIN * dt
+  yaw += (reduceMotion ? SPIN * 0.45 : SPIN) * dt
   // 限帧：不足 1/FPS 秒就不重绘
   acc += dt
   if (acc < 1 / FPS) return
@@ -258,7 +260,7 @@ function resize() {
 let io: IntersectionObserver | null = null
 
 onMounted(() => {
-  // 系统"关闭动画"时保持静止（无障碍）；画一帧静态的，球体依旧完整
+  // 系统"关闭动画"（prefers-reduced-motion）时把自转减速一半，而不是完全静止
   reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   resize()
   window.addEventListener('resize', resize)

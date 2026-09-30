@@ -276,7 +276,7 @@ onMounted(async () => {
     <input
       v-model="question"
       placeholder="输入问题后回车，例如：CVE-2026-31001 怎么修复？"
-      style="flex: 1; min-width: 320px"
+      style="flex: 1 1 260px; min-width: 0"
       @keyup.enter="submit()"
     />
     <button :disabled="!question.trim() || qa.thinking" @click="submit()">

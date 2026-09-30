@@ -295,6 +295,7 @@ watch(sourceBars, () => { nextTick(() => initSourceChart()) })
         <h3>采集源水位线</h3>
         <span class="badge-count">{{ status?.watermarks?.filter(w => w.success).length ?? 0 }}/{{ status?.watermarks?.length ?? 0 }} 正常</span>
       </div>
+      <div class="table-wrap">
       <table>
         <thead>
           <tr>
@@ -325,22 +326,24 @@ watch(sourceBars, () => { nextTick(() => initSourceChart()) })
         </tbody>
       </table>
     </div>
+    </div>
 
     <div class="panel fade-in">
       <div class="panel-header">
         <h3>最新漏洞</h3>
         <RouterLink to="/intel" style="font-size: 12px">查看全部 →</RouterLink>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>CVE</th>
-            <th>标题</th>
-            <th>等级</th>
-            <th>CVSS</th>
-            <th>AI 风险</th>
-            <th>发布时间</th>
-          </tr>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>CVE</th>
+              <th>标题</th>
+              <th>等级</th>
+              <th>CVSS</th>
+              <th>AI 风险</th>
+              <th>发布时间</th>
+            </tr>
         </thead>
         <tbody>
           <tr v-for="v in latest?.items ?? []" :key="v.id">
@@ -359,7 +362,8 @@ watch(sourceBars, () => { nextTick(() => initSourceChart()) })
             <td colspan="6" class="muted" style="text-align: center; padding: 24px">暂无数据</td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
     </div>
   </template>
 </template>

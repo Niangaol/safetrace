@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 
 import { getJson } from '../api'
 import type { Paged, VulnItem } from '../types'
 
+const route = useRoute()
 const rows = ref<VulnItem[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -49,7 +50,16 @@ function epssLevel(v: number | null | undefined): string {
 }
 
 watch([hasPoc, sort], search)
-onMounted(load)
+/**
+ * 支持 `/intel?q=xxx`：详情页关系终端里点 CWE / 产品 / 公司这类**没有独立详情页**的
+ * 实体时，会带着关键词跳到这里，检索框自动填好并立即检索 —— 让终端里每个实体都有
+ * 真实去处，而不是点了没反应。
+ */
+onMounted(() => {
+  const q0 = typeof route.query.q === 'string' ? route.query.q.trim() : ''
+  if (q0) q.value = q0
+  load()
+})
 </script>
 
 <template>
@@ -95,6 +105,7 @@ onMounted(load)
       <h3>漏洞列表</h3>
       <span class="badge-count">共 {{ total }} 条 · 第 {{ page }} / {{ totalPages() }} 页</span>
     </div>
+    <div class="table-wrap">
     <table>
       <thead>
         <tr>
@@ -150,11 +161,12 @@ onMounted(load)
         </tr>
       </tbody>
     </table>
+  </div>
 
-    <div class="toolbar" style="margin: 16px 0 0; justify-content: center">
-      <button class="secondary" :disabled="page <= 1" @click="page--; load()">上一页</button>
-      <span class="muted" style="font-size: 12px; padding: 0 12px">第 {{ page }} / {{ totalPages() }} 页</span>
-      <button class="secondary" :disabled="page >= totalPages()" @click="page++; load()">下一页</button>
-    </div>
+  <div class="toolbar" style="margin: 16px 0 0; justify-content: center">
+    <button class="secondary" :disabled="page <= 1" @click="page--; load()">上一页</button>
+    <span class="muted" style="font-size: 12px; padding: 0 12px">第 {{ page }} / {{ totalPages() }} 页</span>
+    <button class="secondary" :disabled="page >= totalPages()" @click="page++; load()">下一页</button>
+  </div>
   </div>
 </template>

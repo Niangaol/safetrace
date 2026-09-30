@@ -146,12 +146,31 @@ const hoverRels = computed(() => {
 })
 
 function goNode(n: LayNode) {
-  if (isVulnId(n.id)) router.push(`/intel/${encodeURIComponent(n.id)}`)
+  router.push(entityTo(n.id))
 }
 
-/** 终端窗里的漏洞 ID 可点击追溯到该漏洞详情页；非漏洞 ID（如维度标签）保持纯文本 */
-function openVuln(id: string) {
-  if (isVulnId(id)) router.push(`/intel/${encodeURIComponent(id)}`)
+/** 某节点在图里的类型（小写）；用于判断它是漏洞还是其它实体 */
+function nodeTypeOf(id: string): string {
+  return graphLayout.value?.nodes.find((n) => n.id === id)?.type?.toLowerCase() ?? ''
+}
+
+/**
+ * 终端/图里的**每个**实体都给出真实去处，终端里不再有"点不动的死文本"：
+ * - 漏洞实体（CVE-/GHSA- 前缀，或图里 type 为 vuln/cve）→ 该漏洞详情页；
+ * - 其它实体（CWE、产品、公司、论文…）→ 情报库按该实体检索（`/intel?q=`）。
+ */
+function isVulnEntity(id: string): boolean {
+  if (isVulnId(id)) return true
+  const t = nodeTypeOf(id)
+  return t === 'vuln' || t === 'cve'
+}
+function entityTo(id: string): string {
+  return isVulnEntity(id)
+    ? `/intel/${encodeURIComponent(id)}`
+    : `/intel?q=${encodeURIComponent(id)}`
+}
+function entityHint(id: string): string {
+  return isVulnEntity(id) ? `查看漏洞详情：${id}` : `在情报库检索「${id}」`
 }
 
 const DIM_LABEL: Record<string, string> = {
@@ -334,7 +353,7 @@ onMounted(async () => {
         <span class="badge-count">{{ graphLayout.nodes.length }} 节点 · {{ graphLayout.edges.length }} 关系</span>
       </div>
       <p class="muted" style="font-size: 12px; margin-top: 0">
-        蛛网关系图为主视图：悬停节点高亮相连关系、点击 CVE/GHSA 节点跳转详情；右侧关系表以 Linux 终端窗呈现，滚轮可滚动、悬停行与图中联动、**漏洞 ID 可点击追溯到该漏洞详情**、标题栏 ⤢ 可放大查看（Esc 还原）。
+        蛛网关系图为主视图：悬停节点高亮相连关系、点击节点可跳转（CVE/GHSA 等漏洞进详情页，CWE / 产品 / 公司等实体进情报库检索）；右侧关系表以 Linux 终端窗呈现，滚轮可滚动、悬停行与图中联动、**每个实体名都可点击追溯**、标题栏 ⤢ 可放大查看（Esc 还原）。
       </p>
 
       <div class="rel-layout fade-in">
@@ -422,7 +441,7 @@ onMounted(async () => {
         <TerminalWindow
           class="rel-term"
           title="safe_trace@intel: ~/relations"
-          :status="`▮ ${graphLayout.edges.length} 条关系 · 漏洞 ID 可点击追溯 · 悬停行联动图中高亮 · ⤢ 放大 / Esc 还原`"
+          :status="`▮ ${graphLayout.edges.length} 条关系 · 实体名可点击追溯 · 悬停行联动图中高亮 · ⤢ 放大 / Esc 还原`"
         >
           <div
             v-for="(e, i) in graphLayout.edges"
@@ -432,21 +451,17 @@ onMounted(async () => {
             @mouseleave="hoveredNode = null"
           >
             <span class="lnx-arrow">▸</span>
-            <button
+            <RouterLink
               class="lnx-src lnx-link"
-              :class="{ linked: isVulnId(e.src) }"
-              :title="isVulnId(e.src) ? `查看漏洞详情：${e.src}` : e.src"
-              :disabled="!isVulnId(e.src)"
-              @click="openVuln(e.src)"
-            >{{ e.src }}</button>
+              :to="entityTo(e.src)"
+              :title="entityHint(e.src)"
+            >{{ e.src }}</RouterLink>
             <span class="lnx-rel">{{ e.rel }}</span>
-            <button
+            <RouterLink
               class="lnx-dst lnx-link"
-              :class="{ linked: isVulnId(e.dst) }"
-              :title="isVulnId(e.dst) ? `查看漏洞详情：${e.dst}` : e.dst"
-              :disabled="!isVulnId(e.dst)"
-              @click="openVuln(e.dst)"
-            >{{ e.dst }}</button>
+              :to="entityTo(e.dst)"
+              :title="entityHint(e.dst)"
+            >{{ e.dst }}</RouterLink>
             <span class="lnx-type">{{ e.type }}</span>
           </div>
         </TerminalWindow>
@@ -459,8 +474,10 @@ onMounted(async () => {
 /* 关系视图：蛛网图为主（大），关系表为辅（Linux 窗口，右侧） */
 .rel-layout {
   display: flex;
-  gap: 16px;
+  gap: 20px;
   align-items: stretch;
+  /* 终端不贴边：右侧再留 6px 内缩，配合 main 的外边距，离屏幕边缘有足够呼吸 */
+  padding-right: 6px;
 }
 .rel-graph-side {
   flex: 1 1 0;
@@ -557,7 +574,7 @@ onMounted(async () => {
    与 .rel-graph-side（标题 + 蛛网图）同高；.tw-body 再用 flex:1 吃掉标题栏以外的高度
    并自己滚动，所以终端底边与蛛网图底边对齐。 */
 .rel-term {
-  flex: 0 0 clamp(320px, 30vw, 440px);
+  flex: 0 0 clamp(340px, 32vw, 470px);
   max-width: 100%;
   align-self: stretch;
 }
@@ -570,7 +587,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 7px 14px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   border-bottom: 1px dashed rgba(42, 64, 96, 0.35);
@@ -580,36 +597,34 @@ onMounted(async () => {
   background: rgba(56, 189, 248, 0.09);
 }
 .lnx-arrow { color: #38bdf8; font-size: 9px; flex-shrink: 0; }
-.lnx-src {
-  color: #9cc8f2;
+.lnx-src,
+.lnx-dst {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 38%;
   flex-shrink: 1;
 }
-/* 漏洞 ID 可点击追溯到该漏洞详情页；非漏洞 ID 保持纯文本（disabled 去掉按钮语义） */
+.lnx-src { max-width: 38%; }
+.lnx-dst { max-width: 34%; }
+/* 终端里的实体名：可点击（跳漏洞详情或情报库检索）。
+   用 <a> 而不是 <button>：语义正确、可 Tab 聚焦、状态栏能看到真实去处。
+   同时要抵消全局 button/:hover 的放大位移 —— 行内小链接跟着放大既晃眼难点。 */
 .lnx-link {
-  background: none;
-  border: none;
-  border-bottom: 1px dashed transparent;
-  padding: 0;
-  font: inherit;
-  text-align: left;
-  cursor: default;
-}
-.lnx-link.linked {
+  color: #9cc8f2;
+  border-bottom: 1px dashed rgba(125, 211, 252, 0.4);
+  padding-bottom: 1px;
   cursor: pointer;
-  border-bottom-color: rgba(125, 211, 252, 0.45);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
-.lnx-link.linked:hover {
-  color: #bae6fd;
-  background: rgba(56, 189, 248, 0.12);
+.lnx-link:hover {
+  color: #e0f2fe;
+  background: rgba(56, 189, 248, 0.14);
   border-bottom-color: #bae6fd;
 }
-.lnx-link:disabled {
-  color: inherit;
-  opacity: 1;
+.lnx-link:focus-visible {
+  outline: 2px solid rgba(125, 211, 252, 0.7);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 .lnx-rel {
   color: #f0b429;
@@ -619,14 +634,6 @@ onMounted(async () => {
   padding: 0 5px;
   font-size: 10px;
   flex-shrink: 0;
-}
-.lnx-dst {
-  color: #7dd3fc;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 32%;
-  flex-shrink: 1;
 }
 .lnx-type {
   color: #64748b;
