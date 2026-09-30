@@ -59,12 +59,19 @@ const stats = computed(() => {
   const m = metrics.value
   const sources = status.value?.watermarks?.length ?? m?.collect.sources
   return [
-    { value: m ? String(m.collect.vulns) : '—', label: '漏洞情报' },
-    { value: m ? String(m.collect.raw_items) : '—', label: '原始条目' },
-    { value: sources != null ? String(sources) : '—', label: '采集来源' },
-    { value: m ? `${((m.enrich.coverage_ratio ?? 0) * 100).toFixed(0)}%` : '—', label: '富化覆盖' },
+    { value: m ? String(m.collect.vulns) : '—', label: '漏洞情报', icon: 'shield' },
+    { value: m ? String(m.collect.raw_items) : '—', label: '原始条目', icon: 'docs' },
+    { value: sources != null ? String(sources) : '—', label: '采集来源', icon: 'globe' },
+    { value: m ? `${((m.enrich.coverage_ratio ?? 0) * 100).toFixed(0)}%` : '—', label: '富化覆盖', icon: 'spark' },
   ]
 })
+
+const STAT_ICONS: Record<string, string> = {
+  shield: 'M12 2L2 7v10l10 5 10-5V7L12 2z M12 22V12 M2 7l10 5 10-5',
+  docs: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M16 13H8 M16 17H8',
+  globe: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M2 12h20 M12 2a15.3 15.3 0 0 1 0 20 15.3 15.3 0 0 1 0-20z',
+  spark: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z',
+}
 
 /**
  * 智能体卡片：名字与颜色是产品定义（稳定的），但**运行数字全部来自 `/agents/runs`**。
@@ -111,9 +118,22 @@ const toolsByTier = computed(() => {
   <div class="home">
     <!-- hero -->
     <section class="hero">
-      <div class="hero-bg"></div>
+      <div class="hero-bg">
+        <div class="hero-grid"></div>
+        <div class="orb orb-a"></div>
+        <div class="orb orb-b"></div>
+        <div class="orb orb-c"></div>
+        <div class="ring-stationary ring-s1"></div>
+        <div class="ring-stationary ring-s2"></div>
+        <div class="orbit orbit-3"><span class="sat sat-c"></span></div>
+        <div class="orbit orbit-1"><span class="sat sat-a"></span></div>
+        <div class="orbit orbit-2"><span class="sat sat-b"></span></div>
+      </div>
       <div class="hero-content">
-        <div class="hero-badge">AI Security Intelligence</div>
+        <div class="hero-badge">
+          <span class="hero-badge-dot"></span>
+          AI Security Intelligence
+        </div>
         <h1 class="hero-title">SafeTrace</h1>
         <p class="hero-subtitle">智能体驱动的 AI 安全知识情报系统</p>
         <p class="hero-desc">
@@ -133,6 +153,11 @@ const toolsByTier = computed(() => {
     <!-- stats -->
     <section class="stats-bar">
       <div v-for="s in stats" :key="s.label" class="stat-item">
+        <div class="stat-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path :d="STAT_ICONS[s.icon]" />
+          </svg>
+        </div>
         <span class="stat-value">{{ s.value }}</span>
         <span class="stat-label">{{ s.label }}</span>
       </div>
@@ -159,6 +184,7 @@ const toolsByTier = computed(() => {
 
     <!-- system factory: 运转状态 + 数据流转合二为一 -->
     <section class="factory-section">
+      <div class="section-kicker">Pipeline</div>
       <h2 class="section-title">系统运转 · 数据流转</h2>
       <div class="factory-panel fade-in">
         <SystemFactory
@@ -182,6 +208,7 @@ const toolsByTier = computed(() => {
 
     <!-- agents -->
     <section class="agents-section">
+      <div class="section-kicker">Agents &amp; Tools</div>
       <h2 class="section-title">智能体与工具</h2>
       <p class="section-subtitle">
         运行数字来自 <code>/agents/runs</code> · 无记录如实显示「未运行」
@@ -237,57 +264,174 @@ const toolsByTier = computed(() => {
 .hero {
   position: relative;
   text-align: center;
-  padding: 72px 24px 56px;
+  padding: 96px 24px 88px;
   border-radius: 16px;
   overflow: hidden;
   margin-bottom: 0;
+  isolation: isolate;
 }
 .hero-bg {
   position: absolute;
   inset: 0;
+  z-index: -1;
   background:
-    radial-gradient(ellipse 60% 80% at 50% 0%, rgba(56, 189, 248, 0.12), transparent),
-    radial-gradient(ellipse 40% 60% at 30% 100%, rgba(129, 140, 248, 0.08), transparent),
-    radial-gradient(ellipse 40% 60% at 70% 100%, rgba(167, 139, 250, 0.06), transparent);
+    radial-gradient(ellipse 62% 80% at 50% 0%, rgba(56, 189, 248, 0.14), transparent 70%),
+    radial-gradient(ellipse 42% 62% at 24% 100%, rgba(129, 140, 248, 0.09), transparent 70%),
+    radial-gradient(ellipse 42% 62% at 76% 100%, rgba(167, 139, 250, 0.07), transparent 70%);
+}
+.hero-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(56, 189, 248, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.055) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(ellipse 65% 70% at 50% 42%, #000 25%, transparent 72%);
+  mask-image: radial-gradient(ellipse 65% 70% at 50% 42%, #000 25%, transparent 72%);
+}
+.orb {
+  position: absolute;
+  border-radius: 50%;
+}
+.orb-a {
+  width: 460px; height: 460px;
+  top: -90px; left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.16), transparent 68%);
+  animation: orbFloat 9s ease-in-out infinite;
+}
+.orb-b {
+  width: 620px; height: 620px;
+  top: -160px; left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(circle, rgba(129, 140, 248, 0.1), transparent 68%);
+  animation: orbFloat 13s ease-in-out infinite reverse;
+}
+.orb-c {
+  width: 800px; height: 800px;
+  top: -260px; left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(circle, rgba(167, 139, 250, 0.07), transparent 68%);
+  animation: orbFloat 17s ease-in-out infinite;
+}
+@keyframes orbFloat {
+  0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
+  50% { transform: translateX(-50%) translateY(14px) scale(1.04); }
+}
+/* 品牌线圈：静止环 + 慢扫虚线环 */
+.ring-stationary {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  border-radius: 50%;
+}
+.ring-s1 {
+  width: 430px; height: 430px;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  opacity: 0.9;
+}
+.ring-s2 {
+  width: 560px; height: 560px;
+  border: 1px dashed rgba(56, 189, 248, 0.24);
+  opacity: 0.6;
+  animation: spin 90s linear infinite;
+}
+/* 轨道卫星：绕中心旋转的 “活跃信号” */
+.orbit {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+.orbit-1 { width: 480px; height: 480px; animation: spin 36s linear infinite; opacity: 0.9; }
+.orbit-2 { width: 620px; height: 620px; animation: spin 56s linear infinite reverse; opacity: 0.75; }
+.orbit-3 { width: 330px; height: 330px; animation: spin 20s linear infinite; opacity: 0.6; }
+.sat {
+  position: absolute;
+  top: -5px; left: 50%;
+  margin-left: -5px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+}
+.sat-a {
+  background: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.95);
+}
+.sat-b {
+  width: 7px; height: 7px; margin-left: -3.5px;
+  background: #a78bfa;
+  box-shadow: 0 0 12px rgba(167, 139, 250, 0.95);
+}
+.sat-c {
+  width: 6px; height: 6px; margin-left: -3px;
+  background: #22c55e;
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.95);
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 .hero-content {
   position: relative;
   z-index: 1;
 }
 .hero-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 1.5px;
+  letter-spacing: 2px;
   text-transform: uppercase;
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.2);
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.24);
   border-radius: 20px;
-  padding: 4px 14px;
-  margin-bottom: 20px;
+  padding: 5px 16px;
+  margin-bottom: 24px;
+  backdrop-filter: blur(4px);
+}
+.hero-badge-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.8);
+  animation: badgePulse 2.4s ease-in-out infinite;
+}
+@keyframes badgePulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.6); opacity: 0.6; }
 }
 .hero-title {
-  font-size: 56px;
+  font-size: 82px;
   font-weight: 800;
-  letter-spacing: -1px;
-  background: linear-gradient(135deg, #f1f5f9, #38bdf8 60%, #818cf8);
+  letter-spacing: -2px;
+  line-height: 1.08;
+  background: linear-gradient(110deg, #f8fafc 0%, #7dd3fc 28%, #38bdf8 46%, #a78bfa 72%, #f8fafc 100%);
+  background-size: 240% 100%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  margin: 0 0 8px;
+  animation: titleShine 7s linear infinite;
+  filter: drop-shadow(0 6px 32px rgba(56, 189, 248, 0.35));
+  margin: 0 0 10px;
+}
+@keyframes titleShine {
+  from { background-position: 0% 0; }
+  to { background-position: -240% 0; }
 }
 .hero-subtitle {
-  font-size: 20px;
+  font-size: 21px;
   color: #e2e8f0;
-  margin: 0 0 4px;
+  margin: 0 0 6px;
   font-weight: 500;
+  letter-spacing: 1px;
 }
 .hero-desc {
   font-size: 13px;
   color: #64748b;
-  margin: 0 0 28px;
+  margin: 0 0 34px;
   font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.5px;
 }
 .hero-actions {
   display: flex;
@@ -296,21 +440,36 @@ const toolsByTier = computed(() => {
 }
 .hero-btn {
   display: inline-block;
-  padding: 12px 28px;
-  border-radius: 8px;
+  padding: 13px 30px;
+  border-radius: 9px;
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
-  transition: all 0.2s;
+  transition: all 0.22s;
 }
 .hero-btn.primary {
   background: linear-gradient(135deg, #38bdf8, #0284c7);
   color: #06121f;
-  box-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.35);
+  position: relative;
+  overflow: hidden;
 }
 .hero-btn.primary:hover {
   transform: translateY(-2px) scale(1.03);
-  box-shadow: 0 4px 24px rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 34px rgba(56, 189, 248, 0.55);
+}
+.hero-btn.primary::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -60%;
+  width: 40%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  transform: skewX(-20deg);
+  animation: btnSweep 3.2s ease-in-out infinite;
+}
+@keyframes btnSweep {
+  0%, 60% { left: -60%; }
+  100% { left: 130%; }
 }
 .hero-btn.secondary {
   background: transparent;
@@ -334,6 +493,22 @@ const toolsByTier = computed(() => {
 }
 .stat-item {
   text-align: center;
+  position: relative;
+  padding-top: 26px;
+  transition: transform 0.2s;
+}
+.stat-item:hover {
+  transform: translateY(-3px);
+}
+.stat-icon {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #38bdf8;
+  display: flex;
+  align-items: center;
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.6));
 }
 .stat-value {
   display: block;
@@ -341,6 +516,11 @@ const toolsByTier = computed(() => {
   font-weight: 700;
   font-family: 'JetBrains Mono', monospace;
   color: #f1f5f9;
+  transition: color 0.2s;
+}
+.stat-item:hover .stat-value {
+  color: #7dd3fc;
+  text-shadow: 0 0 18px rgba(56, 189, 248, 0.45);
 }
 .stat-label {
   display: block;
@@ -348,7 +528,7 @@ const toolsByTier = computed(() => {
   color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 /* features */
@@ -378,27 +558,50 @@ const toolsByTier = computed(() => {
   opacity: 0;
   transition: opacity 0.2s;
 }
+.feature-card::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -80%;
+  width: 55%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(148, 197, 255, 0.09), transparent);
+  transform: skewX(-20deg);
+  transition: left 0.55s ease;
+}
 .feature-card:hover {
-  border-color: #2a4060;
+  border-color: rgba(56, 189, 248, 0.5);
   transform: translateY(-4px) scale(1.02);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.3), 0 0 20px rgba(56,189,248,0.08);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3), 0 0 24px rgba(56,189,248,0.14);
 }
 .feature-card:hover::before { opacity: 1; }
+.feature-card:hover::after { left: 140%; }
 .feature-icon {
-  width: 44px; height: 44px;
-  border-radius: 10px;
-  background: rgba(56, 189, 248, 0.1);
-  color: #38bdf8;
+  width: 52px; height: 52px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.16), rgba(129, 140, 248, 0.12));
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: #7dd3fc;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
+  filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.25));
+  transition: all 0.25s;
+}
+.feature-card:hover .feature-icon {
+  background: linear-gradient(135deg, #38bdf8, #0284c7);
+  color: #06121f;
+  filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.6));
+  transform: scale(1.06);
 }
 .feature-title {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   color: #f1f5f9;
   margin: 0 0 6px;
+  transition: color 0.2s;
+}
+.feature-card:hover .feature-title {
+  color: #7dd3fc;
 }
 .feature-desc {
   font-size: 12px;
@@ -421,12 +624,36 @@ const toolsByTier = computed(() => {
 }
 
 /* section */
+.section-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #38bdf8;
+  text-align: center;
+  margin: 0 0 10px;
+}
 .section-title {
-  font-size: 22px;
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 700;
   color: #f1f5f9;
   text-align: center;
   margin: 0 0 20px;
+  letter-spacing: 0.5px;
+  position: relative;
+  display: inline-block;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.section-title::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -10px;
+  transform: translateX(-50%);
+  width: 46px; height: 3px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, #38bdf8, transparent);
 }
 .section-subtitle {
   font-size: 12px;
