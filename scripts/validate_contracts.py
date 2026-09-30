@@ -283,6 +283,49 @@ def check_payload_coverage() -> list[str]:
     return problems
 
 
+def check_fixture_registry(fixture_dir: Path | None = None) -> list[str]:
+    """C-06 交叉校验①：fixtures 目录 ↔ `FIXTURE_SCHEMA` 登记必须完全一致。
+
+    两个方向都查：目录里出现未登记的样例（新文件忘了登记，样例将不被校验），
+    以及登记的样例在目录里缺失（删了文件忘了撤登记）。防的是"镜像与登记漂移"。
+    """
+
+    target = fixture_dir or FIXTURE_DIR
+    problems: list[str] = []
+    for path in sorted(target.glob("*.json")):
+        if path.name not in FIXTURE_SCHEMA:
+            problems.append(
+                f"fixtures 目录存在未登记样例: {path.name}（需加入 FIXTURE_SCHEMA，否则永远不被校验）"
+            )
+    for name in FIXTURE_SCHEMA:
+        if not (target / name).exists():
+            problems.append(f"登记的 fixture 缺失: {name}")
+    return problems
+
+
+def check_schema_registry(schema_dir: Path | None = None) -> list[str]:
+    """C-06 交叉校验②：schemas 目录 ↔ 登记集合（权威 + 本仓）必须完全一致。
+
+    防"有人加了新 schema 文件却没登记"（校验覆盖不到）与"登记集合与目录脱节"。
+    与 `contracts/schemas/CHANGELOG.md` 注册表互为权威面，测试双向防漂。
+    """
+
+    target = schema_dir or SCHEMA_DIR
+    declared = set(AUTHORITATIVE_SCHEMAS) | set(LOCAL_SCHEMAS)
+    problems: list[str] = []
+    for path in sorted(target.glob("*.json")):
+        if path.name in NON_SCHEMA_FILES:
+            continue
+        if path.name not in declared:
+            problems.append(
+                f"schemas 目录存在未登记 schema: {path.name}（需加入 AUTHORITATIVE/LOCAL_SCHEMAS 并登记 CHANGELOG）"
+            )
+    for name in sorted(declared):
+        if not (target / name).exists():
+            problems.append(f"登记的 schema 缺失: {name}")
+    return problems
+
+
 def check_fixtures() -> list[str]:
     problems: list[str] = []
     for name, schema_name in FIXTURE_SCHEMA.items():
@@ -310,6 +353,8 @@ def main() -> int:
         + check_authoritative_frozen()
         + check_upstream_cross_check()
         + check_payload_coverage()
+        + check_schema_registry()
+        + check_fixture_registry()
         + check_fixtures()
     )
     if "--dump" in sys.argv:
@@ -331,7 +376,8 @@ def main() -> int:
     print(
         f"契约校验通过：{n_schema} 个 schema"
         f"（权威 {len(AUTHORITATIVE_SCHEMAS)} + 本仓 {len(LOCAL_SCHEMAS)}），{total} 个 fixture"
-        f"，冻结指纹 {len(AUTHORITATIVE_SCHEMAS)}/{len(AUTHORITATIVE_SCHEMAS)}{upstream_note}"
+        f"，冻结指纹 {len(AUTHORITATIVE_SCHEMAS)}/{len(AUTHORITATIVE_SCHEMAS)}，"
+        f"C-06 注册表交叉校验通过（schema+fixture 目录 ↔ 登记 ↔ CHANGELOG）{upstream_note}"
     )
     return 0
 
