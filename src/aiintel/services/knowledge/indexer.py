@@ -443,9 +443,24 @@ async def persist_vuln(vuln: dict[str, Any], enrichments: list[dict]) -> str:
         session.flush()
 
         indexed = True
+        #: 检索切片的 owner_id **用 CVE 编号**（有则用），不用主键 UUID。
+        #
+        # 为什么：`chunk.owner_id` 会被检索层当作 `chunk_key` 的一部分
+        # （`vuln::<owner_id>`），并直接透到引用标题给用户看。
+        # 用 UUID 时前端显示 `vuln:81cc6cdc518a4f4f…` —— 完全不可读。
+        # 而演示库 seed 写的是 CVE 编号，于是**库里两种形态并存**（实测踩到）。
+        #
+        # 安全性：`retrieve.py::_source_url_map/_source_meta_map` 与
+        # `/vulns/{id}/evidence` 都**同时支持**主键与 cve_id 两种取值，
+        # 所以换成 CVE 编号不会破坏任何查询路径。
+        owner_id = row.cve_id or row.id
         try:
             await index_owner(
-                session, "vuln", row.id, row.title or "", f"{row.description}\n{row.summary or ''}"
+                session,
+                "vuln",
+                owner_id,
+                row.title or "",
+                f"{row.description}\n{row.summary or ''}",
             )
             # 富化结论单独成 chunk：否则 Q 线问"这个漏洞怎么修"召回不到 F5 的结论
             for item in enrichments:
@@ -457,7 +472,7 @@ async def persist_vuln(vuln: dict[str, Any], enrichments: list[dict]) -> str:
                     item.get("evidence") or [],
                 )
                 if text:
-                    await index_owner(session, "enrichment", row.id, row.title or "", text)
+                    await index_owner(session, "enrichment", owner_id, row.title or "", text)
         except Exception as exc:  # noqa: BLE001 - 索引失败不阻断结构化落库
             indexed = False
             logger.warning("分块写入失败，该漏洞检索索引降级（结构化与富化结论仍已落库）: %s", exc)
