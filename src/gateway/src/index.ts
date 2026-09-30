@@ -14,6 +14,10 @@ import { MemoryUsageStore, SqliteUsageStore, type UsageStore } from "./usage-sto
 import { IsolationError, ScopeViolationError } from "./isolation.js";
 import type { ChatMessage, ChatParams, Embedding, LlmReply, RankedDocs } from "./types.js";
 
+import type { CloudFallbackRequest } from "./cloud-confirm.js";
+
+export { createCliCloudConfirm, cloudFallbackPolicy, type CloudFallbackPolicy, type CloudFallbackRequest } from "./cloud-confirm.js";
+
 export interface GatewayOptions {
   configPath?: string;
   usageStore?: UsageStore;
@@ -25,6 +29,12 @@ export interface GatewayOptions {
   onFallback?: (event: FallbackEvent) => void | Promise<void>;
   /** 注入 fetch（测试用） */
   fetchImpl?: typeof fetch;
+  /**
+   * 人工关卡：即将降级到 cloud provider（会出网、可能计费）前调用。
+   * 返回 true 才放行；false / 抛错 / 超时都视为拒绝，该 provider 直接跳过（不出网）。
+   * **未注入本钩子时，遇到云端降级一律拒绝**（fail closed，绝不静默出网花钱）。
+   */
+  confirmCloudFallback?: (info: CloudFallbackRequest) => Promise<boolean> | boolean;
 }
 
 interface RoleRuntime {
@@ -32,6 +42,14 @@ interface RoleRuntime {
   bucket: TokenBucket;
   semaphore: Semaphore;
   breakers: Map<string, CircuitBreaker>;
+}
+
+/** 该 provider 是否为 cloud 信任边界（缺省按 type 推断，见 profiles.parseTrustBoundary）。 */
+function boundaryIsCloud(providerName: string, cfg: ModelsConfig): boolean {
+  const def = cfg.providers[providerName];
+  if (!def) return false;
+  if (def.trust_boundary) return def.trust_boundary === "cloud";
+  return def.type === "openai_compat";
 }
 
 function assertEmbeddingVectors(vectors: number[][], count: number, expectedDim?: number): void {
@@ -328,6 +346,50 @@ export class ModelGateway {
             execution: { provider: providerName, model_id: modelId, config_sha256: sha256Json({ role, call, provider: providerName, requested_domain: requestedDomain, boundary }) },
             decision: { reason: "private data must not reach cloud provider", fallback_to: ordered[i + 1] ?? "cache" },
             error: "isolation gate rejected cloud channel for private data",
+          });
+          continue;
+        }
+      }
+
+      // ---- 人工关卡：出网前必须拿到人工同意（2026-09-30 用户要求）----
+      // 语义：降级到 cloud provider 会出网、可能计费，不得由程序自行决定。
+      // - 未注入 confirmCloudFallback → 一律拒绝（fail closed，绝不静默出网）
+      // - 钩子返回 false / 抛错 / 超时 → 一律拒绝
+      // - 只有明确返回 true 才放行；放行与否都落 lineage，可审计
+      if (boundaryIsCloud(providerName, this.cfg) && !isPrimary) {
+        let approved = false;
+        let denyReason = "未注入 confirmCloudFallback 钩子（fail closed：无人点头就不出网）";
+        const info: CloudFallbackRequest = {
+          role, call,
+          fromProvider: ordered[i - 1] ?? "unknown",
+          fromError: lastError instanceof Error ? lastError.message : String(lastError ?? "unknown"),
+          toProvider: providerName,
+          toModelId: modelId,
+          trustBoundary: "cloud",
+          traceId,
+        };
+        if (this.opts.confirmCloudFallback) {
+          try {
+            approved = await this.opts.confirmCloudFallback(info);
+            denyReason = approved ? "" : "人工拒绝（confirmCloudFallback 返回 false）";
+          } catch (err) {
+            approved = false;
+            denyReason = "人工关卡异常，按拒绝处理：" + (err instanceof Error ? err.message : String(err));
+          }
+        }
+        if (!approved) {
+          lastError = new Error("云端降级被人工关卡拒绝：" + denyReason);
+          await recordAttempt(providerName, modelId, nowIso(), "rejected", undefined,
+            "cloud fallback denied by human gate: " + denyReason, ordered[i + 1] ?? "cache");
+          // 人工关卡拒绝同样要 user_visible，否则用户根本不知道刚才没让它出网
+          await degrade({
+            layer: "L3",
+            trigger: "云端降级未获人工同意：" + providerName,
+            degradedOf: "isolation:cloud-needs-human",
+            traceId,
+            label: "云端模型需人工确认后才会调用（本次未出网、未计费）",
+            recoveryHint: "CLI 场景会交互询问；服务场景请注入 confirmCloudFallback 或改用本地模型",
+            emit: async (event) => { await this.emitFallback(event); },
           });
           continue;
         }

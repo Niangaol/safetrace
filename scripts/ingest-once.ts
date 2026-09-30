@@ -6,7 +6,7 @@ import { runEnrichment } from "../src/enrich/src/index.js";
 import { buildSourceEvidenceChunks } from "../src/ingest/src/evidence-chunks.js";
 import { MemoryIndex, indexChunks } from "../src/qa/src/q2-retrieval.js";
 import { indexSourceChunks } from "../src/qa/src/source-index.js";
-import { ModelGateway } from "@safetrace/gateway";
+import { ModelGateway, createCliCloudConfirm } from "@safetrace/gateway";
 
 async function main(): Promise<void> {
   const traceId = nextId("tr");
@@ -36,7 +36,8 @@ async function main(): Promise<void> {
     }, { trace_id: traceId, parent_lineage_ids: evidence.parent_lineage_ids });
     let vectorIndex: { status: "disabled" | "indexed"; chunks: number } = { status: "disabled", chunks: 0 };
     if (process.env.SAFETRACE_INDEX_QDRANT === "true") {
-      const gateway = new ModelGateway({ bus });
+      // 人工关卡：降级到云端前必须人工点头（SAFETRACE_CLOUD_FALLBACK 默认 never=拒绝，不出网不花钱）
+      const gateway = new ModelGateway({ bus, confirmCloudFallback: createCliCloudConfirm() });
       vectorIndex = await indexSourceChunks(evidence.chunks, {
         enabled: true, offline, source_degraded_to: ingest.degraded_to,
         url: process.env.QDRANT_URL, collection: process.env.QDRANT_COLLECTION ?? "safetrace_sources",

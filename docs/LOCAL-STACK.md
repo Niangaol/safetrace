@@ -67,6 +67,29 @@ npm run local:up     # 会跳过 llama-server，只起 Qdrant
 > `fallback_model_ids: { tokendance: qwen3.7-text-embedding }` 显式声明真实模型名。
 > 回归测试见 `src/gateway/test/fallback-model-ids.test.ts`。
 
+## 转云端必须过人工关卡（不允许静默出网）
+
+出网 = 花钱 + 数据离开本机，所以**不允许程序自己决定**。MG1 在降级到 cloud provider
+之前会先问人，拿不到明确同意就不出网：
+
+| 渠道 | 行为 |
+| --- | --- |
+| 未注入确认钩子 | **一律拒绝**（fail closed），退到 cache，relineage 记 `cloud fallback denied by human gate` |
+| CLI（交互式 TTY） | 打印醒目卡片（角色/原因/出网到哪/什么模型/trace_id），等 y/n，**30 秒不答算拒绝** |
+| 非交互（CI、管道、服务长跑） | 没有 TTY 取不到人工意见 → **直接拒绝**，不出网 |
+| 钩子抛异常 | 按拒绝处理，绝不当作同意 |
+
+环境变量安全阀 `SAFETRACE_CLOUD_FALLBACK`：
+
+| 值 | 行为 |
+| --- | --- |
+| `never`（**默认**） | 连问都不问，一律拒绝 |
+| `ask` | CLI 交互询问 |
+| `always` | 不再询问直接放行（仅建议在明确知情的批量场景用） |
+
+被拒绝时会产生 `user_visible` 的 FallbackEvent（`degradedOf: isolation:cloud-needs-human`），
+用户在界面上看得到"刚才没让它出网"，而不是静悄悄换了个便宜答案。
+
 要彻底禁云（只许本地 + cache，不许出网）：把 `fallback_chain` 改成 `[cache]`。
 
 ## 下载源为什么放国内
