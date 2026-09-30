@@ -226,21 +226,7 @@ watch(sourceBars, () => { nextTick(() => initSourceChart()) })
       ]"
     />
 
-    <div class="panel fade-in" style="display: flex; justify-content: center">
-      <div style="width: 100%; max-width: 560px">
-        <div class="panel-header">
-          <h3>富化数据流</h3>
-          <span class="badge-count">7 维度辐射图</span>
-        </div>
-        <DataFlowRadial
-          :dims="flowDims"
-          :central-label="flowCentralLabel"
-          :central-sub="flowCentralSub"
-        />
-      </div>
-    </div>
-
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px">
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px">
       <div class="panel fade-in">
         <div class="panel-header">
           <h3>富化维度覆盖与置信度</h3>
@@ -258,6 +244,19 @@ watch(sourceBars, () => { nextTick(() => initSourceChart()) })
           取各源水位线的累计条数（`sync_watermark.items_last_run`）。后端暂未提供按天聚合的时序端点，
           故不展示趋势曲线（此前的趋势图是前端伪造的随机序列，已移除）。
         </p>
+      </div>
+      <div class="panel fade-in">
+        <div class="panel-header">
+          <h3>富化数据流</h3>
+          <span class="badge-count">7 维度辐射图</span>
+        </div>
+        <div style="max-width: 330px; margin: 0 auto">
+          <DataFlowRadial
+            :dims="flowDims"
+            :central-label="flowCentralLabel"
+            :central-sub="flowCentralSub"
+          />
+        </div>
       </div>
     </div>
 

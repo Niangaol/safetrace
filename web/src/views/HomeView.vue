@@ -490,22 +490,26 @@ const toolsByTier = computed(() => {
 .agents-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  gap: 20px;
   margin-bottom: 40px;
 }
 .agent-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  background: #131c2e;
+  gap: 14px;
+  background: linear-gradient(135deg, #131c2e, #0f1623);
   border: 1px solid #1e2d44;
-  border-radius: 10px;
-  padding: 14px 16px;
-  transition: border-color 0.2s;
+  border-radius: 14px;
+  padding: 26px 24px;
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
 }
-.agent-card:hover { border-color: #2a4060; }
+.agent-card:hover {
+  border-color: #2a4060;
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
 .agent-dot {
-  width: 10px; height: 10px;
+  width: 14px; height: 14px;
   border-radius: 50%;
   flex-shrink: 0;
   animation: agentPulse 2s infinite;
@@ -514,18 +518,17 @@ const toolsByTier = computed(() => {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
-.agent-info { display: flex; flex-direction: column; }
+.agent-info { display: flex; flex-direction: column; gap: 4px; }
 .agent-metrics {
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
-  margin-top: 3px;
   font-family: 'JetBrains Mono', monospace;
 }
 .agent-state {
   margin-left: auto;
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 6px;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 8px;
   white-space: nowrap;
   border: 1px solid transparent;
 }
@@ -538,7 +541,7 @@ const toolsByTier = computed(() => {
   background: #131c2e;
   border: 1px solid #1e2d44;
   border-radius: 10px;
-  padding: 12px 16px;
+  padding: 14px 16px;
 }
 .tools-panel summary { cursor: pointer; font-size: 13px; color: #94a3b8; }
 .tools-panel summary code { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
@@ -553,13 +556,13 @@ const toolsByTier = computed(() => {
 .tools-table td { padding: 6px 8px; border-bottom: 1px solid #16213a; vertical-align: top; }
 .tools-table code { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #7dd3fc; }
 .agent-name {
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   color: #e2e8f0;
   font-family: 'JetBrains Mono', monospace;
 }
 .agent-role {
-  font-size: 11px;
+  font-size: 13px;
   color: #64748b;
 }
 
