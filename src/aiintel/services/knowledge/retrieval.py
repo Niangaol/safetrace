@@ -164,7 +164,11 @@ IN_MEMORY_SEMANTIC_LIMIT = 500
 
 
 async def _semantic_recall(
-    session: Any, query: str, top_k: int, owner_type: str | None
+    session: Any,
+    query: str,
+    top_k: int,
+    owner_type: str | None,
+    candidates: list[str] | None = None,
 ) -> list[str]:
     """语义召回。优先用数据库向量列，不可用则**在内存里算余弦**。
 
@@ -173,14 +177,21 @@ async def _semantic_recall(
     **没有 `embedding` 列** —— 于是 `Chunk.embedding.cosine_distance()` 这条路
     在本机完全走不通，语义检索能力被卡死在"数据库没装扩展"上。
 
-    而 ONNX 嵌入器（`onnx_embedder.py`）已经能在本机算出**真向量**
-    （依赖约 15MB，权重走可达的 `hf-mirror.com`）。语料规模不大时，
-    把内容拉进内存算余弦是**诚实且有效**的替代：
-    - 做得成：语义相似度真的参与排序，而不是退化成关键词；
-    - 局限：O(全表)，超出 `IN_MEMORY_SEMANTIC_LIMIT` 就如实不做并打日志。
+    而 ONNX 嵌入器（`onnx_embedder.py`）能在本机算出**真向量**
+    （依赖约 15MB、权重走可达的 hf-mirror），所以用内存余弦顶上。
 
-    向量不落库（列可能不存在），每次现算。演示语料 12 条、单条 ~100ms，
-    代价可接受；大语料请装 pgvector 并改用向量列。
+    ## `candidates` 参数：把"保护"从"全关"改成"限范围"
+
+    ⚠️ 早期版本发现语料超过 `IN_MEMORY_SEMANTIC_LIMIT` 时**直接返回空**，
+    即整个语义召回被**关掉**（实测：库涨到 8 万条切片后，语义检索静默失效、
+    退回纯关键词）。那是错误的设计 —— 保护应该是"限制规模"，不是"放弃能力"。
+
+    现在改为：调用方先把**关键词召回的候选**传进来（几百条量级），
+    语义只在候选内算余弦并重排。于是：
+    - 语料任意大都不会 O(全表)、也不会关掉语义；
+    - 语义的作用是**在候选内重排**（这本来也是 RRF 融合的用法）。
+
+    只有 `candidates is None`（没有候选）时才退回全表扫描 + 上限保护。
     """
 
     import numpy as np
@@ -192,26 +203,64 @@ async def _semantic_recall(
     if not query_vec:
         return []
 
-    stmt = select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content)
-    if owner_type:
-        stmt = stmt.where(Chunk.owner_type == owner_type)
-    total = (
-        session.execute(
+    if candidates:
+        # 候选路径：按 chunk_key 取回候选内容，规模由调用方控制。
+        #
+        # ⚠️ 两个实测踩过的坑：
+        # 1. **两个独立的 `.in_()` 会笛卡尔放宽** —— `(owner_type, owner_id)` 是
+        #    **组合键**，分开写等于把两个集合自由组合。必须用 `tuple_().in_()`；
+        # 2. **候选要按 owner 去重**。关键词召回是按**切片**返回的，而一个漏洞有
+        #    几十个切片（实测 8 万切片 / 1709 漏洞 ≈ 48 个/条），
+        #    于是"50 条候选"会展开成 **1257 条内容**，嵌入那一步要 11 秒。
+        #    语义重排关心的是"**哪个漏洞**相关"，不是"哪个切片相关"，
+        #    所以每个 owner 只取一条代表切片（`chunk_no` 最小的那条，通常是开头）。
+        from sqlalchemy import func as sa_func
+        from sqlalchemy import tuple_
+
+        keys = [parse_doc_key(doc) for doc in candidates]
+        pairs = {(k[0], k[1]) for k in keys}
+        inner = (
+            select(
+                Chunk.owner_type.label("ot"),
+                Chunk.owner_id.label("oi"),
+                sa_func.min(Chunk.chunk_no).label("cn"),
+            )
+            .where(tuple_(Chunk.owner_type, Chunk.owner_id).in_(pairs))
+            .group_by(Chunk.owner_type, Chunk.owner_id)
+        ).subquery()
+        stmt = select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content).join(
+            inner,
+            (Chunk.owner_type == inner.c.ot)
+            & (Chunk.owner_id == inner.c.oi)
+            & (Chunk.chunk_no == inner.c.cn),
+        )
+        rows = session.execute(stmt).all()
+        logger.debug(
+            "语义重排候选：%d 个切片 key → %d 个 owner → %d 条代表切片",
+            len(candidates),
+            len(pairs),
+            len(rows),
+        )
+    else:
+        stmt = select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content)
+        if owner_type:
+            stmt = stmt.where(Chunk.owner_type == owner_type)
+        count_stmt = (
             select(func.count()).select_from(Chunk).where(Chunk.owner_type == owner_type)
             if owner_type
             else select(func.count()).select_from(Chunk)
-        ).scalar()
-        or 0
-    )
-    if total > IN_MEMORY_SEMANTIC_LIMIT:
-        logger.warning(
-            "语料 %d 条超过内存语义召回上限 %d，本轮不做语义召回（请装 pgvector 走向量列）",
-            total,
-            IN_MEMORY_SEMANTIC_LIMIT,
         )
-        return []
+        total = session.execute(count_stmt).scalar() or 0
+        if total > IN_MEMORY_SEMANTIC_LIMIT:
+            logger.warning(
+                "无候选且语料 %d 条超过内存语义召回上限 %d，本轮不做语义召回"
+                "（请装 pgvector 走向量列，或先做关键词召回再喂候选）",
+                total,
+                IN_MEMORY_SEMANTIC_LIMIT,
+            )
+            return []
+        rows = session.execute(stmt).all()
 
-    rows = session.execute(stmt).all()
     if not rows:
         return []
     contents = [r[3] or "" for r in rows]
@@ -246,6 +295,20 @@ async def hybrid_search(
         # pgvector 的向量算子只有 PG 有，所以这里显式要求方言是 postgresql。
         is_postgres = session.get_bind().dialect.name == "postgresql"
         has_vector_col = is_postgres and "embedding" in _chunk_columns(session)
+
+        # ── 先做关键词召回 ────────────────────────────────────────────
+        # **顺序很重要**：关键词召回便宜（一条 SQL），先拿到候选，
+        # 再把候选喂给语义重排。这样语料再大也不会 O(全表)。
+        # 早期版本反过来（先语义全表、再关键词），语料涨到 8 万条切片后
+        # 语义那一步被上限保护**整个关掉**，检索静默退回纯关键词。
+        try:
+            keyword = await _keyword_recall(session, query, KEYWORD_RECALL, owner_type)
+        except Exception as exc:  # noqa: BLE001 - 中文全文检索配置可能缺失
+            logger.debug("全文检索不可用，回退模糊匹配: %s", exc)
+            keyword = await _fallback_recall(session, query, KEYWORD_RECALL, owner_type)
+        keyword_docs = [doc for doc, _ in keyword]
+        rankings.append(keyword_docs)
+
         if has_vector_col and vector:
             # 读侧列宽守卫：列是 `vector(1024)` 而向量是 384 维时，`<->` 算子
             # 直接报 "different dimensions"。有列≠能算，必须显式核对再放行，
@@ -272,21 +335,21 @@ async def hybrid_search(
                 # （灌数时未回填向量），`WHERE embedding IS NOT NULL` 直接筛空 ——
                 # 而 `if vector` 为真，内存回退就不会被走到，整轮检索返回 0 条。
                 # 所以这里显式回退，而不是"有向量列就当向量召回成功"。
-                semantic = await _semantic_recall(session, query, VECTOR_RECALL, owner_type)
+                semantic = await _semantic_recall(
+                    session, query, VECTOR_RECALL, owner_type, candidates=keyword_docs
+                )
                 if semantic:
                     rankings.append(semantic)
-                    logger.debug("向量列为空，回退内存余弦，命中 %d 条", len(semantic))
+                    logger.debug("向量列为空，回退内存余弦重排，命中 %d 条", len(semantic))
         else:
-            semantic = await _semantic_recall(session, query, VECTOR_RECALL, owner_type)
+            # 把关键词候选喂进去：语义只在候选内重排，不扫全表。
+            # 于是"语料很大"不再导致语义检索被关掉。
+            semantic = await _semantic_recall(
+                session, query, VECTOR_RECALL, owner_type, candidates=keyword_docs
+            )
             if semantic:
                 rankings.append(semantic)
-                logger.debug("语义召回（内存余弦）命中 %d 条", len(semantic))
-        try:
-            keyword = await _keyword_recall(session, query, KEYWORD_RECALL, owner_type)
-        except Exception as exc:  # noqa: BLE001 - 中文全文检索配置可能缺失
-            logger.debug("全文检索不可用，回退模糊匹配: %s", exc)
-            keyword = await _fallback_recall(session, query, KEYWORD_RECALL, owner_type)
-        rankings.append([doc for doc, _ in keyword])
+                logger.debug("语义重排（候选内内存余弦）命中 %d 条", len(semantic))
 
         active = [r for r in rankings if r]
         fused = _rrf_fuse(active)[: top_k * 3]
