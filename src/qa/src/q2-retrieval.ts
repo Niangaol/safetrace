@@ -7,7 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { degrade } from "@safetrace/shared";
+import { degrade, nextId, nowIso, sha256, sha256Json } from "@safetrace/shared";
 import type { EventBus, EvidenceChunk, FallbackEvent, RetrievalRequest, RetrievalResponse } from "@safetrace/shared";
 
 /** 仅兼容旧配置/哈希工具；Qdrant 写入必须使用 MG1 provider 返回的真实 embedding。 */
@@ -22,12 +22,13 @@ const LATIN_RE = /[a-z0-9][a-z0-9._-]*/g;
 const CJK_RE = /[\u4e00-\u9fff]+/g;
 
 export interface RetrievalEngine {
-  search(req: RetrievalRequest): Promise<RetrievalResponse>;
+  search(req: RetrievalRequest, context?: IndexLineageContext): Promise<RetrievalResponse>;
 }
 
 export interface EmbeddingResult {
   vectors: number[][];
   model_id: string;
+  model_version?: string;
   provider: string;
   degraded_to: string;
 }
@@ -38,13 +39,16 @@ export type EmbeddingFunction = (texts: string[], traceId: string) => Promise<Em
 export interface CollectionMeta {
   collection_name: string;
   model_id: string;
+  model_version?: string;
   dim: number;
   metric: "cosine" | "dot" | "euclid";
 }
 
+export interface IndexLineageContext { trace_id?: string; parent_lineage_ids?: string[]; causation_id?: string | null }
+
 export interface IndexableEngine extends RetrievalEngine {
   readonly modelId: string;
-  upsert(chunks: EvidenceChunk[]): void | Promise<void>;
+  upsert(chunks: EvidenceChunk[], context?: IndexLineageContext): void | Promise<void>;
   bindCollection(meta: CollectionMeta): void;
 }
 
@@ -73,6 +77,13 @@ export function hashVector(text: string, dim: number): number[] {
   return v.map((x) => x / norm);
 }
 
+function queryLineageRefs(req: RetrievalRequest): Array<{ kind: string; id: string; sha256: string }> {
+  return [
+    { kind: "RetrievalRequest", id: req.query_id, sha256: sha256Json(req) },
+    { kind: "QueryText", id: req.query_id, sha256: sha256(req.query_text) },
+  ];
+}
+
 function round4(x: number): number {
   return Math.round(x * 10000) / 10000;
 }
@@ -94,9 +105,11 @@ export class MemoryIndex implements IndexableEngine {
   private df = new Map<string, number>();
   private totalTokens = 0;
   private collections = new Map<string, CollectionMeta>();
+  private readonly bus?: EventBus;
 
-  constructor(opts: { model_id?: string } = {}) {
+  constructor(opts: { model_id?: string; bus?: EventBus } = {}) {
     this.modelId = opts.model_id ?? DEFAULT_LEXICAL_INDEX_ID;
+    this.bus = opts.bus;
   }
 
   get size(): number {
@@ -108,9 +121,23 @@ export class MemoryIndex implements IndexableEngine {
     return [...this.collections.values()];
   }
 
-  /** 同 chunk_id 覆盖写（索引幂等）。 */
-  upsert(chunks: EvidenceChunk[]): void {
+  /** 同 chunk_id 覆盖写（索引幂等）；有 EventBus 时追加记录每批输入/输出 hash。 */
+  async upsert(chunks: EvidenceChunk[], context: IndexLineageContext = {}): Promise<void> {
     for (const chunk of chunks) this.put(chunk);
+    if (!this.bus) return;
+    const traceId = context.trace_id ?? nextId("tr");
+    const refs = chunks.map((chunk) => ({ kind: "EvidenceChunk", id: chunk.chunk_id, sha256: sha256Json(chunk), url: chunk.provenance.url }));
+    await this.bus.recordLineage({
+      trace_id: traceId,
+      parent_lineage_ids: context.parent_lineage_ids ?? [],
+      causation_id: context.causation_id ?? null,
+      stage: "q2.bm25_index",
+      operation_version: "bm25-lite.v1",
+      status: "success",
+      input_refs: refs,
+      output_refs: refs.map((ref) => ({ ...ref, kind: "BM25IndexedChunk" })),
+      execution: { component_version: "bm25-lite.v1", model_id: "bm25-lite-v1" },
+    });
   }
 
   bindCollection(meta: CollectionMeta): void {
@@ -120,7 +147,12 @@ export class MemoryIndex implements IndexableEngine {
     this.collections.set(meta.collection_name, meta);
   }
 
-  async search(req: RetrievalRequest): Promise<RetrievalResponse> {
+  async search(req: RetrievalRequest, context: IndexLineageContext = {}): Promise<RetrievalResponse> {
+    return (await this.searchWithLineage(req, context)).response;
+  }
+
+  async searchWithLineage(req: RetrievalRequest, context: IndexLineageContext = {}): Promise<{ response: RetrievalResponse; lineage_id?: string }> {
+    const startedAt = nowIso();
     const t0 = Date.now();
     const candidates = this.docs.filter((d) => passesFilter(d.chunk, req));
     const qTokens = [...new Set(tokenize(req.query_text))];
@@ -138,7 +170,7 @@ export class MemoryIndex implements IndexableEngine {
       delete indexed.score_rerank;
       return { ...indexed, score_sparse: round4(max > 0 ? score / max : 0) };
     });
-    return {
+    const response: RetrievalResponse = {
       query_id: req.query_id,
       chunks,
       retrieval_ms: Date.now() - t0,
@@ -146,6 +178,19 @@ export class MemoryIndex implements IndexableEngine {
       trace_id: req.trace_id,
       schema_version: req.schema_version,
     };
+    const lineage = await this.bus?.recordLineage({
+      trace_id: req.trace_id,
+      parent_lineage_ids: context.parent_lineage_ids ?? [],
+      causation_id: context.causation_id ?? null,
+      stage: "q2.bm25_search",
+      operation_version: "bm25-lite.v1",
+      status: "success",
+      started_at: startedAt,
+      input_refs: queryLineageRefs(req),
+      output_refs: chunks.map((chunk) => ({ kind: "RetrievedChunk", id: chunk.chunk_id, sha256: sha256Json(chunk), url: chunk.provenance.url })),
+      execution: { component_version: "bm25-lite.v1", model_id: "bm25-lite-v1" },
+    });
+    return { response, ...(lineage ? { lineage_id: lineage.lineage_id } : {}) };
   }
 
   private put(chunk: EvidenceChunk): void {
@@ -208,6 +253,7 @@ export interface QdrantEngineOptions {
   collection?: string;
   api_key?: string;
   model_id?: string;
+  model_version?: string;
   embedding_dim?: number;
   embedder?: EmbeddingFunction;
   timeout_ms?: number;
@@ -220,6 +266,7 @@ export interface QdrantEngineOptions {
 /** Qdrant REST 引擎：named vector "dense"；任何不可用都显式降级到 MemoryIndex。 */
 export class QdrantEngine implements IndexableEngine {
   readonly modelId: string;
+  modelVersion: string | undefined;
   /** 最近一次降级通道（/healthz 透出）；未降级为 undefined */
   lastDegradedTo: string | undefined;
   private readonly opts: QdrantEngineOptions;
@@ -232,8 +279,9 @@ export class QdrantEngine implements IndexableEngine {
   constructor(opts: QdrantEngineOptions = {}) {
     this.opts = opts;
     this.modelId = opts.model_id ?? DEFAULT_EMBEDDER_ID;
+    this.modelVersion = opts.model_version;
     this.vectorDim = opts.embedding_dim;
-    this.memory = new MemoryIndex({ model_id: this.modelId });
+    this.memory = new MemoryIndex({ model_id: this.modelId, bus: opts.bus });
   }
 
   get size(): number {
@@ -250,90 +298,157 @@ export class QdrantEngine implements IndexableEngine {
     }
     if (!Number.isInteger(meta.dim) || meta.dim <= 0) throw new Error("S3 集合维度必须是正整数");
     if (this.vectorDim !== undefined && this.vectorDim !== meta.dim) throw new Error("S3 集合维度与 embedder 配置不一致");
+    if (this.modelVersion !== undefined && meta.model_version !== undefined && this.modelVersion !== meta.model_version) throw new Error("S3 集合模型版本与 embedder 配置不一致");
+    this.modelVersion = meta.model_version ?? this.modelVersion;
     this.vectorDim = meta.dim;
     this.pendingMeta = meta;
     this.collections.set(meta.collection_name, meta);
   }
 
-  async search(req: RetrievalRequest): Promise<RetrievalResponse> {
+  async search(req: RetrievalRequest, context: IndexLineageContext = {}): Promise<RetrievalResponse> {
     const url = this.opts.url ?? process.env.QDRANT_URL ?? "";
-    if (process.env.OFFLINE_FIXTURES === "true") {
-      return this.degradeTo(req, "fixture", "OFFLINE_FIXTURES=true：离线模式直接回放 fixtures 样本");
-    }
-    if (!url) return this.degradeTo(req, "memory_index", "QDRANT_URL 未配置，向量检索不可用");
+    if (process.env.OFFLINE_FIXTURES === "true") return this.degradeTo(req, "fixture", "OFFLINE_FIXTURES=true：离线模式直接回放 fixtures 样本", context);
+    if (!url) return this.degradeTo(req, "memory_index", "QDRANT_URL 未配置，向量检索不可用", context);
     try {
-      const dense = await this.qdrantSearch(url, req);
+      const dense = await this.qdrantSearch(url, req, context);
       if (!this.mirrorReady || this.memory.size === 0) {
         this.lastDegradedTo = undefined;
-        return dense;
+        return dense.response;
       }
-      const sparse = await this.memory.search(req);
-      const hybrid = fuseHybrid(dense.chunks, sparse.chunks, req.top_k);
+      const sparse = await this.memory.searchWithLineage(req);
+      const hybrid = fuseHybrid(dense.response.chunks, sparse.response.chunks, req.top_k);
+      const refs = hybrid.map((chunk) => ({ kind: "RetrievedChunk", id: chunk.chunk_id, sha256: sha256Json(chunk), url: chunk.provenance.url }));
+      await this.opts.bus?.recordLineage({
+        trace_id: req.trace_id,
+        parent_lineage_ids: [dense.lineage_id, sparse.lineage_id].filter((id): id is string => Boolean(id)),
+        causation_id: context.causation_id ?? null,
+        stage: "q2.hybrid_fusion",
+        operation_version: "rrf.k60.v1",
+        status: "success",
+        input_refs: [{ kind: "Query", id: req.query_id, sha256: sha256(req.query_text) }, ...dense.response.chunks.map((chunk) => ({ kind: "DenseCandidate", id: chunk.chunk_id, sha256: sha256Json(chunk) })), ...sparse.response.chunks.map((chunk) => ({ kind: "SparseCandidate", id: chunk.chunk_id, sha256: sha256Json(chunk) }))],
+        output_refs: refs,
+        execution: { component_version: "rrf.k60.v1", model_id: this.modelId },
+      });
       this.lastDegradedTo = undefined;
-      return { ...dense, chunks: hybrid };
+      return { ...dense.response, chunks: hybrid };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return this.degradeTo(req, "memory_index", "Qdrant 检索失败（" + msg + "）");
+      const failed = await this.opts.bus?.recordLineage({
+        trace_id: req.trace_id,
+        parent_lineage_ids: context.parent_lineage_ids ?? [],
+        causation_id: context.causation_id ?? null,
+        stage: "q2.qdrant_search",
+        operation_version: "qdrant-rest.search.v1",
+        status: /cache|hash-256|embedding|model|维度/i.test(msg) ? "rejected" : "failed",
+        input_refs: queryLineageRefs(req),
+        output_refs: [],
+        execution: { component_version: "qdrant-rest.v1", model_id: this.modelId },
+        decision: { fallback_to: "bm25-lite", reason: "dense retrieval unavailable" },
+        error: "dense retrieval failed validation or transport",
+      });
+      return this.degradeTo(req, "memory_index", "Qdrant 检索失败（" + msg + "）", context, failed ? [failed.lineage_id] : []);
     }
   }
 
     /** 写入双路索引：真实 MG1 embedding 写 Qdrant，BM25 镜像供混合检索和故障降级。 */
-  async upsert(chunks: EvidenceChunk[]): Promise<void> {
-    this.memory.upsert(chunks);
+  async upsert(chunks: EvidenceChunk[], context: IndexLineageContext = {}): Promise<void> {
+    const traceId = context.trace_id ?? nextId("tr");
+    const startedAt = nowIso();
+    const bm25Context = { ...context, trace_id: traceId };
+    await this.memory.upsert(chunks, bm25Context);
     this.mirrorReady = true;
     if (chunks.length === 0) return;
+    const inputRefs = chunks.map((chunk) => ({ kind: "EvidenceChunk", id: chunk.chunk_id, sha256: sha256Json(chunk), url: chunk.provenance.url }));
     const url = this.opts.url ?? process.env.QDRANT_URL ?? "";
-    if (!url) throw new Error("QDRANT_URL 未配置：BM25 镜像已保留，但不能写入向量库");
-    const vectors = await this.embedTexts(chunks.map((c) => c.text), "tr_q2_index", this.pendingMeta?.dim);
-    const meta = this.pendingMeta ?? {
-      collection_name: this.opts.collection ?? process.env.QDRANT_COLLECTION ?? "safetrace_chunks",
-      model_id: this.modelId,
-      dim: vectors[0]!.length,
-      metric: "cosine" as const,
-    };
-    if (vectors[0]!.length !== meta.dim) throw new Error("embedding 维度与 Qdrant 集合元数据不一致");
-    const base = url.replace(/\/+$/, "");
     const fetchImpl = this.opts.fetch_impl ?? fetch;
     const signal = AbortSignal.timeout(this.opts.timeout_ms ?? QDRANT_TIMEOUT_MS);
-    const collectionUrl = base + "/collections/" + encodeURIComponent(meta.collection_name);
-    const createResp = await fetchImpl(collectionUrl, {
-      method: "PUT",
-      headers: this.headers(),
-      body: JSON.stringify({ vectors: { dense: { size: meta.dim, distance: meta.metric } } }),
-      signal,
-    });
-    if (!createResp.ok && createResp.status !== 409) throw new Error("Qdrant 建集失败 HTTP " + createResp.status);
-    if (createResp.status === 409) {
-      const infoResp = await fetchImpl(collectionUrl, { method: "GET", headers: this.headers(), signal });
-      if (!infoResp.ok) throw new Error("Qdrant 已有集合但读取元数据失败 HTTP " + infoResp.status);
-      const info = (await infoResp.json()) as { result?: { config?: { params?: { vectors?: { dense?: { size?: number; distance?: string } } } } } };
-      const existing = info.result?.config?.params?.vectors?.dense;
-      if (existing?.size !== meta.dim) throw new Error("Qdrant 已有集合维度不匹配；必须新建集合并重建索引");
-      if (existing.distance && existing.distance.toLowerCase() !== meta.metric.toLowerCase()) throw new Error("Qdrant 已有集合距离度量不匹配");
+    let embedding: EmbeddingResult | undefined;
+    try {
+      if (!url) throw new Error("QDRANT_URL 未配置：BM25 镜像已保留，但不能写入向量库");
+      embedding = await this.embedTexts(chunks.map((c) => c.text), traceId, this.pendingMeta?.dim);
+      const vectors = embedding.vectors;
+      const modelVersion = embedding.model_version ?? this.modelVersion;
+      const meta = this.pendingMeta ?? {
+        collection_name: this.opts.collection ?? process.env.QDRANT_COLLECTION ?? "safetrace_chunks",
+        model_id: this.modelId,
+        model_version: embedding.model_version ?? this.modelVersion,
+        dim: vectors[0]!.length,
+        metric: "cosine" as const,
+      };
+      if (vectors[0]!.length !== meta.dim) throw new Error("embedding 维度与 Qdrant 集合元数据不一致");
+      const base = url.replace(/\/+$/, "");
+      const collectionUrl = base + "/collections/" + encodeURIComponent(meta.collection_name);
+      const createResp = await fetchImpl(collectionUrl, {
+        method: "PUT",
+        headers: this.headers(),
+        body: JSON.stringify({ vectors: { dense: { size: meta.dim, distance: ({ cosine: "Cosine", dot: "Dot", euclid: "Euclid" } as const)[meta.metric] } } }),
+        signal,
+      });
+      if (!createResp.ok && createResp.status !== 409) throw new Error("Qdrant 建集失败 HTTP " + createResp.status);
+      if (createResp.status === 409) {
+        const infoResp = await fetchImpl(collectionUrl, { method: "GET", headers: this.headers(), signal });
+        if (!infoResp.ok) throw new Error("Qdrant 已有集合但读取元数据失败 HTTP " + infoResp.status);
+        const info = (await infoResp.json()) as { result?: { config?: { params?: { vectors?: { dense?: { size?: number; distance?: string } } } } } };
+        const existing = info.result?.config?.params?.vectors?.dense;
+        if (existing?.size !== meta.dim) throw new Error("Qdrant 已有集合维度不匹配；必须新建集合并重建索引");
+        if (existing.distance && existing.distance.toLowerCase() !== meta.metric.toLowerCase()) throw new Error("Qdrant 已有集合距离度量不匹配");
+      }
+      const upResp = await fetchImpl(collectionUrl + "/points?wait=true", {
+        method: "PUT",
+        headers: this.headers(),
+        body: JSON.stringify({
+          points: chunks.map((chunk, index) => ({
+            id: numericId(chunk.chunk_id),
+            vector: { dense: vectors[index]! },
+            payload: {
+              chunk_id: chunk.chunk_id,
+              doc_type: chunk.doc_type,
+              text: chunk.text,
+              quality_score: chunk.quality_score ?? null,
+              provenance: chunk.provenance,
+              cve_ids: extractCveIds(chunk.text),
+              embedding_model_id: this.modelId,
+              ...(modelVersion ? { embedding_model_version: modelVersion } : {}),
+            },
+          })),
+        }),
+        signal,
+      });
+      if (!upResp.ok) throw new Error("Qdrant 写入失败 HTTP " + upResp.status);
+      this.pendingMeta = meta;
+      this.collections.set(meta.collection_name, meta);
+      await this.opts.bus?.recordLineage({
+        trace_id: traceId,
+        parent_lineage_ids: context.parent_lineage_ids ?? [],
+        causation_id: context.causation_id ?? null,
+        stage: "q2.qdrant_index",
+        operation_version: "qdrant-rest.v1",
+        status: "success",
+        started_at: startedAt,
+        input_refs: inputRefs,
+        output_refs: chunks.map((chunk, index) => ({ kind: "QdrantPoint", id: chunk.chunk_id, sha256: sha256Json(vectors[index]!), url: chunk.provenance.url })),
+        execution: { component_version: "qdrant-rest.v1", provider: embedding.provider, model_id: embedding.model_id, model_version: embedding.model_version ?? this.modelVersion ?? embedding.model_id, vector_dimension: vectors[0]!.length, config_sha256: sha256Json({ collection_name: meta.collection_name, model_id: meta.model_id, model_version: meta.model_version, dim: meta.dim, metric: meta.metric }) },
+        decision: { reason: "collection=" + meta.collection_name + "; dim=" + meta.dim + "; metric=" + meta.metric },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const reason = /cache|hash-256|embedding|model_id|维度/i.test(message) ? "embedding validation failed" : "Qdrant write failed";
+      await this.opts.bus?.recordLineage({
+        trace_id: traceId,
+        parent_lineage_ids: context.parent_lineage_ids ?? [],
+        causation_id: context.causation_id ?? null,
+        stage: "q2.qdrant_index",
+        operation_version: "qdrant-rest.v1",
+        status: "degraded",
+        started_at: startedAt,
+        input_refs: inputRefs,
+        output_refs: [],
+        execution: { component_version: "qdrant-rest.v1", model_id: this.modelId, ...(embedding ? { provider: embedding.provider } : {}) },
+        decision: { fallback_to: "bm25-lite", reason },
+        error: reason,
+      });
+      throw err;
     }
-    const upResp = await fetchImpl(collectionUrl + "/points?wait=true", {
-      method: "PUT",
-      headers: this.headers(),
-      body: JSON.stringify({
-        points: chunks.map((c, i) => ({
-          id: numericId(c.chunk_id),
-          vector: { dense: vectors[i]! },
-          payload: {
-            chunk_id: c.chunk_id,
-            doc_type: c.doc_type,
-            text: c.text,
-            quality_score: c.quality_score ?? null,
-            provenance: c.provenance,
-            cve_ids: extractCveIds(c.text),
-            embedding_model_id: this.modelId,
-          },
-        })),
-      }),
-      signal,
-    });
-    if (!upResp.ok) throw new Error("Qdrant 写入失败 HTTP " + upResp.status);
-    this.pendingMeta = meta;
-    this.collections.set(meta.collection_name, meta);
   }
 
   private headers(): Record<string, string> {
@@ -342,15 +457,17 @@ export class QdrantEngine implements IndexableEngine {
     return h;
   }
 
-  private async qdrantSearch(url: string, req: RetrievalRequest): Promise<RetrievalResponse> {
+  private async qdrantSearch(url: string, req: RetrievalRequest, context: IndexLineageContext = {}): Promise<{ response: RetrievalResponse; lineage_id?: string }> {
+    const startedAt = nowIso();
     const t0 = Date.now();
     const collection = this.pendingMeta?.collection_name ?? this.opts.collection ?? process.env.QDRANT_COLLECTION ?? "safetrace_chunks";
-    const vectors = await this.embedTexts([req.query_text], req.trace_id, this.pendingMeta?.dim ?? this.vectorDim);
+    const embedding = await this.embedTexts([req.query_text], req.trace_id, this.pendingMeta?.dim ?? this.vectorDim);
+    const vector = embedding.vectors[0]!;
     const body: Record<string, unknown> = {
-      vector: { name: "dense", vector: vectors[0]! },
+      vector: { name: "dense", vector },
       limit: req.top_k,
       with_payload: true,
-      filter: qdrantFilter(req, this.modelId),
+      filter: qdrantFilter(req, this.modelId, this.modelVersion),
     };
     const fetchImpl = this.opts.fetch_impl ?? fetch;
     const resp = await fetchImpl(url.replace(/\/+$/, "") + "/collections/" + encodeURIComponent(collection) + "/points/search", {
@@ -364,7 +481,7 @@ export class QdrantEngine implements IndexableEngine {
       result?: Array<{ id: string | number; score: number; payload?: Record<string, unknown> }>;
     };
     const chunks = (data.result ?? []).slice(0, req.top_k).map((p) => toChunk(p));
-    return {
+    const response: RetrievalResponse = {
       query_id: req.query_id,
       chunks,
       retrieval_ms: Date.now() - t0,
@@ -372,14 +489,33 @@ export class QdrantEngine implements IndexableEngine {
       trace_id: req.trace_id,
       schema_version: req.schema_version,
     };
+    const lineage = await this.opts.bus?.recordLineage({
+      trace_id: req.trace_id,
+      parent_lineage_ids: context.parent_lineage_ids ?? [],
+      causation_id: context.causation_id ?? null,
+      stage: "q2.qdrant_search",
+      operation_version: "qdrant-rest.search.v1",
+      status: "success",
+      started_at: startedAt,
+      input_refs: queryLineageRefs(req),
+      output_refs: [
+        { kind: "QueryEmbedding", id: req.query_id, sha256: sha256Json(vector) },
+        ...chunks.map((chunk) => ({ kind: "DenseCandidate", id: chunk.chunk_id, sha256: sha256Json(chunk), url: chunk.provenance.url })),
+      ],
+      execution: { component_version: "qdrant-rest.v1", provider: embedding.provider, model_id: embedding.model_id, model_version: embedding.model_version ?? this.modelVersion ?? embedding.model_id, vector_dimension: vector.length, config_sha256: sha256Json({ collection_name: collection, model_id: this.modelId, model_version: this.modelVersion, vector_dimension: vector.length }) },
+      decision: { reason: "collection=" + collection },
+    });
+    return { response, ...(lineage ? { lineage_id: lineage.lineage_id } : {}) };
   }
 
-  private async embedTexts(texts: string[], traceId: string, expectedDim?: number): Promise<number[][]> {
+  private async embedTexts(texts: string[], traceId: string, expectedDim?: number): Promise<EmbeddingResult> {
     if (!this.opts.embedder) throw new Error("MG1 embedder 未接入；拒绝用 hash-256 伪装语义向量");
     const result = await this.opts.embedder(texts, traceId);
     if (result.model_id === DEFAULT_EMBEDDER_ID) throw new Error("MG1 返回旧 hash-256 占位模型；拒绝写入/查询语义集合");
     if (result.provider === "cache" || result.degraded_to) throw new Error("MG1 embedding 已降级（" + (result.degraded_to || "cache provider") + "）；拒绝写入/查询语义集合");
     if (result.model_id !== this.modelId) throw new Error("MG1 embedding model_id 与 Qdrant 集合绑定不一致");
+    if (this.modelVersion !== undefined && result.model_version !== this.modelVersion) throw new Error("MG1 embedding model_version 与 Qdrant 集合绑定不一致");
+    this.modelVersion = result.model_version ?? this.modelVersion;
     if (!Array.isArray(result.vectors) || result.vectors.length !== texts.length) throw new Error("MG1 embedding 返回数量与输入不一致");
     const dimension = result.vectors[0]?.length ?? 0;
     if (dimension <= 0 || (expectedDim !== undefined && dimension !== expectedDim)) throw new Error("MG1 embedding 向量维度无效或不匹配");
@@ -390,15 +526,22 @@ export class QdrantEngine implements IndexableEngine {
     }
     if (this.vectorDim !== undefined && this.vectorDim !== dimension) throw new Error("MG1 embedding 维度与当前集合绑定不一致");
     this.vectorDim = dimension;
-    return result.vectors;
+    return result;
   }
 
-  private async degradeTo(req: RetrievalRequest, degradedOf: string, trigger: string): Promise<RetrievalResponse> {
-    this.ensureMemorySeeded();
-    const label =
-      degradedOf === "fixture"
-        ? "离线模式：以下结果来自 fixtures 样本回放，非实时检索"
-        : "向量检索不可用：以下结果来自内存索引，覆盖范围可能不完整";
+  private async degradeTo(
+    req: RetrievalRequest,
+    degradedOf: string,
+    trigger: string,
+    context: IndexLineageContext = {},
+    failedLineageIds: string[] = [],
+  ): Promise<RetrievalResponse> {
+    await this.ensureMemorySeeded(req.trace_id);
+    const label = degradedOf === "fixture"
+      ? "离线模式：以下结果来自 fixtures 样本回放，非实时检索"
+      : "向量检索不可用：以下结果来自内存索引，覆盖范围可能不完整";
+    let fallbackEvent: FallbackEvent | undefined;
+    let fallbackEventId: string | undefined;
     const res = await degrade({
       layer: "L3",
       trigger,
@@ -406,21 +549,38 @@ export class QdrantEngine implements IndexableEngine {
       traceId: req.trace_id,
       label,
       recoveryHint: "恢复 Qdrant 服务或关闭 OFFLINE_FIXTURES 后重试",
-      emit: (e) => this.emit(e),
+      emit: async (event) => { fallbackEvent = event; fallbackEventId = (await this.emit(event)) ?? undefined; },
     });
     this.lastDegradedTo = res.degraded_to;
-    const base = await this.memory.search(req);
-    return { ...base, degraded_to: res.degraded_to };
+    const sparse = await this.memory.searchWithLineage(req, { parent_lineage_ids: failedLineageIds, causation_id: context.causation_id });
+    const response = { ...sparse.response, degraded_to: res.degraded_to };
+    await this.opts.bus?.recordLineage({
+      trace_id: req.trace_id,
+      parent_lineage_ids: [...failedLineageIds, ...(sparse.lineage_id ? [sparse.lineage_id] : [])],
+      causation_id: fallbackEventId ?? context.causation_id ?? null,
+      stage: "q2.retrieval_fallback",
+      operation_version: "q2-fallback.v1",
+      status: "degraded",
+      input_refs: queryLineageRefs(req),
+      output_refs: [
+        ...response.chunks.map((chunk) => ({ kind: "RetrievedChunk", id: chunk.chunk_id, sha256: sha256Json(chunk), url: chunk.provenance.url })),
+        ...(fallbackEvent && fallbackEventId ? [{ kind: "FallbackEvent", id: fallbackEventId, sha256: sha256Json(fallbackEvent) }] : []),
+      ],
+      decision: { fallback_to: res.degraded_to, reason: degradedOf === "fixture" ? "explicit offline fixture mode" : "dense store unavailable" },
+    });
+    return response;
   }
 
-  private async emit(event: FallbackEvent): Promise<void> {
-    if (!this.opts.bus) return;
-    await this.opts.bus.publish("fallback.events", event, { trace_id: event.trace_id });
+
+  private async emit(event: FallbackEvent): Promise<string | undefined> {
+    if (!this.opts.bus) return undefined;
+    const envelope = await this.opts.bus.publish("fallback.events", event, { trace_id: event.trace_id });
+    return envelope.event_id;
   }
 
-  private ensureMemorySeeded(): void {
+  private async ensureMemorySeeded(traceId: string): Promise<void> {
     if (this.memory.size === 0) {
-      this.memory.upsert(readFixtureChunks());
+      await this.memory.upsert(readFixtureChunks(), { trace_id: traceId });
       this.mirrorReady = false;
     }
   }
@@ -450,8 +610,9 @@ export function fuseHybrid(denseChunks: EvidenceChunk[], sparseChunks: EvidenceC
     .map((row) => row.chunk);
 }
 
-function qdrantFilter(req: RetrievalRequest, modelId: string): Record<string, unknown> {
+function qdrantFilter(req: RetrievalRequest, modelId: string, modelVersion?: string): Record<string, unknown> {
   const must: unknown[] = [{ key: "embedding_model_id", match: { value: modelId } }];
+  if (modelVersion) must.push({ key: "embedding_model_version", match: { value: modelVersion } });
   if (req.doc_types && req.doc_types.length > 0) must.push({ key: "doc_type", match: { any: req.doc_types } });
   if (req.min_quality !== undefined) must.push({ key: "quality_score", range: { gte: req.min_quality } });
   if (req.cve_ids && req.cve_ids.length > 0) must.push({ key: "cve_ids", match: { any: req.cve_ids } });
@@ -488,9 +649,10 @@ export async function indexChunks(
   engine: IndexableEngine,
   chunks: EvidenceChunk[],
   meta: CollectionMeta,
+  context: IndexLineageContext = {},
 ): Promise<CollectionMeta> {
   engine.bindCollection(meta);
-  await engine.upsert(chunks);
+  await engine.upsert(chunks, context);
   return meta;
 }
 

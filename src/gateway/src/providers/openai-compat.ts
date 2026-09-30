@@ -52,6 +52,7 @@ async function postJson(url: string, body: unknown, cfg: OpenAiCompatConfig): Pr
   try {
     const res = await fetch(url, {
       method: "POST",
+      redirect: "error",
       headers: {
         "content-type": "application/json",
         authorization: "Bearer " + cfg.apiKey,

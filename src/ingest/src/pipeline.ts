@@ -6,7 +6,7 @@
  * 所有降级（fixture 回放）都以 FallbackEvent 形式发往 fallback.events，并在返回结果上标记
  * degraded_to（禁止静默兜底）。
  */
-import { EventBus, nextId } from "@safetrace/shared";
+import { EventBus, nextId, nowIso, sha256Json } from "@safetrace/shared";
 import type { EventStore, FallbackEvent, IntelItem, QualityVerdict, RawDoc } from "@safetrace/shared";
 import { parseKev } from "./adapters/kev.js";
 import { parseNvd } from "./adapters/nvd.js";
@@ -18,6 +18,7 @@ import { fetchOsv } from "./sources/osv.js";
 import { fetchCveOrg } from "./sources/cveorg.js";
 import { dedupeAll } from "./dedupe.js";
 import { assessQualityVerdict } from "./dq1.js";
+import { sha256PayloadRef } from "./common.js";
 import type { FetchOpts, ParseResult } from "./common.js";
 
 export interface RunIngestOnceOpts {
@@ -27,9 +28,15 @@ export interface RunIngestOnceOpts {
   offline?: boolean;
   /** 只跑指定源（source_id 列表）；缺省为全部已就绪源。 */
   sourceIds?: string[];
+  /** 调用方可指定 trace_id 以关联 ingest/enrich/index 全链路。 */
+  trace_id?: string;
 }
 
 export interface IngestRunResult {
+  trace_id: string;
+  /** DQ1 lineage parent for each IntelItem; downstream stages use it to continue the DAG. */
+  lineage_parent_by_intel_id: Record<string, string>;
+  causation_by_intel_id: Record<string, string>;
   /** 实际抓取到的 RawDoc（离线时为回放样本）。 */
   fetched: RawDoc[];
   /** 适配器解析出的全部 IntelItem（归并前）。 */
@@ -63,58 +70,249 @@ const SOURCE_RUNNERS: SourceRunner[] = [
 
 export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunResult> {
   const bus = new EventBus({ store: opts.store });
-  const traceId = nextId("tr");
+  const traceId = opts.trace_id ?? nextId("tr");
   const wanted = opts.sourceIds;
   const runners = wanted === undefined ? SOURCE_RUNNERS : SOURCE_RUNNERS.filter((r) => wanted.includes(r.id));
 
   const fetched: RawDoc[] = [];
   const parsed: IntelItem[] = [];
   const fallbackEvents: FallbackEvent[] = [];
-  /** intel_id → 首次产出它的 raw.docs 事件 id（因果链锚点）。 */
+  /** intel_id → 首次产出它的 raw.docs 事件 id（Envelope 因果锚点）。 */
   const rawEventById = new Map<string, string>();
+  /** source_id → 产生该源解析结果的 lineage records，归并时保留多父关系。 */
+  const parseLineageBySourceId = new Map<string, Set<string>>();
+  const lineageParentByIntelId: Record<string, string> = {};
+  const causationByIntelId: Record<string, string> = {};
 
   for (const runner of runners) {
     const sourceEvents: FallbackEvent[] = [];
-    const raw = await runner.run({
-      offline: opts.offline,
-      traceId,
-      emit: (event) => {
-        sourceEvents.push(event);
-      },
-    });
-    if (raw === null) continue;
+    const fetchStarted = nowIso();
+    let raw: RawDoc | null;
+    try {
+      raw = await runner.run({
+        offline: opts.offline,
+        traceId,
+        emit: (event) => { sourceEvents.push(event); },
+      });
+    } catch {
+      await bus.recordLineage({
+        trace_id: traceId,
+        stage: "ingest.fetch",
+        operation_version: runner.id + ".fetch.v1",
+        status: "failed",
+        started_at: fetchStarted,
+        input_refs: [{ kind: "Source", id: runner.id }],
+        error: "source fetch failed; see source adapter logs",
+      });
+      throw new Error("采集失败；lineage 已记录 trace_id=" + traceId + " source_id=" + runner.id);
+    }
+    if (raw === null) {
+      await bus.recordLineage({
+        trace_id: traceId,
+        stage: "ingest.fetch",
+        operation_version: runner.id + ".fetch.v1",
+        status: "success",
+        started_at: fetchStarted,
+        input_refs: [{ kind: "Source", id: runner.id }],
+        decision: { reason: "source returned no new document" },
+      });
+      continue;
+    }
     fetched.push(raw);
-    const parsedResult = await runner.parse(raw);
-    raw.parse_warnings = parsedResult.warnings; // Y2 告警落到 RawDoc 契约字段
+    const rawId = "raw:" + raw.source_id + ":" + raw.external_id;
+    const rawMetadataHash = sha256Json(raw);
+    let payloadHash: string;
+    try {
+      payloadHash = await sha256PayloadRef(raw.payload_ref);
+    } catch {
+      await bus.recordLineage({
+        trace_id: traceId,
+        stage: "ingest.fetch",
+        operation_version: runner.id + ".fetch.v1",
+        status: "failed",
+        started_at: fetchStarted,
+        source: { source_id: raw.source_id, source_type: raw.source_type, url: raw.url, fetched_at: raw.fetched_at, ...(raw.http_etag ? { etag: raw.http_etag } : {}) },
+        output_refs: [{ kind: "RawDoc", id: rawId, sha256: rawMetadataHash, url: raw.url }],
+        error: "RawDoc payload_ref could not be read and hashed; refusing untraceable ingestion",
+      });
+      throw new Error("原始 payload 无法读取或计算 SHA-256；拒绝无溯源入库：" + raw.source_id);
+    }
+    const fetchCompleted = nowIso();
+    const fetchLineage = await bus.recordLineage({
+      trace_id: traceId,
+      stage: "ingest.fetch",
+      operation_version: runner.id + ".fetch.v1",
+      status: sourceEvents.length > 0 ? "degraded" : "success",
+      started_at: fetchStarted,
+      completed_at: fetchCompleted,
+      input_refs: [{ kind: "Source", id: runner.id, sha256: sha256Json({ source_id: raw.source_id, source_type: raw.source_type, url: raw.url }) }],
+      output_refs: [
+        { kind: "RawDoc", id: rawId, sha256: rawMetadataHash, url: raw.url },
+        { kind: "RawPayload", id: "payload:" + rawId, sha256: payloadHash, url: raw.url },
+      ],
+      source: { source_id: raw.source_id, source_type: raw.source_type, url: raw.url, fetched_at: raw.fetched_at, ...(raw.http_etag ? { etag: raw.http_etag } : {}) },
+      ...(sourceEvents.length > 0 ? { decision: { fallback_to: sourceEvents[0]!.degraded_of, reason: "source emitted " + sourceEvents.length + " fallback event(s)" } } : {}),
+    });
+
+    const parseStarted = nowIso();
+    let parsedResult: ParseResult;
+    try {
+      parsedResult = await runner.parse(raw);
+    } catch {
+      await bus.recordLineage({
+        trace_id: traceId,
+        parent_lineage_ids: [fetchLineage.lineage_id],
+        stage: "ingest.parse",
+        operation_version: runner.id + ".parser.v1",
+        status: "failed",
+        started_at: parseStarted,
+        input_refs: [{ kind: "RawDoc", id: rawId, sha256: rawMetadataHash }, { kind: "RawPayload", id: "payload:" + rawId, sha256: payloadHash }],
+        error: "source parser failed; no output artifacts published",
+      });
+      throw new Error("解析失败；lineage 已记录 trace_id=" + traceId + " source_id=" + runner.id);
+    }
+    raw.parse_warnings = parsedResult.warnings;
     const rawEnv = await bus.publish("raw.docs", raw, { trace_id: traceId, causation_id: null });
+    const rawPublish = await bus.recordLineage({
+      trace_id: traceId,
+      parent_lineage_ids: [fetchLineage.lineage_id],
+      causation_id: rawEnv.event_id,
+      stage: "ingest.publish_raw_doc",
+      operation_version: "event-bus.publish.v1",
+      status: "success",
+      input_refs: [{ kind: "RawDoc", id: rawId, sha256: rawMetadataHash }],
+      output_refs: [{ kind: "EventEnvelope", id: rawEnv.event_id, sha256: sha256Json(rawEnv) }],
+    });
+    const fallbackEventRefs = [];
     for (const event of sourceEvents) {
       fallbackEvents.push(event);
-      await bus.publish("fallback.events", event, { trace_id: traceId, causation_id: rawEnv.event_id });
+      const fallbackEnv = await bus.publish("fallback.events", event, { trace_id: traceId, causation_id: rawEnv.event_id });
+      fallbackEventRefs.push({ kind: "FallbackEvent", id: fallbackEnv.event_id, sha256: sha256Json(event) });
+      await bus.recordLineage({
+        trace_id: traceId,
+        parent_lineage_ids: [fetchLineage.lineage_id, rawPublish.lineage_id],
+        causation_id: fallbackEnv.event_id,
+        stage: "ingest.fallback",
+        operation_version: "fallback.events.v1",
+        status: "degraded",
+        input_refs: [{ kind: "RawDoc", id: rawId, sha256: rawMetadataHash }],
+        output_refs: [fallbackEventRefs[fallbackEventRefs.length - 1]!],
+        decision: { fallback_to: event.degraded_of, reason: event.action_taken },
+      });
     }
+    const parseLineage = await bus.recordLineage({
+      trace_id: traceId,
+      parent_lineage_ids: [fetchLineage.lineage_id, rawPublish.lineage_id],
+      causation_id: rawEnv.event_id,
+      stage: "ingest.parse",
+      operation_version: runner.id + ".parser.v1",
+      status: parsedResult.warnings.length > 0 ? "degraded" : "success",
+      started_at: parseStarted,
+      input_refs: [{ kind: "RawDoc", id: rawId, sha256: rawMetadataHash }, { kind: "RawPayload", id: "payload:" + rawId, sha256: payloadHash }],
+      output_refs: parsedResult.items.map((item) => ({ kind: "IntelItem", id: item.intel_id, sha256: sha256Json(item) })),
+      source: { source_id: raw.source_id, source_type: raw.source_type, url: raw.url, fetched_at: raw.fetched_at, ...(raw.http_etag ? { etag: raw.http_etag } : {}) },
+      ...(parsedResult.warnings.length > 0 ? { decision: { reason: "parser emitted " + parsedResult.warnings.length + " warning(s)" } } : {}),
+    });
     for (const item of parsedResult.items) {
       parsed.push(item);
       if (!rawEventById.has(item.intel_id)) rawEventById.set(item.intel_id, rawEnv.event_id);
+      for (const sourceId of item.source_ids) {
+        const parents = parseLineageBySourceId.get(sourceId) ?? new Set<string>();
+        parents.add(parseLineage.lineage_id);
+        parseLineageBySourceId.set(sourceId, parents);
+      }
     }
   }
 
-  const { items: mergedItems } = dedupeAll(parsed);
+  const dedupeStarted = nowIso();
+  let dedupeResult: ReturnType<typeof dedupeAll>;
+  try {
+    dedupeResult = dedupeAll(parsed);
+  } catch {
+    await bus.recordLineage({
+      trace_id: traceId,
+      stage: "ingest.dedupe",
+      operation_version: "dedupeAll.v1",
+      status: "failed",
+      started_at: dedupeStarted,
+      input_refs: parsed.map((item) => ({ kind: "IntelItem", id: item.intel_id, sha256: sha256Json(item) })),
+      error: "dedupe failed; no merged output produced",
+    });
+    throw new Error("去重失败；lineage 已记录 trace_id=" + traceId);
+  }
+  const mergedItems = dedupeResult.items;
+  const parseLineageParents = [...new Set([...parseLineageBySourceId.values()].flatMap((set) => [...set]))];
+  const dedupeLineage = await bus.recordLineage({
+    trace_id: traceId,
+    parent_lineage_ids: parseLineageParents,
+    stage: "ingest.dedupe",
+    operation_version: "dedupeAll.v1",
+    status: "success",
+    started_at: dedupeStarted,
+    input_refs: parsed.map((item) => ({ kind: "IntelItem", id: item.intel_id, sha256: sha256Json(item) })),
+    output_refs: mergedItems.map((item) => ({ kind: "IntelItem", id: item.intel_id, sha256: sha256Json(item) })),
+    ...(dedupeResult.links.length > 0 ? { decision: { reason: "merged " + dedupeResult.links.length + " duplicate relation(s)" } } : {}),
+  });
   const verdicts: QualityVerdict[] = [];
   for (const item of mergedItems) {
-    const verdict = assessQualityVerdict(item);
+    const dqStarted = nowIso();
+    let verdict: QualityVerdict;
+    try {
+      verdict = assessQualityVerdict(item);
+    } catch {
+      await bus.recordLineage({
+        trace_id: traceId,
+        parent_lineage_ids: [dedupeLineage.lineage_id],
+        stage: "ingest.dq1",
+        operation_version: "dq1.quality-gate.v1",
+        status: "failed",
+        started_at: dqStarted,
+        input_refs: [{ kind: "IntelItem", id: item.intel_id, sha256: sha256Json(item) }],
+        error: "DQ1 assessment failed",
+      });
+      throw new Error("DQ1 评估失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
+    }
     verdicts.push(verdict);
     const rawEventId = rawEventById.get(item.intel_id) ?? null;
+    const sourceParents = item.source_ids.flatMap((sourceId) => [...(parseLineageBySourceId.get(sourceId) ?? [])]);
+    let intelEventId: string | undefined;
+    let dqEnv;
     if (verdict.verdict === "pass" || verdict.verdict === "degrade") {
       const intelEnv = await bus.publish("intel.items", item, { trace_id: traceId, causation_id: rawEventId });
-      await bus.publish("dq.verdicts", verdict, { trace_id: traceId, causation_id: intelEnv.event_id });
+      intelEventId = intelEnv.event_id;
+      causationByIntelId[item.intel_id] = intelEnv.event_id;
+      dqEnv = await bus.publish("dq.verdicts", verdict, { trace_id: traceId, causation_id: intelEnv.event_id });
     } else {
-      // 闸门拦下：不发 intel.items，但判定必须留痕
-      await bus.publish("dq.verdicts", verdict, { trace_id: traceId, causation_id: rawEventId });
+      dqEnv = await bus.publish("dq.verdicts", verdict, { trace_id: traceId, causation_id: rawEventId });
+      causationByIntelId[item.intel_id] = dqEnv.event_id;
     }
+    const dqStatus = verdict.verdict === "pass" ? "success" : verdict.verdict === "degrade" ? "degraded" : verdict.verdict === "review" ? "review" : "rejected";
+    const dqLineage = await bus.recordLineage({
+      trace_id: traceId,
+      parent_lineage_ids: [...new Set([dedupeLineage.lineage_id, ...sourceParents])],
+      causation_id: dqEnv.event_id,
+      stage: "ingest.dq1",
+      operation_version: verdict.gate_version,
+      status: dqStatus,
+      started_at: dqStarted,
+      input_refs: [{ kind: "IntelItem", id: item.intel_id, sha256: sha256Json(item) }],
+      output_refs: [
+        { kind: "QualityVerdict", id: "dq:" + item.intel_id, sha256: sha256Json(verdict) },
+        ...(intelEventId ? [{ kind: "EventEnvelope", id: intelEventId }] : []),
+        { kind: "EventEnvelope", id: dqEnv.event_id },
+      ],
+      decision: { reason: verdict.verdict, quality_score: verdict.quality_score, review_required: verdict.verdict === "review" },
+    });
+    lineageParentByIntelId[item.intel_id] = dqLineage.lineage_id;
+    if (intelEventId) causationByIntelId[item.intel_id] = intelEventId;
   }
 
   // 红线：fixture 回放是真实发生的降级，必须在响应对象上标记 degraded_to
   const degradedToFixture = fallbackEvents.some((e) => e.degraded_of === "fixture");
   return {
+    trace_id: traceId,
+    lineage_parent_by_intel_id: lineageParentByIntelId,
+    causation_by_intel_id: causationByIntelId,
     fetched,
     parsed,
     merged: mergedItems,

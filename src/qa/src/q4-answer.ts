@@ -5,7 +5,8 @@
  *   → abstained=true，文案显式说明证据不足，禁止编造；
  * - degraded_to 从 RetrievalResponse 原样透传，并在答案尾部给用户可见提示。
  */
-import type { Answer, RetrievalResponse } from "@safetrace/shared";
+import { nowIso, sha256, sha256Json } from "@safetrace/shared";
+import type { Answer, EventBus, RetrievalResponse } from "@safetrace/shared";
 import type { QueryPlan } from "./q1-intent.js";
 
 /**
@@ -21,6 +22,10 @@ export interface SynthesizeOptions {
   /** 编排层应显式传入；缺省时 session_id 为空串、turn_id 回落 evidence.trace_id */
   session_id?: string;
   turn_id?: string;
+  /** Optional persistent processing-lineage sink. */
+  bus?: EventBus;
+  parent_lineage_ids?: string[];
+  causation_id?: string | null;
 }
 
 /** 没有独立 reranker 时，以当前可用的 dense/sparse 召回分做保守拒答门槛。 */
@@ -193,31 +198,67 @@ export async function synthesizeAnswer(
   evidence: RetrievalResponse,
   opts: SynthesizeOptions = {},
 ): Promise<Answer> {
-  if (opts.synth) return opts.synth.synthesize(question, plan, evidence);
-
-  const base: BaseAnswer = {
-    session_id: opts.session_id ?? "",
-    turn_id: opts.turn_id ?? evidence.trace_id,
-    ...(evidence.degraded_to ? { degraded_to: evidence.degraded_to } : {}),
-  };
-  const topScore = evidence.chunks.reduce((m, c) => Math.max(m, retrievalScore(c)), 0);
-  const qs = evidence.chunks
-    .map((c) => c.quality_score)
-    .filter((q): q is number => typeof q === "number");
-  const ctx: Ctx = {
-    topScore,
-    avgQuality: qs.length > 0 ? qs.reduce((s, q) => s + q, 0) / qs.length : 0,
-  };
-
-  const reasons: string[] = [];
-  if (evidence.chunks.length === 0) reasons.push("检索没有返回任何证据块");
-  if (evidence.chunks.length > 0 && topScore < ABSTAIN_RETRIEVAL_SCORE_FLOOR) {
-    reasons.push("最高召回分 " + topScore.toFixed(2) + " 低于阈值 " + ABSTAIN_RETRIEVAL_SCORE_FLOOR.toFixed(2));
+  const startedAt = nowIso();
+  const inputRefs = [
+    { kind: "Query", id: evidence.query_id, sha256: sha256(question) },
+    { kind: "QueryPlan", id: evidence.query_id, sha256: sha256Json(plan) },
+    { kind: "RetrievalResponse", id: evidence.query_id, sha256: sha256Json(evidence) },
+    ...evidence.chunks.map((chunk) => ({ kind: "EvidenceChunk", id: chunk.chunk_id, sha256: sha256Json(chunk), url: chunk.provenance.url })),
+  ];
+  let answer: Answer;
+  try {
+    if (opts.synth) {
+      answer = await opts.synth.synthesize(question, plan, evidence);
+    } else {
+      const base: BaseAnswer = {
+        session_id: opts.session_id ?? "",
+        turn_id: opts.turn_id ?? evidence.trace_id,
+        ...(evidence.degraded_to ? { degraded_to: evidence.degraded_to } : {}),
+      };
+      const topScore = evidence.chunks.reduce((m, c) => Math.max(m, retrievalScore(c)), 0);
+      const qs = evidence.chunks.map((c) => c.quality_score).filter((q): q is number => typeof q === "number");
+      const ctx: Ctx = { topScore, avgQuality: qs.length > 0 ? qs.reduce((sum, q) => sum + q, 0) / qs.length : 0 };
+      const reasons: string[] = [];
+      if (evidence.chunks.length === 0) reasons.push("检索没有返回任何证据块");
+      if (evidence.chunks.length > 0 && topScore < ABSTAIN_RETRIEVAL_SCORE_FLOOR) {
+        reasons.push("最高召回分 " + topScore.toFixed(2) + " 低于阈值 " + ABSTAIN_RETRIEVAL_SCORE_FLOOR.toFixed(2));
+      }
+      if (plan.needs_clarify) reasons.push("问题意图不明确（Q1 低置信度，需澄清）");
+      if (!coversRequestedCve(plan, evidence)) reasons.push("证据未覆盖问题指定的 CVE：" + plan.slots.cve_ids.join("、"));
+      answer = reasons.length > 0
+        ? buildAbstain(question, plan, evidence, reasons, ctx, base)
+        : buildAnswer(question, plan, evidence, ctx, base);
+    }
+  } catch (error) {
+    await opts.bus?.recordLineage({
+      trace_id: evidence.trace_id,
+      parent_lineage_ids: opts.parent_lineage_ids ?? [],
+      causation_id: opts.causation_id ?? null,
+      stage: "qa.q4_answer",
+      operation_version: opts.synth ? "answer-synthesizer.injected.v1" : "q4-template.v1",
+      status: "failed",
+      started_at: startedAt,
+      input_refs: inputRefs,
+      execution: { component_version: opts.synth ? "injected" : "q4-template.v1" },
+      error: "answer synthesis failed; source text omitted",
+    });
+    throw error;
   }
-  if (plan.needs_clarify) reasons.push("问题意图不明确（Q1 低置信度，需澄清）");
-  if (!coversRequestedCve(plan, evidence)) {
-    reasons.push("证据未覆盖问题指定的 CVE：" + plan.slots.cve_ids.join("、"));
-  }
-  if (reasons.length > 0) return buildAbstain(question, plan, evidence, reasons, ctx, base);
-  return buildAnswer(question, plan, evidence, ctx, base);
+  await opts.bus?.recordLineage({
+    trace_id: evidence.trace_id,
+    parent_lineage_ids: opts.parent_lineage_ids ?? [],
+    causation_id: opts.causation_id ?? null,
+    stage: "qa.q4_answer",
+    operation_version: opts.synth ? "answer-synthesizer.injected.v1" : "q4-template.v1",
+    status: "success",
+    started_at: startedAt,
+    input_refs: inputRefs,
+    output_refs: [
+      { kind: "Answer", id: answer.turn_id, sha256: sha256Json(answer) },
+      ...answer.citations.map((citation) => ({ kind: "Citation", id: citation.chunk_id, url: citation.url })),
+    ],
+    execution: { component_version: opts.synth ? "injected" : "q4-template.v1" },
+    decision: { reason: answer.abstained ? "abstained: evidence gate" : "answered" },
+  });
+  return answer;
 }

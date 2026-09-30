@@ -8,8 +8,8 @@
  * - EnrichmentResult.json 契约 additionalProperties:false，信封 payload 一律剥离 conflicts 等审计字段
  * - 无可用评分来源 -> cvss 维度记失败（assessScore 返回 null），不造假分
  */
-import { nextId, nowIso, SCHEMA_VERSION } from "@safetrace/shared";
-import type { EventBus, FallbackEvent, IntelItem, EnrichmentResult } from "@safetrace/shared";
+import { nextId, nowIso, SCHEMA_VERSION, sha256Json } from "@safetrace/shared";
+import type { EventBus, FallbackEvent, IntelItem, EnrichmentResult, LineageArtifactRef } from "@safetrace/shared";
 import {
   assessScore,
   loadScoreSourcesFromRawRefs,
@@ -38,6 +38,9 @@ export interface EnrichContext {
    *  两者皆无 -> cvss 维度记失败（在线）或走 raw_refs fixture（离线）。 */
   scoreSources?: ScoreSourceInput[];
   traceId?: string;
+  /** Optional parent links handed off by the ingest run for each IntelItem. */
+  lineage_parent_by_intel_id?: Record<string, string>;
+  causation_by_intel_id?: Record<string, string>;
   /** 降级观察者（FallbackEvent，与 fallback.events 同口径；前端横幅据此渲染）。 */
   onDegrade?: (event: FallbackEvent) => void | Promise<void>;
   /** 多源分差观察者（conflicts 审计信息，不在 EnrichmentResult 契约内）。 */
@@ -56,52 +59,133 @@ export async function runEnrichment(items: IntelItem[], ctx: EnrichContext = {})
 
 async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<EnrichmentOutcome> {
   const traceId = ctx.traceId ?? nextId("tr");
-  const emit = makeEmitter(ctx);
+  const inputHash = sha256Json(item);
+  const itemRef: LineageArtifactRef = { kind: "IntelItem", id: item.intel_id, sha256: inputHash };
+  const inputParent = ctx.lineage_parent_by_intel_id?.[item.intel_id];
+  const causation = ctx.causation_by_intel_id?.[item.intel_id] ?? null;
+  const fallbackRefs: LineageArtifactRef[] = [];
+  const emit = makeEmitter(ctx, fallbackRefs, itemRef, inputParent, causation);
 
   // F1：论文关联
-  const papersRes = await searchPapers(item.title, {
-    offline: ctx.offline,
-    fetchImpl: ctx.fetchImpl,
-    traceId,
-    emit,
-  });
-  const papersEnv = await ctx.bus?.publish("enrich.papers", papersPayload(item.intel_id, papersRes.papers), {
-    trace_id: traceId,
-  });
-
-  // F4：分值仲裁 + EPSS 增强（离线/fetch 失败已在 assessScore 内降级留痕）
-  const sources = ctx.scoreSources ?? (await loadScoreSourcesFromRawRefs(item));
-  const score = await assessScore(item, {
-    sources,
-    kevSet: ctx.kevSet,
-    offline: ctx.offline,
-    fetchImpl: ctx.fetchImpl,
-    traceId,
-    emit,
-  });
-
-  // F6：收口（内存侧带 conflicts；总线侧发布剥离后的契约纯净 payload）
-  const outcome = summarizeEnrichment(item, {
-    papers: papersRes.papers,
-    scoreAssessment: score,
-    otherScores: sources,
-  });
-  for (const conflict of outcome.conflicts) {
-    await ctx.onConflict?.(conflict, item.intel_id);
+  const f1Started = nowIso();
+  const f1FallbackStart = fallbackRefs.length;
+  let papersRes: Awaited<ReturnType<typeof searchPapers>>;
+  try {
+    papersRes = await searchPapers(item.title, { offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit });
+  } catch {
+    await ctx.bus?.recordLineage({
+      trace_id: traceId, parent_lineage_ids: inputParent ? [inputParent] : [], causation_id: causation,
+      stage: "enrich.f1", operation_version: "f1-papers.v1", status: "failed", started_at: f1Started,
+      input_refs: [itemRef], error: "paper enrichment failed",
+    });
+    throw new Error("F1 富化失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
   }
-  await ctx.bus?.publish("enrich.items", toContractPayload(outcome), {
+  const paperPayload = papersPayload(item.intel_id, papersRes.papers);
+  const papersEnv = await ctx.bus?.publish("enrich.papers", paperPayload, { trace_id: traceId, causation_id: causation });
+  const paperRefs: LineageArtifactRef[] = papersRes.papers.map((paper) => ({ kind: "PaperLink", id: paper.paper_id, sha256: sha256Json(paper) }));
+  if (papersEnv) paperRefs.push({ kind: "EventEnvelope", id: papersEnv.event_id, sha256: sha256Json(paperPayload) });
+  const f1FallbackRefs = fallbackRefs.slice(f1FallbackStart);
+  const f1Lineage = await ctx.bus?.recordLineage({
+    trace_id: traceId, parent_lineage_ids: inputParent ? [inputParent] : [],
+    causation_id: papersEnv?.event_id ?? causation,
+    stage: "enrich.f1", operation_version: "f1-papers.v1",
+    status: papersRes.degraded_to ? "degraded" : "success", started_at: f1Started,
+    input_refs: [itemRef, ...item.raw_refs.map((id) => ({ kind: "RawDocRef", id }))],
+    output_refs: [...paperRefs, ...f1FallbackRefs],
+    source: { source_id: item.source_ids.join(",") },
+    ...(papersRes.degraded_to ? { decision: { fallback_to: papersRes.degraded_to, reason: "paper search returned fallback fixture" } } : {}),
+  });
+
+  // F4：分值仲裁 + EPSS 增强
+  const f4Started = nowIso();
+  const f4FallbackStart = fallbackRefs.length;
+  let sources: ScoreSourceInput[];
+  let score: Awaited<ReturnType<typeof assessScore>>;
+  try {
+    sources = ctx.scoreSources ?? (await loadScoreSourcesFromRawRefs(item));
+    score = await assessScore(item, { sources, kevSet: ctx.kevSet, offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit });
+  } catch {
+    await ctx.bus?.recordLineage({
+      trace_id: traceId, parent_lineage_ids: [f1Lineage?.lineage_id, inputParent].filter((id): id is string => Boolean(id)),
+      causation_id: papersEnv?.event_id ?? causation,
+      stage: "enrich.f4", operation_version: "f4-cvss.v1", status: "failed", started_at: f4Started,
+      input_refs: [itemRef], error: "score assessment failed",
+    });
+    throw new Error("F4 富化失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
+  }
+  const f4FallbackRefs = fallbackRefs.slice(f4FallbackStart);
+  const f4Lineage = await ctx.bus?.recordLineage({
+    trace_id: traceId, parent_lineage_ids: [f1Lineage?.lineage_id, inputParent].filter((id): id is string => Boolean(id)),
+    causation_id: papersEnv?.event_id ?? causation,
+    stage: "enrich.f4", operation_version: "f4-cvss.v1",
+    status: f4FallbackRefs.length > 0 ? "degraded" : score ? "success" : "degraded", started_at: f4Started,
+    input_refs: [itemRef, ...sources.map((source, index) => ({ kind: "ScoreSource", id: item.intel_id + ":" + index, sha256: sha256Json(source) }))],
+    output_refs: [...(score ? [{ kind: "ScoreAssessment", id: item.intel_id, sha256: sha256Json(score) }] : []), ...f4FallbackRefs],
+    source: { source_id: item.source_ids.join(",") },
+    ...(!score ? { decision: { reason: "no usable score source" } } : f4FallbackRefs.length > 0 ? { decision: { fallback_to: "fixture", reason: "score enrichment emitted fallback" } } : {}),
+  });
+
+  // F6：收口（内存侧带 conflicts；总线侧发布契约纯净 payload）
+  const f6Started = nowIso();
+  let outcome: EnrichmentOutcome;
+  let contractPayload: EnrichmentResult;
+  let enrichEnv: Awaited<ReturnType<EventBus["publish"]>> | undefined;
+  try {
+    outcome = summarizeEnrichment(item, { papers: papersRes.papers, scoreAssessment: score, otherScores: sources });
+    for (const conflict of outcome.conflicts) await ctx.onConflict?.(conflict, item.intel_id);
+    contractPayload = toContractPayload(outcome);
+    enrichEnv = await ctx.bus?.publish("enrich.items", contractPayload, {
+      trace_id: traceId, causation_id: papersEnv?.event_id ?? causation,
+    });
+  } catch {
+    await ctx.bus?.recordLineage({
+      trace_id: traceId,
+      parent_lineage_ids: [f1Lineage?.lineage_id, f4Lineage?.lineage_id].filter((id): id is string => Boolean(id)),
+      causation_id: papersEnv?.event_id ?? causation,
+      stage: "enrich.f6", operation_version: "f6-verify.v1", status: "failed", started_at: f6Started,
+      input_refs: [itemRef, { kind: "PaperSet", id: item.intel_id, sha256: sha256Json(papersRes.papers) }, ...(score ? [{ kind: "ScoreAssessment", id: item.intel_id, sha256: sha256Json(score) }] : [])],
+      error: "F6 consolidation or enrich.items publish failed",
+    });
+    throw new Error("F6 富化收口失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
+  }
+  await ctx.bus?.recordLineage({
     trace_id: traceId,
-    causation_id: papersEnv?.event_id ?? null,
+    parent_lineage_ids: [f1Lineage?.lineage_id, f4Lineage?.lineage_id].filter((id): id is string => Boolean(id)),
+    causation_id: enrichEnv?.event_id ?? papersEnv?.event_id ?? causation,
+    stage: "enrich.f6", operation_version: "f6-verify.v1", status: "success", started_at: f6Started,
+    input_refs: [itemRef, { kind: "PaperSet", id: item.intel_id, sha256: sha256Json(papersRes.papers) }, ...(score ? [{ kind: "ScoreAssessment", id: item.intel_id, sha256: sha256Json(score) }] : [])],
+    output_refs: [
+      { kind: "EnrichmentResult", id: item.intel_id, sha256: sha256Json(contractPayload) },
+      ...(enrichEnv ? [{ kind: "EventEnvelope", id: enrichEnv.event_id, sha256: sha256Json(contractPayload) }] : []),
+    ],
+    source: { source_id: item.source_ids.join(",") },
+    ...(outcome.conflicts.length > 0 ? { decision: { reason: "observed " + outcome.conflicts.length + " score conflict(s)" } } : {}),
   });
   return outcome;
 }
 
-/** 降级统一出口：有总线则上 fallback.events，同时通知观察者（两者皆无也已在 degrade() 内登记）。 */
-function makeEmitter(ctx: EnrichContext): (event: FallbackEvent) => void | Promise<void> {
-  return (event: FallbackEvent) => {
-    if (ctx.bus) void ctx.bus.publish("fallback.events", event);
-    if (ctx.onDegrade) return ctx.onDegrade(event);
-    return undefined;
+function makeEmitter(
+  ctx: EnrichContext,
+  refs: LineageArtifactRef[],
+  inputRef: LineageArtifactRef,
+  parentLineageId: string | undefined,
+  causationId: string | null,
+): (event: FallbackEvent) => Promise<void> {
+  return async (event: FallbackEvent) => {
+    if (ctx.bus) {
+      const env = await ctx.bus.publish("fallback.events", event, { trace_id: event.trace_id, causation_id: causationId });
+      const ref = { kind: "FallbackEvent", id: env.event_id, sha256: sha256Json(event) };
+      refs.push(ref);
+      await ctx.bus.recordLineage({
+        trace_id: event.trace_id,
+        parent_lineage_ids: parentLineageId ? [parentLineageId] : [],
+        causation_id: env.event_id,
+        stage: "enrich.fallback", operation_version: "fallback.events.v1", status: "degraded",
+        input_refs: [inputRef], output_refs: [ref],
+        decision: { fallback_to: event.degraded_of, reason: event.action_taken },
+      });
+    }
+    await ctx.onDegrade?.(event);
   };
 }
 

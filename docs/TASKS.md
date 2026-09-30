@@ -208,7 +208,7 @@ cd ops && docker compose up -d qdrant postgres && bash scripts/wait-healthy.sh &
 | P-07 | KKK9747human | PRD 7.3 界面清单 | 接 Q 线 HTTP 真数据；实现一屏完整问答与可展开推理链；展示降级；对接 compose 演示环境。当前 main 页面仍是预置样例，真实 API 接线与验收未完成；F2 资产页待 R1 确认 | P-03、P-05、A-06；R1 | 进行中 | 砍④ |
 | P-08 | 全 | NFR-03/08、AT-07、DoD | 定义每个指标的样本规模、时间窗和统计方法；补 provider 配置切换可复现记录及边界样本结果。≤60 秒只是 PRD 建议目标；前端预置看板值不能充当实测，任何准确率/完成度不得在无实测时写成已达成 | A-03、R-04、E-07 | 待办 | 基础 |
 | P-09 | 全 | PRD 第 11 节 R1–R8 | 形成负责人决策记录：F2 是否提 P0、7 类源及完成判定、24h/72h、D6/D8、Jev 定位、“推理链”口径、矛盾统计来源、完成度仅作内部估算 | 负责人确认；分别关联 E-01/E-07/D-02/A-02 | 待办 | 禁砍 |
-| P-10 | 李念（MG1/Q2）；与 Xue 对齐来源，KKK 接前端 | FR-Y01/S02/S03/Q02/Q04 | 受控 Firecrawl 采集与规则→MG1 LLM→人工隔离多级兜底；结构化主数据 + Qdrant 真实 embedding/BM25 混合检索。当前本地小切片已实现 allowlist/robots 单页 direct→Firecrawl→last-good、规则/安全门抽取接口、MG1→Qdrant 向量与 RRF，并有离线测试；仍未接正式 ingest/DQ1 索引、持久化快照/人工队列或真实 Qdrant/模型运行。A-03/A-04 前不将不可信网页送云 LLM；外部 API 默认关闭 | C-02/C-04、A-03/A-04；来源白名单确认；不得挤占 R-04/R-05/A-02 | 进行中（小切片） | 砍④ |
+| P-10 | 李念（MG1/Q2）；与 Xue 对齐来源，KKK 接前端 | FR-Y01/S02/S03/Q02/Q04 | 受控单页 Firecrawl + 规则→受控 LLM→人工复核 + Qdrant 真实 embedding/BM25 混合检索。当前本地小切片已实现 allowlist/robots、direct→Firecrawl→last-good、证据校验、MG1→Qdrant RRF；新增 SQLite append-only lineage_records 覆盖 ingest fetch/parse/dedupe/DQ1、enrich F1/F4/F6、Q2 index/search/fusion、crawler/extractor、MG1 provider attempts 与 CLI/HTTP Q&A。已有默认离线的 ingest:once SQLite runner，网页→DQ1 显式来源 API 与 crawl:page 独立入库开关已实现（元数据文件联网前校验，默认预览；见 [本地指南](P10-LOCAL-VERIFY.md)），并有零网络 page:demo，stale/待复核/证据不符不自动放行；sqlite-page→来源证据块→BM25 适配已验证（缺快照/URL不符拒绝）；正式 SourceRegistry 调度及网页原文富化适配仍待办；SQLite last-good、按 SHA 保留的历史快照与 review queue 已持久化（跨 URL 更新/数据库重启保留审核证据），但人工决定不自动写入 DQ1；来源 EvidenceChunk 构建与临时 BM25 预览已接入 ingest:once（DQ1 放行、单来源 URL/hash、全步骤 lineage）；来源 Qdrant 持久入库 opt-in 入口已实现，拒绝离线/fixture/cache/hash，写失败不报告成功；pilot:doctor 可 GET-only 检查本地前置条件（不生成 embedding）；默认仍 cache；独立 Tokendance qwen3.7-text-embedding profile 已经 API/MG1 单文本实测为1024维且无降级，密钥仅本地；Qdrant 不可达，持久索引/召回和语义质量仍待验收；MemoryEventStore 仅用于测试/smoke。A-03/A-04 前不将不可信网页送云 LLM，外部 API 默认关闭 | C-02/C-04、A-03/A-04；来源白名单确认；不得挤占 R-04/R-05/A-02 | 进行中（lineage + 小切片） | 砍④ |
 
 ### 13.3 需求覆盖索引
 
@@ -221,12 +221,12 @@ PRD 条款按当前台账唯一归属，避免重复开任务；“待办/阻塞
 | FR-F01/F02/F03 | `src/enrich` F1/F4/F6 | 基础模块已实现；真实运行与特定冲突验收样本仍按 E-02/P-05 跟踪 |
 | FR-F04/F05 | P-01 | 本次改动仅新增静态合成数据匹配原型；团队未确认范围，不接真实资产 |
 | FR-F06 | P-06、S-03 | 只保留 Mock/披露要求，尚无 POC 执行或修复建议生产链路 |
-| FR-S01 | P-10/E-05 | Qdrant 查询/写入已拒绝 hash/cache embedding，Q2 通过 MG1 真实 provider 并支持 BM25-lite RRF；默认仍是 BM25，正式来源索引和 Qdrant/模型实测待办 |
+| FR-S01 | P-10/E-05 | Qdrant 查询/写入已拒绝 hash/cache embedding，Q2 通过 MG1 真实 provider 并支持 BM25-lite RRF；索引、查询和融合写 append-only lineage。默认仍是 BM25，正式来源索引和 Qdrant/模型实测待办 |
 | FR-S02/S03 | P-03/P-04 | 结构化事实检索、证据版本与失效处理待办 |
 | FR-Q01 | R-04 | 20 条黄金问答已接入回归；未知/攻击/冲突样本继续由 A-04、P-05、P-08 补齐 |
 | FR-Q02/Q03 | P-05/P-10 | 多来源检索、原文定位和显式冲突/不足仍待办；P-10 先做单源受控抓取及 hybrid retrieval 小切片 |
 | FR-Q04/Q05 | P-06、A-04 | Q3 仅后续演示；外部内容注入防护仍为禁砍待办 |
-| FR-MG01/AG01/D401/A101 | A-03/A-01/A-02/A-06，R-03 | 网关基础已实现；隔离、编排替换、决策旁路、自愈与完整 Trace 未完成 |
+| FR-MG01/AG01/D401/A101 | A-03/A-01/A-02/A-06，R-03，P-10 | 网关基础与 MG1 provider attempt lineage 已实现；数据隔离、编排替换、决策旁路、自愈及 Langfuse 完整 Trace 未完成 |
 | FR-S401 | P-06 | 静态工具注册与可见披露；不把热注册作为本轮闭环前提 |
 | NFR-01/02/04/05/06/07 | E-05/E-07/A-06/A-03/A-04/S-04 | Compose、运行时长、Trace、安全和脱敏按既有行验收；不可用文档声明替代实测 |
 | NFR-03/08 | P-08、R-04、A-04 | 建立指标统计口径；黄金集以外的未见/恶意样本结果尚待实测 |

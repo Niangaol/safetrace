@@ -6,6 +6,7 @@
  * - payload 落盘缓存（KEV 单文件全量带 fetched_at）与 JSON 读取（适配器读 payload_ref）
  * - 解析侧小工具：时间归一化、文本截断、intel_id 清洗、脏字段兜底读取
  */
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +90,13 @@ export async function readJsonFile(ref: string): Promise<unknown> {
   const abs = path.isAbsolute(ref) ? ref : path.join(REPO_ROOT, ref);
   const text = await readFile(abs, "utf8");
   return JSON.parse(text) as unknown;
+}
+
+/** SHA-256 of the persisted raw artifact referenced by RawDoc.payload_ref. */
+export async function sha256PayloadRef(ref: string): Promise<string> {
+  const abs = path.isAbsolute(ref) ? ref : path.join(REPO_ROOT, ref);
+  const bytes = await readFile(abs);
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 /**

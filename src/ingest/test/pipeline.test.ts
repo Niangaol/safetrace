@@ -55,6 +55,28 @@ test("pipeline：离线全链路，总线可读回 raw.docs / intel.items / dq.v
   assert.equal(verdicts[0]!.causation_id, intels[0]!.event_id); // dq.verdicts ← intel.items
   assert.equal(falls[0]!.causation_id, rawDocs[0]!.event_id); // fallback.events ← raw.docs
 
+  // —— lineage：每个 stage 有 input/output hash、多源归并保留多个父节点 ——
+  assert.ok(res.trace_id.startsWith("tr_"));
+  const lineage = await store.readLineage(res.trace_id);
+  const stageRows = (stage: string) => lineage.filter((row) => row.stage === stage);
+  assert.equal(stageRows("ingest.fetch").length, 4);
+  assert.equal(stageRows("ingest.parse").length, 4);
+  assert.equal(stageRows("ingest.fallback").length, 4);
+  assert.equal(stageRows("ingest.dedupe").length, 1);
+  assert.equal(stageRows("ingest.dq1").length, 1);
+  assert.ok(stageRows("ingest.fetch").every((row) => row.status === "degraded"));
+  for (const row of stageRows("ingest.fetch")) {
+    assert.ok(row.output_refs.some((ref) => ref.kind === "RawPayload" && /^[a-f0-9]{64}$/.test(ref.sha256 ?? "")));
+  }
+  const parseLineage = stageRows("ingest.parse")[0]!;
+  assert.ok(parseLineage.parent_lineage_ids.length >= 2, "parse links fetch artifact and raw.docs event");
+  const dqLineage = stageRows("ingest.dq1")[0]!;
+  assert.ok(res.lineage_parent_by_intel_id[res.merged[0]!.intel_id]);
+  assert.ok(res.causation_by_intel_id[res.merged[0]!.intel_id]);
+  assert.ok(dqLineage.parent_lineage_ids.length >= 5, "multi-source merged DQ result links all four parser records plus dedupe");
+  assert.ok(dqLineage.output_refs.some((ref) => ref.kind === "QualityVerdict" && /^[a-f0-9]{64}$/.test(ref.sha256 ?? "")));
+  assert.ok(!JSON.stringify(lineage).includes("CVE-2021-44228 Log4Shell"), "lineage stores IDs/hashes, not duplicated raw/advisory text");
+
   // —— RawDoc 携带 Y2 解析告警 ——
   const kevDoc = rawDocs.find((e) => e.payload.source_id === "cisa_kev")!.payload;
   assert.ok((kevDoc.parse_warnings ?? []).length >= 1);

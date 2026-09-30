@@ -288,16 +288,18 @@ test("QdrantEngine：upsert 使用 MG1 原向量并写入 model_id", async () =>
     url: "http://127.0.0.1:6333",
     collection: "c_embed",
     model_id: "bge-m3",
+    model_version: "v2026.09",
     embedding_dim: 2,
-    embedder: async (texts) => ({ vectors: texts.map(() => [0.1, 0.9]), model_id: "bge-m3", provider: "vllm", degraded_to: "" }),
+    embedder: async (texts) => ({ vectors: texts.map(() => [0.1, 0.9]), model_id: "bge-m3", model_version: "v2026.09", provider: "vllm", degraded_to: "" }),
     fetch_impl: fetchImpl,
   });
-  engine.bindCollection({ collection_name: "c_embed", model_id: "bge-m3", dim: 2, metric: "cosine" });
+  engine.bindCollection({ collection_name: "c_embed", model_id: "bge-m3", model_version: "v2026.09", dim: 2, metric: "cosine" });
   await engine.upsert([chunk]);
   assert.equal(calls.length, 2);
-  const points = calls[1]!.body as { points: Array<{ vector: { dense: number[] }; payload: { embedding_model_id: string } }> };
+  const points = calls[1]!.body as { points: Array<{ vector: { dense: number[] }; payload: { embedding_model_id: string; embedding_model_version?: string } }> };
   assert.deepEqual(points.points[0]!.vector.dense, [0.1, 0.9]);
   assert.equal(points.points[0]!.payload.embedding_model_id, "bge-m3");
+  assert.equal(points.points[0]!.payload.embedding_model_version, "v2026.09");
 });
 
 test("QdrantEngine：BM25 和 dense 以 RRF 融合并分别保留分数", () => {
@@ -309,6 +311,53 @@ test("QdrantEngine：BM25 和 dense 以 RRF 融合并分别保留分数", () => 
   assert.equal(fused[0]!.chunk_id, "shared");
   assert.equal(fused[0]!.score_rerank, undefined, "RRF 不得伪装成 reranker 分数");
 });
+test("QdrantEngine：index、dense、BM25 与 RRF 每一步都落 lineage", async () => {
+  const store = new MemoryEventStore();
+  const bus = new EventBus({ store });
+  const payloadChunk: EvidenceChunk = {
+    ...DIRTY_CHUNK,
+    chunk_id: "chunk_lineage_q2",
+    provenance: { url: "https://vendor.example/advisory", section: "body", sha256: "c".repeat(64) },
+  };
+  const requests: Array<{ url: string; body: any }> = [];
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    requests.push({ url: String(_input), body: init?.body ? JSON.parse(String(init.body)) : null });
+    if (init?.method === "POST") {
+      return new Response(JSON.stringify({ result: [{ id: 1, score: 0.88, payload: {
+        chunk_id: payloadChunk.chunk_id,
+        doc_type: payloadChunk.doc_type,
+        text: payloadChunk.text,
+        quality_score: payloadChunk.quality_score,
+        provenance: payloadChunk.provenance,
+      } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const engine = new QdrantEngine({
+    url: "http://127.0.0.1:6333", collection: "c_lineage", model_id: "bge-m3", model_version: "v2026.09", embedding_dim: 2,
+    embedder: async (texts) => ({ vectors: texts.map(() => [0.2, 0.8]), model_id: "bge-m3", model_version: "v2026.09", provider: "vllm", degraded_to: "" }),
+    fetch_impl: fetchImpl, bus,
+  });
+  const context = { trace_id: "tr_q2_lineage", parent_lineage_ids: ["ln_dq_parent"], causation_id: "ev_dq_parent" };
+  await indexChunks(engine, [payloadChunk], { collection_name: "c_lineage", model_id: "bge-m3", model_version: "v2026.09", dim: 2, metric: "cosine" }, context);
+  await engine.search(req({ query_text: "Log4Shell 影响版本", trace_id: context.trace_id }));
+  const records = await bus.readLineage(context.trace_id);
+  const stages = records.map((record) => record.stage);
+  assert.ok(stages.includes("q2.bm25_index"));
+  assert.ok(stages.includes("q2.qdrant_index"));
+  assert.ok(stages.includes("q2.qdrant_search"));
+  assert.ok(stages.includes("q2.bm25_search"));
+  assert.ok(stages.includes("q2.hybrid_fusion"));
+  const vectorIndex = records.find((record) => record.stage === "q2.qdrant_index")!;
+  assert.ok(vectorIndex.output_refs.some((ref) => ref.kind === "QdrantPoint" && ref.sha256?.length === 64));
+  const fusion = records.find((record) => record.stage === "q2.hybrid_fusion")!;
+  assert.equal(fusion.parent_lineage_ids.length, 2);
+  assert.equal(vectorIndex.execution?.model_id, "bge-m3");
+  assert.equal(vectorIndex.execution?.model_version, "v2026.09");
+  const searchBody = requests[2]!.body as { filter: { must: Array<{ key: string; match?: { value?: string } }> } };
+  assert.ok(searchBody.filter.must.some((clause) => clause.key === "embedding_model_version" && clause.match?.value === "v2026.09"));
+});
+
 test("indexChunks：S3 绑定登记 + 模型冲突抛错（禁止静默混用）", async () => {
   const idx = new MemoryIndex();
   const meta = await indexChunks(idx, readFixtureChunks(), {
