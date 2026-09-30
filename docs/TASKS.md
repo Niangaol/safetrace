@@ -69,7 +69,7 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 
 | id | 线 | 标题 | 依赖 | 状态 | 砍单层级 | 验收命令 / 证据 |
 |---|---|---|---|---|---|---|
-| C-01 | 丙 | `contracts/schemas/DecisionReply.json` 的 `decided_by` 枚举追加 `human`（四层兜底阶梯的"人工"层契约位）。同步 OpenAPI、类型、样例及 CHANGELOG v1.1.0；仅扩契约，不代表 A-02 人工兜底已实现 | — | 进行中 | 禁砍 | `contract/` PR 待三线 sign-off；`python3 scripts/validate_contracts.py` 验证人工作为有效值；待合并后转已完成 |
+| C-01 | 丙 | `contracts/schemas/DecisionReply.json` 的 `decided_by` 枚举追加 `human`（四层兜底阶梯的"人工"层契约位）。同步 OpenAPI、类型、样例及 CHANGELOG v1.1.0；仅扩契约，不代表 A-02 人工兜底已实现 | — | **代码侧已完成，待三线 sign-off 后转已完成** | 禁砍 | 已合入 main（commit 2455623）：schema/OpenAPI/TS 镜像/`fixtures/decisionreply.human.sample.json` 齐备，`npm run validate:contracts` 校验 human 为有效值；新增 `src/shared/test/contracts-c01.test.ts` 3 条断言（枚举未回退、样例通过且未知通道被拒、CHANGELOG 影响面已登记），全量 204 项测试与 typecheck 通过。已用反向验证确认测试非空转（把 `human` 改为他值 → 2 条断言失败）。**剩余：三线 sign-off**，队长/甲/乙各确认一次后把状态改为已完成 |
 | C-02 | 丙 | `RetrievalResponse.json` 的 chunk 增 `published_at` + `trust`(trusted/untrusted)。已知限制⑤的地基 + 注入防护"证据信封"的载体（`EvidenceChunk` 现无时间字段、无信任标记） | — | 待办 | 基础 | 校验器绿；`shared/types.ts` 同步；fixture 样本更新 |
 | C-03 | 丙 | `QualityVerdict` 内联契约增 `injection_score` + `injection_flags`（内联契约，追加式） | C-02 | 待办 | 砍② | 校验器 green；`fixtures/qualityverdict.sample.json` 补样本 |
 | C-04 | 丙 | `Answer` 接口增 `stale_warning?` + `injection_guard?`（时效提示与注入筛查计数要显式出现在响应对象上，符合"兜底必须显式可见"） | C-02 | 待办 | 砍⑤ | 运行时校验测试；冒烟断言非拒答条可带 `stale_warning` |
