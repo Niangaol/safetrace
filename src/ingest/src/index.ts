@@ -23,3 +23,6 @@ export * from "./extraction-fallback.js";
 export * from "./evidence-chunks.js";
 export * from "./page-ingest.js";
 export * from "./controlled-page.js";
+export * from "./freshness.js";
+export * from "./scheduler.js";
+export * from "./uptime.js";
