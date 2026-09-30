@@ -149,6 +149,11 @@ function goNode(n: LayNode) {
   if (isVulnId(n.id)) router.push(`/intel/${encodeURIComponent(n.id)}`)
 }
 
+/** 终端窗里的漏洞 ID 可点击追溯到该漏洞详情页；非漏洞 ID（如维度标签）保持纯文本 */
+function openVuln(id: string) {
+  if (isVulnId(id)) router.push(`/intel/${encodeURIComponent(id)}`)
+}
+
 const DIM_LABEL: Record<string, string> = {
   paper: '论文支撑', asset: '受影响资产', poc: 'POC 复现',
   cvss: 'CVSS 与影响', fix: '修复建议', consistency: '一致性校验',
@@ -329,7 +334,7 @@ onMounted(async () => {
         <span class="badge-count">{{ graphLayout.nodes.length }} 节点 · {{ graphLayout.edges.length }} 关系</span>
       </div>
       <p class="muted" style="font-size: 12px; margin-top: 0">
-        蛛网关系图为主视图：悬停节点高亮相连关系、点击 CVE/GHSA 节点跳转详情；右侧关系表以 Linux 终端窗呈现，滚轮可滚动、悬停行与图中联动、标题栏 ⤢ 可放大查看（Esc 还原）。
+        蛛网关系图为主视图：悬停节点高亮相连关系、点击 CVE/GHSA 节点跳转详情；右侧关系表以 Linux 终端窗呈现，滚轮可滚动、悬停行与图中联动、**漏洞 ID 可点击追溯到该漏洞详情**、标题栏 ⤢ 可放大查看（Esc 还原）。
       </p>
 
       <div class="rel-layout fade-in">
@@ -417,7 +422,7 @@ onMounted(async () => {
         <TerminalWindow
           class="rel-term"
           title="safe_trace@intel: ~/relations"
-          :status="`▮ ${graphLayout.edges.length} 条关系 · 滚轮滚动 · 悬停行联动图中高亮 · ⤢ 放大 / Esc 还原`"
+          :status="`▮ ${graphLayout.edges.length} 条关系 · 漏洞 ID 可点击追溯 · 悬停行联动图中高亮 · ⤢ 放大 / Esc 还原`"
         >
           <div
             v-for="(e, i) in graphLayout.edges"
@@ -427,9 +432,21 @@ onMounted(async () => {
             @mouseleave="hoveredNode = null"
           >
             <span class="lnx-arrow">▸</span>
-            <span class="lnx-src" :title="e.src">{{ e.src }}</span>
+            <button
+              class="lnx-src lnx-link"
+              :class="{ linked: isVulnId(e.src) }"
+              :title="isVulnId(e.src) ? `查看漏洞详情：${e.src}` : e.src"
+              :disabled="!isVulnId(e.src)"
+              @click="openVuln(e.src)"
+            >{{ e.src }}</button>
             <span class="lnx-rel">{{ e.rel }}</span>
-            <span class="lnx-dst" :title="e.dst">{{ e.dst }}</span>
+            <button
+              class="lnx-dst lnx-link"
+              :class="{ linked: isVulnId(e.dst) }"
+              :title="isVulnId(e.dst) ? `查看漏洞详情：${e.dst}` : e.dst"
+              :disabled="!isVulnId(e.dst)"
+              @click="openVuln(e.dst)"
+            >{{ e.dst }}</button>
             <span class="lnx-type">{{ e.type }}</span>
           </div>
         </TerminalWindow>
@@ -567,6 +584,29 @@ onMounted(async () => {
   text-overflow: ellipsis;
   max-width: 38%;
   flex-shrink: 1;
+}
+/* 漏洞 ID 可点击追溯到该漏洞详情页；非漏洞 ID 保持纯文本（disabled 去掉按钮语义） */
+.lnx-link {
+  background: none;
+  border: none;
+  border-bottom: 1px dashed transparent;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+.lnx-link.linked {
+  cursor: pointer;
+  border-bottom-color: rgba(125, 211, 252, 0.45);
+}
+.lnx-link.linked:hover {
+  color: #bae6fd;
+  background: rgba(56, 189, 248, 0.12);
+  border-bottom-color: #bae6fd;
+}
+.lnx-link:disabled {
+  color: inherit;
+  opacity: 1;
 }
 .lnx-rel {
   color: #f0b429;

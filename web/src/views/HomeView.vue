@@ -218,32 +218,37 @@ const toolsByTier = computed(() => {
           :merge-ratio="metrics?.collect.merge_ratio ?? null"
           :coverage-ratio="metrics?.enrich.coverage_ratio ?? null"
           :chunks="metrics?.knowledge.chunks ?? null"
+          :per-dimension="metrics?.enrich.per_dimension ?? null"
         />
         <TerminalWindow
           class="factory-term"
           title="safe_trace@pipeline: ./run --watch"
-          :status="`▮ 点击 ⤢ 可放大查看数据流转日志 · Esc 还原`"
+          :status="`▮ 数字可点击跳转到对应页面 · ⤢ 放大 / Esc 还原`"
         >
           <div class="term-line">
             <span class="term-prompt">root@safetrace</span><span class="term-dim">:</span><span class="term-path">~/pipeline</span><span class="term-dim">$</span>
             <span class="term-cmd">./run --collect --enrich --alert</span>
           </div>
           <div class="term-line">
-            <span class="term-ok">▮</span> 采集线 Y · 原始条目 <b>{{ fmt(metrics?.collect.raw_items) }}</b>
-            → 漏洞 <b>{{ fmt(metrics?.collect.vulns) }}</b>
+            <span class="term-ok">▮</span> 采集线 Y · 原始条目
+            <RouterLink class="term-link" to="/dashboard">{{ fmt(metrics?.collect.raw_items) }}</RouterLink>
+            → 漏洞
+            <RouterLink class="term-link" to="/intel">{{ fmt(metrics?.collect.vulns) }}</RouterLink>
             <span class="term-dim">（去重合并 {{ ratio(metrics?.collect.merge_ratio) }}）</span>
           </div>
           <div class="term-line">
             <span class="term-ok">▮</span> 富化线 F · 七维覆盖率
-            <b>{{ ratio(metrics?.enrich.coverage_ratio) }}</b>
+            <RouterLink class="term-link" to="/dashboard">{{ ratio(metrics?.enrich.coverage_ratio) }}</RouterLink>
+            <span class="term-dim">· {{ fmt(metrics?.enrich.records) }} 条已富化</span>
           </div>
           <div class="term-line">
             <span class="term-ok">▮</span> 底座线 S · 知识库分块
-            <b>{{ fmt(metrics?.knowledge.chunks) }}</b>
+            <RouterLink class="term-link" to="/qa">{{ fmt(metrics?.knowledge.chunks) }}</RouterLink>
+            <span class="term-dim">（pgvector · RRF 检索）</span>
           </div>
           <div class="term-line">
             <span class="term-ok">▮</span> 问答线 Q · 智能体运行
-            <b>{{ fmt(metrics?.agents.runs) }}</b> 次
+            <RouterLink class="term-link" to="/qa">{{ fmt(metrics?.agents.runs) }}</RouterLink> 次
             <span class="term-dim">（失败 {{ fmt(metrics?.agents.failed) }}，未运行则显示「未运行」）</span>
           </div>
         </TerminalWindow>
@@ -323,8 +328,8 @@ const toolsByTier = computed(() => {
 .hero {
   position: relative;
   text-align: center;
-  /* 下方 274px 是球冠带（canvas 高度 250px）+ 一点呼吸余量 */
-  padding: 96px 24px 286px;
+  /* 下方 340px 是完整的北半球穹顶带（canvas 320px）+ 一点呼吸余量 */
+  padding: 96px 24px 344px;
   border-radius: 16px;
   overflow: hidden;
   margin-bottom: 0;
@@ -374,14 +379,14 @@ const toolsByTier = computed(() => {
   transform: translateX(-50%);
   background: radial-gradient(circle, rgba(167, 139, 250, 0.07), transparent 68%);
 }
-/* 球冠带：hero 底部露出的 ThreatGlobe canvas 区域 */
+/* 上半球穹顶：ThreatGlobe canvas 区域，完整画出一个北半球，不做容器裁切 */
 .globe-viewport {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
   z-index: 0;
-  height: 250px;
+  height: 320px;
   pointer-events: none;
 }
 .globe-viewport > * {
@@ -779,6 +784,18 @@ const toolsByTier = computed(() => {
 }
 .term-line:last-child { border-bottom: none; }
 .term-line b { color: #e2e8f0; font-weight: 600; }
+/* 终端里的数字可点击追溯到对应页面 */
+.term-link {
+  color: #7dd3fc;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(125, 211, 252, 0.5);
+  padding: 0 1px;
+}
+.term-link:hover {
+  color: #bae6fd;
+  border-bottom-color: #bae6fd;
+  background: rgba(56, 189, 248, 0.1);
+}
 .term-prompt { color: #34d399; }
 .term-path { color: #7dd3fc; }
 .term-cmd { color: #e2e8f0; }

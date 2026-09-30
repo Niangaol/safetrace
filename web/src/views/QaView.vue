@@ -182,6 +182,21 @@ function traceLabel(step: string): string {
   return step
 }
 
+/** 轨迹行内展开：显示完整入参/出参 JSON，供逐行追溯 */
+const openTrace = ref(new Set<number>())
+function toggleTrace(i: number) {
+  const next = new Set(openTrace.value)
+  if (next.has(i)) next.delete(i)
+  else next.add(i)
+  openTrace.value = next
+}
+function traceJson(t: { input?: Record<string, unknown>; output?: string }): string {
+  const parts: string[] = []
+  if (t.input) parts.push(JSON.stringify(t.input, null, 2))
+  if (t.output) parts.push(t.output)
+  return parts.join('\n')
+}
+
 function focusRef(ref: string) {
   activeRef.value = activeRef.value === ref ? null : ref
   document.getElementById(`evidence-${ref}`)?.scrollIntoView({
@@ -408,7 +423,7 @@ onMounted(async () => {
 <TerminalWindow
         v-if="showTrace"
         title="safe_trace@qa: ~/trace --follow"
-        :status="`▮ ${traceRows.length} 步 · 滚轮滚动 · ⤢ 放大 / Esc 还原`"
+        :status="`▮ ${traceRows.length} 步 · 点「完整 JSON」可展开入参/出参 · ⤢ 放大 / Esc 还原`"
       >
         <div
           v-for="(t, i) in traceRows"
@@ -430,6 +445,14 @@ onMounted(async () => {
             <span v-else-if="t.input" class="trace-input" :title="JSON.stringify(t.input)">
               {{ inputSummary(t.input) }}
             </span>
+            <!-- 可展开：完整入参/出参 JSON，终端行内追溯到底 -->
+            <button
+              v-if="t.input || t.output"
+              class="trace-expand"
+              :title="openTrace.has(i) ? '收起完整内容' : '展开完整入参/出参'"
+              @click="toggleTrace(i)"
+            >{{ openTrace.has(i) ? '▾ 收起' : '▸ 完整 JSON' }}</button>
+            <pre v-if="openTrace.has(i)" class="trace-json">{{ traceJson(t) }}</pre>
           </span>
           <span class="trace-time">
             <template v-if="t.durationMs != null">{{ t.durationMs }}ms</template>
@@ -841,6 +864,32 @@ onMounted(async () => {
   position: relative;
 }
 .trace-row:hover { background: rgba(56, 189, 248, 0.06); }
+/* 展开完整入参/出参：终端内逐行追溯 */
+.trace-expand {
+  margin-top: 3px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #7dd3fc;
+  cursor: pointer;
+}
+.trace-expand:hover { color: #bae6fd; text-decoration: underline; }
+.trace-json {
+  margin: 4px 0 2px;
+  padding: 6px 8px;
+  background: rgba(2, 6, 14, 0.7);
+  border-left: 2px solid rgba(56, 189, 248, 0.35);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #9cc8f2;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow-y: auto;
+}
 .trace-row.running { background: rgba(56, 189, 248, 0.08); }
 .trace-row.failed { background: rgba(244, 63, 94, 0.08); }
 
