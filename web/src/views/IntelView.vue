@@ -110,7 +110,12 @@ onMounted(load)
         </tr>
       </thead>
       <tbody>
-        <tr v-for="v in rows" :key="v.id" class="fade-in">
+        <tr
+          v-for="(v, i) in rows"
+          :key="v.id"
+          class="fade-in"
+          :style="{ animationDelay: `${Math.min(i, 18) * 35}ms`, animationFillMode: 'backwards' }"
+        >
           <td>
             <RouterLink :to="`/intel/${v.id}`" style="font-family: 'JetBrains Mono', monospace; font-size: 12px">
               {{ v.cve_id || v.id }}

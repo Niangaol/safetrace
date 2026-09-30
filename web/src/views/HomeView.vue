@@ -457,23 +457,23 @@ const toolsByTier = computed(() => {
 .legend-chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
 }
 .legend-chip b {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: linear-gradient(135deg, #38bdf8, #0284c7);
   color: #06121f;
   font-weight: 800;
-  font-size: 13px;
+  font-size: 14px;
   font-family: 'JetBrains Mono', monospace;
 }
 .legend-chip span {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: #e2e8f0;
 }
