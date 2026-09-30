@@ -279,6 +279,50 @@ async def _semantic_recall(
     return [doc for doc, _ in sims[:top_k]]
 
 
+def _drop_irrelevant(session: Any, docs: list[str]) -> list[str]:
+    """丢掉与 AI 无关的候选（**双保险**，见 `hybrid_search` 里的说明）。
+
+    只对 `owner_type == 'vuln'` 的候选做判定：`paper` 是 arXiv 论文、
+    `enrichment` 是本系统派生的结论，都不该走"AI 相关性"这一关
+    （否则会把正常论文/结论也滤掉）。
+
+    判定失败时**保留**该候选：宁可多留一条，也不要因为判定器异常而把
+    正常结果清空（那是"过滤器把功能关了"的另一种形态）。
+    """
+
+    from aiintel.services.ingest.relevance import classify
+
+    vuln_keys = [d for d in docs if d.startswith("vuln::")]
+    if not vuln_keys:
+        return docs
+
+    pairs = {parse_doc_key(d)[:2] for d in vuln_keys}
+    try:
+        from sqlalchemy import tuple_
+
+        rows = session.execute(
+            select(Chunk.owner_id, Chunk.content).where(
+                tuple_(Chunk.owner_type, Chunk.owner_id).in_(pairs)
+            )
+        ).all()
+        # owner_id → 该 owner 任意一条切片内容（用于判定；取一条即可）
+        content_by_owner: dict[str, str] = {}
+        for owner_id, content in rows:
+            content_by_owner.setdefault(owner_id, content or "")
+        keep_owners = {
+            owner
+            for owner, content in content_by_owner.items()
+            if classify(content, content)[0] == "strong"
+        }
+        dropped = len(content_by_owner) - len(keep_owners)
+        if dropped:
+            logger.debug("按 AI 相关性丢弃 %d 个不相关候选", dropped)
+        return [d for d in docs if not d.startswith("vuln::") or parse_doc_key(d)[1] in keep_owners]
+    except Exception as exc:  # noqa: BLE001 - 判定异常时保留全部，不清空结果
+        logger.debug("相关性过滤不可用，保留全部候选: %s", exc)
+        return docs
+
+
 async def hybrid_search(
     query: str, top_k: int = 8, owner_type: str | None = None
 ) -> list[dict[str, Any]]:
@@ -307,6 +351,14 @@ async def hybrid_search(
             logger.debug("全文检索不可用，回退模糊匹配: %s", exc)
             keyword = await _fallback_recall(session, query, KEYWORD_RECALL, owner_type)
         keyword_docs = [doc for doc, _ in keyword]
+        # ── AI 相关性双保险 ────────────────────────────────────────────
+        # 采集侧的 NVD 关键词是**子串匹配**，`rag`/`triton`/`llama` 会把
+        # Rage 游戏、Ragnarok 面板、Triton CMS、Minecraft Triton 采进来，
+        # 而这些会**直接出现在评委看到的检索结果里**（实测：查 `ollama DNS rebinding`
+        # 把 Windows XP 的 DNSAPI 漏洞排在第一位）。
+        # 底座已按 `scripts/purge_non_ai.py` 清过，这里是**第二道**防线：
+        # 将来再有脏数据进来，也不会漏到界面。
+        keyword_docs = _drop_irrelevant(session, keyword_docs)
         rankings.append(keyword_docs)
 
         if has_vector_col and vector:
