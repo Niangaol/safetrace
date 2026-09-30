@@ -12,7 +12,7 @@
 用法（与 API 相同的环境变量）：
     python -m scripts.check_real_data
     # 或指向 demo 库：
-    #   $env:POSTGRES_DSN="sqlite:///E:/code/ai-threat-intel/data/demo.db"
+    #   $env:POSTGRES_DSN="sqlite:///E:/code/ai-threat-intel-demo-v1/data/demo.db"
     #   python -m scripts.check_real_data
 """
 
@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 from aiintel.agents import nodes  # noqa: E402
 from aiintel.agents.state import new_state  # noqa: E402
+from aiintel.config import get_settings  # noqa: E402
 from aiintel.core.events import TOPIC_DQ_VERDICTS, EventBus  # noqa: E402
 from aiintel.db.base import get_sessionmaker  # noqa: E402
 from aiintel.db.models import Vuln  # noqa: E402
@@ -40,6 +41,10 @@ from aiintel.services.ingest.pipeline import (  # noqa: E402
 )
 from scripts.contracts import load_schema, validate  # noqa: E402
 from scripts.validate_contracts import payload_schema_for  # noqa: E402
+
+#: 真库条目抽样上限。写成一个具名常量而不是裸 `12`，是为了让输出能说清
+#: "总共多少条、这轮看了多少条"——否则抽样会被当成全量。
+_SAMPLE = 12
 
 
 class RecordingBus:
@@ -135,9 +140,16 @@ async def check_triage_on_real_rows() -> list[str]:
 
     problems: list[str] = []
     with get_sessionmaker()() as session:
-        rows = session.query(Vuln).limit(12).all()
+        total = session.query(Vuln).count()
+        rows = session.query(Vuln).limit(_SAMPLE).all()
         items = [payload for row in rows if (payload := load_intel_item(row.id))]
-    print(f"从 demo.db 装配 IntelItem: {len(items)} 条")
+    # 标签必须说清扫的是哪个库、扫了多少条：早先这里写死成"从 demo.db"，
+    # 于是指向真 PG 时输出仍在说 demo.db，看的人会误以为验的是演示库。
+    dsn = get_settings().postgres_dsn
+    print(f"数据源 {dsn}")
+    print(f"装配 IntelItem: {len(items)} 条（vuln 共 {total} 条，本轮抽样 {_SAMPLE} 条）")
+    if total > _SAMPLE:
+        print(f"  注意：只抽了前 {_SAMPLE} 条，未覆盖其余 {total - _SAMPLE} 条")
 
     rec = RecordingBus()
     nodes.bus = rec.bus

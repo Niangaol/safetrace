@@ -18,20 +18,43 @@
 默认 DSN，光看变量是否存在会让没装 PG 的机器也以为该跑，然后集体假失败。
 """
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from aiintel.config import get_settings
 
+_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _script_heads() -> set[str]:
+    """从迁移脚本目录解析当前 head，不写死任何 revision 号。"""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    ini = _ROOT / "alembic.ini"
+    if not ini.is_file():  # pragma: no cover
+        pytest.skip("找不到 alembic.ini，无法判断 head")
+    cfg = Config(str(ini))
+    cfg.set_main_option("script_location", str(_ROOT / "deploy" / "alembic"))
+    return set(ScriptDirectory.from_config(cfg).get_heads())
+
 
 @pytest.fixture(scope="module")
 def pg():
+    # 必须先 cache_clear()：`get_settings()` 带 lru_cache，而本仓库有若干用例
+    # 会 monkeypatch 环境变量后调 `get_settings.cache_clear()`（见
+    # test_enrich_consistency / test_kev_migration）。缓存里可能残留着某个
+    # 临时 SQLite DSN，于是**全量跑时这 8 条永远 skip**，真实 PG 的断言
+    # 形同虚设——而这正是本文件唯一存在的理由。
+    get_settings.cache_clear()
     dsn = get_settings().postgres_dsn
     try:
         engine = create_engine(dsn, pool_pre_ping=True, connect_args={"connect_timeout": 3})
         if engine.dialect.name != "postgresql":  # pragma: no cover
-            pytest.skip("POSTGRES_DSN 指向的不是 PostgreSQL")
+            pytest.skip(f"POSTGRES_DSN 指向的不是 PostgreSQL（当前={dsn}）")
         with engine.connect() as c:
             c.execute(text("SELECT 1"))
     except (SQLAlchemyError, OSError) as exc:  # pragma: no cover
@@ -49,10 +72,20 @@ def conn(pg):
 
 
 def test_alembic_at_head(conn):
-    """迁移必须已推到 head，否则下面所有 schema 断言都不可信。"""
+    """迁移必须已推到 head，否则下面所有 schema 断言都不可信。
+
+    head **不能写死**成某个 revision：写死过一次（`0002_kev_due_date`），
+    结果 `0003_simhash_bigint` 加进来之后，这个测试在任何正确迁移过的库上
+    都必然失败——它测的不是"迁移到位"，而是"迁移停在我写那行字的时候"。
+    改为从 `deploy/alembic/versions` 现场解析 head。
+    """
     row = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
     assert row is not None, "alembic_version 为空：没跑过 alembic upgrade head"
-    assert row[0] == "0002_kev_due_date"
+    heads = _script_heads()
+    assert row[0] in heads, (
+        f"库里的版本是 {row[0]!r}，但迁移链的 head 是 {sorted(heads)}；"
+        "跑 `alembic upgrade head`（多 head 时需 --heads 指定分支）"
+    )
 
 
 def test_chunk_tsv_is_tsvector(conn):
