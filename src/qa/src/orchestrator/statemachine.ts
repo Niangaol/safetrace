@@ -2,7 +2,7 @@
  * A-01 StateMachine 适配层：编排执行统一走 MachineBackend 抽象。
  * 纪律：
  * - 业务侧只依赖本文件的接口与 compile()，不直接 import 具体后端；
- * - 后端可切换（native / langgraph），同一套测试须对两个后端给出相同断言；
+ * - 后端固定为 native（自研顺序执行器，零外部依赖）；langgraph 后端已于 2026-09-30 移除；
  * - 迁移期 taskgraph.ts 保持原语义不动，由 compile() 把旧图编译成状态机描述。
  */
 import { nextId } from "@safetrace/shared";
@@ -65,9 +65,9 @@ export interface BackendContext<S extends MachineState = MachineState> {
   resumeValue?: unknown;
 }
 
-/** 后端接口：native / langgraph 必须实现同一组语义。 */
+/** 后端接口（当前仅 native 一个实现）。 */
 export interface MachineBackend<S extends MachineState = MachineState> {
-  readonly name: "native" | "langgraph";
+  readonly name: "native";
   run(context: BackendContext<S>): Promise<MachineResult>;
 }
 
