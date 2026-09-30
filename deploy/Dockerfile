@@ -32,6 +32,18 @@ RUN pip install --upgrade pip \
       echo ">>> 跳过嵌入依赖（默认；容器内检索走关键词模式）"; pip install "."; \
     fi
 
+# ── ONNX 嵌入后端（推荐）：约 15MB，不需要 torch ──────────────────────
+# 与宿主同一套实现（services/knowledge/onnx_embedder.py）。
+# 模型权重**不烤进镜像**（113MB），由 compose 只读挂载 ./data/models。
+#   INSTALL_ONNX=1 docker compose build api
+ARG INSTALL_ONNX=""
+RUN if [ "$INSTALL_ONNX" = "1" ]; then \
+      echo ">>> 安装 ONNX 嵌入依赖（onnxruntime + tokenizers，约 15MB）"; \
+      pip install "onnxruntime>=1.20" "tokenizers>=0.20"; \
+    else \
+      echo ">>> 跳过 ONNX 依赖（默认）"; \
+    fi
+
 COPY alembic.ini ./
 COPY deploy/alembic ./deploy/alembic
 

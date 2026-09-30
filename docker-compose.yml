@@ -41,6 +41,13 @@ services:
         # 嵌入依赖默认不装（torch 约 2.5GB，且本机 HF 不可达、装了也用不上）。
         # 需要语义检索：INSTALL_EMBED=1 docker compose build api
         INSTALL_EMBED: "${INSTALL_EMBED:-}"
+        # ONNX 后端（推荐）：依赖仅约 15MB，不需要 torch。
+        # 开启后容器内也能做语义检索，与宿主同一套实现：
+        #   INSTALL_ONNX=1 docker compose build api
+        INSTALL_ONNX: "${INSTALL_ONNX:-}"
+    # 模型文件**不烤进镜像**（113MB，data/ 在 .dockerignore 里）：
+    # 用只读挂载把宿主已下好的 ONNX 模型给容器用，镜像保持小体积。
+    # 取模型：python -m scripts.fetch_embedding_model --model multilingual-minilm
     env_file: [.env]
     environment:
       POSTGRES_DSN: postgresql+psycopg://intel:intel@postgres:5432/intel
@@ -61,6 +68,9 @@ services:
       # 首次加载 bge-m3 会下载约 2.2GB 权重。不挂卷的话每次重建容器都要重下，
       # 演示前那一轮会卡很久（且外网不稳时直接失败）。
       - hfcache:/root/.cache/huggingface
+      # ONNX 模型只读挂载（113MB，不烤进镜像）。配合 INSTALL_ONNX=1 构建：
+      #   INSTALL_ONNX=1 docker compose build api && docker compose up -d --no-deps api
+      - ./data/models:/app/data/models:ro
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
