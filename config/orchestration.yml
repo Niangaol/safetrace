@@ -1,0 +1,9 @@
+# A-01 编排后端切换
+# native = 自研顺序执行器（默认，零外部依赖，保 main 可演示）
+# langgraph = @langchain/langgraph（需先 npm install @langchain/langgraph）
+# 纪律：backend 未安装或加载失败必须显式报错，禁止静默降级到另一个后端。
+version: 1
+backend: native
+interrupts:
+  enabled: false
+  node_id: null
