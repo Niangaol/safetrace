@@ -1,17 +1,152 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
 
 import { getJson } from '../api'
-import type { EvidenceResponse, VulnItem } from '../types'
+import type { EvidenceResponse, GraphNode, VulnItem } from '../types'
 
 const props = defineProps<{ id: string }>()
+const router = useRouter()
 
 const vuln = ref<VulnItem | null>(null)
 const chain = ref<EvidenceResponse | null>(null)
 const openDims = ref<Set<string>>(new Set())
 const error = ref('')
 const loading = ref(true)
+const hoveredNode = ref<string | null>(null)
+
+const GRAPH_V = 520
+const GRAPH_R: number[] = [0, 78, 138, 186]
+const GRAPH_C = GRAPH_V / 2
+
+const TYPE_COLOR: Record<string, string> = {
+  vuln: '#38bdf8', cve: '#38bdf8', cwe: '#f59e0b', cpe: '#22c55e',
+  asset: '#22c55e', product: '#34d399', company: '#a78bfa',
+  exploit: '#ff5470', exploitdb: '#ff5470', patch: '#4ade80', fix: '#4ade80',
+  ref: '#94a3b8', reference: '#94a3b8', knowledge: '#eab308',
+  mitre: '#f472b6', tactic: '#f472b6', weapon: '#ff8800',
+}
+function nodeColor(type: string): string {
+  return TYPE_COLOR[type?.toLowerCase()] || '#94a3b8'
+}
+function trunc(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + '…' : s
+}
+function isVulnId(id?: string): boolean {
+  return !!id && /^CVE-\d|^GHSA-|^CVE-/.test(id.toUpperCase())
+}
+
+interface LayNode {
+  id: string
+  label: string
+  type: string
+  x: number
+  y: number
+  ring: number
+}
+interface LayEdge {
+  src: string
+  dst: string
+  rel: string
+  type?: string
+  x1: number; y1: number; x2: number; y2: number
+}
+interface GraphLayout {
+  nodes: LayNode[]
+  edges: LayEdge[]
+  centerId: string
+}
+
+const graphLayout = computed<GraphLayout | null>(() => {
+  const g = chain.value?.graph
+  const idCmp = vuln.value?.cve_id || vuln.value?.id
+  if (!g || !g.nodes.length) return null
+  const nodes: GraphNode[] = g.nodes
+  const edges = g.edges
+  if (!edges.length) return null
+
+  let root = nodes.find((n) => n.id === idCmp || n.label === idCmp)
+  if (!root) {
+    const deg = new Map<string, number>()
+    for (const e of edges) {
+      deg.set(e.src, (deg.get(e.src) || 0) + 1)
+      deg.set(e.dst, (deg.get(e.dst) || 0) + 1)
+    }
+    let best = ''
+    let bd = -1
+    deg.forEach((d, id) => { if (d > bd) { bd = d; best = id } })
+    root = nodes.find((n) => n.id === best) ?? nodes[0]
+  }
+
+  const adj: Record<string, string[]> = {}
+  for (const e of edges) {
+    ;(adj[e.src] ??= []).push(e.dst)
+    ;(adj[e.dst] ??= []).push(e.src)
+  }
+  const ring: Record<string, number> = { [root.id]: 0 }
+  const queue = [root.id]
+  while (queue.length) {
+    const cur = queue.shift()!
+    const r = ring[cur]
+    for (const nb of adj[cur] ?? []) {
+      if (!(nb in ring) && ring[cur] < 3) { ring[nb] = r + 1; queue.push(nb) }
+    }
+  }
+  for (const n of nodes) if (!(n.id in ring)) ring[n.id] = 3
+
+  const pos: Record<string, { x: number; y: number }> = {}
+  const byRing: Record<number, string[]> = { 0: [], 1: [], 2: [], 3: [] }
+  for (const n of nodes) byRing[ring[n.id]].push(n.id)
+  for (const rk of [0, 1, 2, 3]) {
+    const ids = byRing[rk]
+    const count = ids.length
+    ids.forEach((id, i) => {
+      if (rk === 0) { pos[id] = { x: GRAPH_C, y: GRAPH_C }; return }
+      const base = (i * 2 * Math.PI) / count
+      let hash = 0
+      for (const ch of id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+      const angle = base + (hash % 7) * 0.06 - 0.18
+      pos[id] = {
+        x: GRAPH_C + GRAPH_R[rk] * Math.cos(angle),
+        y: GRAPH_C + GRAPH_R[rk] * Math.sin(angle),
+      }
+    })
+  }
+
+  const outNodes: LayNode[] = nodes.map((n) => ({
+    id: n.id,
+    label: n.label || n.id,
+    type: n.type || 'ref',
+    ring: ring[n.id],
+    x: pos[n.id]?.x ?? GRAPH_C,
+    y: pos[n.id]?.y ?? GRAPH_C,
+  }))
+  const outEdges: LayEdge[] = edges
+    .filter((e) => pos[e.src] && pos[e.dst])
+    .map((e) => ({
+      src: e.src, dst: e.dst, rel: e.rel, type: e.type,
+      x1: pos[e.src].x, y1: pos[e.src].y,
+      x2: pos[e.dst].x, y2: pos[e.dst].y,
+    }))
+  return { nodes: outNodes, edges: outEdges, centerId: root.id }
+})
+
+const hoverLabel = computed(
+  () => graphLayout.value?.nodes.find((n) => n.id === hoveredNode.value)?.label ?? '',
+)
+const hoverRels = computed(() => {
+  const id = hoveredNode.value
+  if (!id || !graphLayout.value) return []
+  const rels: string[] = []
+  for (const e of graphLayout.value.edges) {
+    if (e.src === id || e.dst === id) rels.push(`${e.src} ${e.rel} ${e.dst}`)
+  }
+  return rels.slice(0, 8)
+})
+
+function goNode(n: LayNode) {
+  if (isVulnId(n.id)) router.push(`/intel/${encodeURIComponent(n.id)}`)
+}
 
 const DIM_LABEL: Record<string, string> = {
   paper: '论文支撑', asset: '受影响资产', poc: 'POC 复现',
@@ -187,20 +322,193 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="chain?.graph.edges.length" class="panel fade-in" style="margin-top: 16px">
-      <div class="panel-header"><h3>关系视图</h3></div>
-      <table>
-        <thead>
-          <tr><th>起点</th><th>关系</th><th>终点</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="(e, i) in chain.graph.edges" :key="i">
-            <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">{{ e.src }}</td>
-            <td><span class="badge info">{{ e.rel }}</span></td>
-            <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">{{ e.dst }} <span class="muted">({{ e.type }})</span></td>
-          </tr>
-        </tbody>
-      </table>
+    <div v-if="graphLayout" class="panel fade-in" style="margin-top: 16px">
+      <div class="panel-header">
+        <h3>关系视图</h3>
+        <span class="badge-count">{{ graphLayout.nodes.length }} 节点 · {{ graphLayout.edges.length }} 关系</span>
+      </div>
+      <p class="muted" style="font-size: 12px; margin-top: 0">
+        蛛网关系图：按「与主条目的关联距离」分层布局，悬停节点高亮所有相连关系；点击 CVE/GHSA 节点可跳转详情。
+      </p>
+
+      <div class="graph-wrap fade-in">
+        <svg :viewBox="`0 0 ${GRAPH_V} ${GRAPH_V}`" class="rel-graph" role="img" aria-label="漏洞关系蛛网图">
+          <defs>
+            <radialGradient id="relCore" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="rgba(56, 189, 248, 0.14)" />
+              <stop offset="100%" stop-color="rgba(56, 189, 248, 0)" />
+            </radialGradient>
+          </defs>
+          <circle :cx="GRAPH_C" :cy="GRAPH_C" :r="GRAPH_R[3]" fill="url(#relCore)" />
+          <circle
+            v-for="r in GRAPH_R.slice(1)"
+            :key="r"
+            :cx="GRAPH_C" :cy="GRAPH_C" :r="r"
+            class="rel-ring"
+          />
+          <line
+            v-for="i in 8" :key="'spoke' + i"
+            :x1="GRAPH_C" :y1="GRAPH_C"
+            :x2="GRAPH_C + GRAPH_R[3] * Math.cos((i * Math.PI) / 4)"
+            :y2="GRAPH_C + GRAPH_R[3] * Math.sin((i * Math.PI) / 4)"
+            class="rel-spoke"
+          />
+
+          <g v-for="(e, i) in graphLayout.edges" :key="'e' + i">
+            <line
+              :x1="e.x1" :y1="e.y1" :x2="e.x2" :y2="e.y2"
+              class="rel-edge"
+              :class="{
+                dim: hoveredNode && hoveredNode !== e.src && hoveredNode !== e.dst,
+                hi: hoveredNode === e.src || hoveredNode === e.dst,
+              }"
+            />
+          </g>
+
+          <g
+            v-for="n in graphLayout.nodes"
+            :key="n.id"
+            class="rel-node"
+            :class="{ dimNode: hoveredNode && hoveredNode !== n.id, hot: hoveredNode === n.id }"
+            @mouseenter="hoveredNode = n.id"
+            @mouseleave="hoveredNode = null"
+            @click="goNode(n)"
+          >
+            <circle
+              :cx="n.x" :cy="n.y"
+              :r="n.id === graphLayout.centerId ? 22 : 11"
+              fill="rgba(10, 15, 26, 0.9)"
+              :stroke="nodeColor(n.type)"
+              :stroke-width="hoveredNode === n.id ? 2.5 : 1.5"
+            />
+            <circle
+              :cx="n.x" :cy="n.y"
+              :r="hoveredNode === n.id ? 15 : 9"
+              fill="none" :stroke="nodeColor(n.type)"
+              opacity="0.5"
+            />
+            <text
+              :x="n.x" :y="n.y - (n.id === graphLayout.centerId ? 26 : 14)"
+              text-anchor="middle"
+              class="rel-label"
+              :fill="hoveredNode === n.id ? '#f1f5f9' : '#94a3b8'"
+            >
+              {{ trunc(n.label, 14) }}
+            </text>
+          </g>
+        </svg>
+      </div>
+
+      <div v-if="hoveredNode && hoverRels.length" class="rel-info">
+        <strong style="color: #e2e8f0">{{ trunc(hoverLabel, 24) }}</strong>
+        <div class="badge info" style="margin-left: 8px">{{ hoverRels.length }} 条相连关系</div>
+        <div class="rel-rels">
+          <span v-for="r in hoverRels" :key="r" class="rel-chip">{{ r }}</span>
+        </div>
+      </div>
+
+      <details class="rel-table">
+        <summary>查看关系表（{{ graphLayout.edges.length }} 行）</summary>
+        <table>
+          <thead>
+            <tr><th>起点</th><th>关系</th><th>终点</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="(e, i) in graphLayout.edges" :key="i">
+              <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">{{ e.src }}</td>
+              <td><span class="badge info">{{ e.rel }}</span></td>
+              <td style="font-family: 'JetBrains Mono', monospace; font-size: 12px">
+                {{ e.dst }} <span class="muted">({{ e.type }})</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </details>
     </div>
   </template>
 </template>
+
+<style scoped>
+.graph-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+.rel-graph {
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+}
+.rel-ring {
+  fill: none;
+  stroke: rgba(56, 189, 248, 0.12);
+  stroke-width: 1;
+}
+.rel-spoke {
+  stroke: rgba(56, 189, 248, 0.08);
+  stroke-width: 1;
+}
+.rel-edge {
+  stroke: rgba(148, 197, 255, 0.28);
+  stroke-width: 1.2;
+  transition: all 0.2s;
+}
+.rel-edge.hi {
+  stroke: #38bdf8;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.6));
+}
+.rel-edge.dim {
+  stroke: rgba(148, 197, 255, 0.07);
+}
+.rel-node {
+  cursor: pointer;
+}
+.rel-node.dimNode {
+  opacity: 0.3;
+}
+.rel-node.hot {
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.6));
+}
+.rel-label {
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  paint-order: stroke;
+  stroke: rgba(6, 18, 31, 0.92);
+  stroke-width: 3px;
+  transition: fill 0.2s;
+}
+.rel-info {
+  margin: 10px 0 14px;
+  padding: 10px 14px;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.6);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rel-rels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.rel-chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+.rel-table summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #7dd3fc;
+  margin-bottom: 10px;
+}
+</style>

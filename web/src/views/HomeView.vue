@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 
 import { getJson } from '../api'
 import SystemFactory from '../components/SystemFactory.vue'
 import type { CollectStatus, MetricsOverview } from '../types'
+
+const router = useRouter()
 
 /** 智能体运行记录（GET /agents/runs 的真实字段） */
 interface AgentRun {
@@ -73,6 +75,33 @@ const STAT_ICONS: Record<string, string> = {
   spark: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z',
 }
 
+interface GlobeDot { x: number; y: number; r: number; kind: string; o: number; delay: string }
+
+/** 地球表面“星星点点”的威胁/防御信号（确定性生成，纯装饰） */
+const globeDots = computed<GlobeDot[]>(() => {
+  const arr: GlobeDot[] = []
+  const R = 168
+  const golden = 0.6180339887
+  for (let i = 0; i < 96; i++) {
+    const u = (i * golden) % 1
+    const theta = Math.acos(1 - 2 * u)
+    const phi = (i * 2.399963) % (Math.PI * 2)
+    const x = 200 + R * Math.sin(theta) * Math.cos(phi)
+    const y = 200 - R * Math.cos(theta)
+    const z = R * Math.sin(theta) * Math.sin(phi)
+    const o = 0.3 + ((z + R) / (2 * R)) * 0.7
+    const kind = i % 7 === 0 ? 'attack' : i % 3 === 0 ? 'defend' : 'neutral'
+    const r = kind === 'attack' ? 1.9 + (i % 3) * 0.4 : kind === 'defend' ? 1.6 : 1.1
+    arr.push({ x, y, r, kind, o, delay: `-${((i % 23) * 0.21 + (i % 5) * 0.06).toFixed(2)}s` })
+  }
+  return arr
+})
+
+/** 会“爆发闪烁”的亮点（漏洞攻击 vs 防御拦截） */
+const globePings = computed<GlobeDot[]>(() =>
+  globeDots.value.filter((_, i) => i % 11 === 0).map((d) => ({ ...d, delay: `-${((d.x * 13) % 29) / 10}s` })),
+)
+
 /**
  * 智能体卡片：名字与颜色是产品定义（稳定的），但**运行数字全部来自 `/agents/runs`**。
  * `graph` 字段与后端的编排图同名：collect / enrich / qa / alert。
@@ -123,11 +152,37 @@ const toolsByTier = computed(() => {
         <div class="orb orb-a"></div>
         <div class="orb orb-b"></div>
         <div class="orb orb-c"></div>
-        <div class="ring-stationary ring-s1"></div>
-        <div class="ring-stationary ring-s2"></div>
-        <div class="orbit orbit-3"><span class="sat sat-c"></span></div>
-        <div class="orbit orbit-1"><span class="sat sat-a"></span></div>
-        <div class="orbit orbit-2"><span class="sat sat-b"></span></div>
+        <div class="globe-wrap" @click="router.push('/dashboard')" title="点击进入态势大屏">
+          <svg viewBox="0 0 400 400" class="globe-svg" role="img" aria-label="全球威胁与防御信号（示意）">
+            <g transform="rotate(-18 200 200)">
+              <circle cx="200" cy="200" r="178" class="globe-rim" />
+              <ellipse cx="200" cy="200" rx="156" ry="178" class="globe-meridian" />
+              <ellipse cx="200" cy="200" rx="102" ry="178" class="globe-meridian" />
+              <line x1="200" y1="22" x2="200" y2="378" class="globe-meridian" />
+              <line x1="22" y1="200" x2="378" y2="200" class="globe-parallel" />
+              <line x1="46" y1="111" x2="354" y2="111" class="globe-parallel" />
+              <line x1="46" y1="289" x2="354" y2="289" class="globe-parallel" />
+              <line x1="111" y1="46" x2="289" y2="46" class="globe-parallel" />
+              <line x1="111" y1="354" x2="289" y2="354" class="globe-parallel" />
+              <path d="M 60 200 A 140 140 0 0 1 156 68" class="globe-arc" />
+              <circle
+                v-for="(d, i) in globeDots"
+                :key="'d' + i"
+                :cx="d.x" :cy="d.y" :r="d.r"
+                class="globe-dot" :class="d.kind"
+                :style="{ animationDelay: d.delay, opacity: d.o }"
+              />
+              <circle
+                v-for="(p, i) in globePings"
+                :key="'p' + i"
+                :cx="p.x" :cy="p.y" :r="3"
+                class="globe-ping" :class="p.kind"
+                :style="{ animationDelay: p.delay }"
+              />
+            </g>
+          </svg>
+          <span class="globe-caption">全球威胁与防御信号</span>
+        </div>
       </div>
       <div class="hero-content">
         <div class="hero-badge">
@@ -152,7 +207,13 @@ const toolsByTier = computed(() => {
 
     <!-- stats -->
     <section class="stats-bar">
-      <div v-for="s in stats" :key="s.label" class="stat-item">
+      <div
+        v-for="s in stats"
+        :key="s.label"
+        class="stat-item"
+        title="点击进入态势大屏"
+        @click="router.push('/dashboard')"
+      >
         <div class="stat-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path :d="STAT_ICONS[s.icon]" />
@@ -186,7 +247,8 @@ const toolsByTier = computed(() => {
     <section class="factory-section">
       <div class="section-kicker">Pipeline</div>
       <h2 class="section-title">系统运转 · 数据流转</h2>
-      <div class="factory-panel fade-in">
+      <div class="factory-panel fade-in" title="点击进入态势大屏" @click="router.push('/dashboard')">
+        <span class="panel-go">点击进入大屏 →</span>
         <SystemFactory
           :raw-items="metrics?.collect.raw_items ?? null"
           :vulns="metrics?.collect.vulns ?? null"
@@ -214,7 +276,13 @@ const toolsByTier = computed(() => {
         运行数字来自 <code>/agents/runs</code> · 无记录如实显示「未运行」
       </p>
       <div class="agents-grid">
-        <div v-for="a in agents" :key="a.graph" class="agent-card">
+        <div
+          v-for="a in agents"
+          :key="a.graph"
+          class="agent-card"
+          title="点击进入态势大屏"
+          @click="router.push('/dashboard')"
+        >
           <div class="agent-dot" :style="{ background: a.color, boxShadow: `0 0 12px ${a.color}` }"></div>
           <div class="agent-info">
             <span class="agent-name">{{ a.name }}</span>
@@ -318,57 +386,79 @@ const toolsByTier = computed(() => {
   0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
   50% { transform: translateX(-50%) translateY(14px) scale(1.04); }
 }
-/* 品牌线圈：静止环 + 慢扫虚线环 */
-.ring-stationary {
+/* 品牌地球：3D 轮廓（经线椭圆 + 纬线横线）+ 地表信号点光 */
+.globe-wrap {
+  position: relative;
+  cursor: pointer;
+  z-index: 0;
+  animation: globeBob 11s ease-in-out infinite;
+}
+@keyframes globeBob {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(10px) scale(1.018); }
+}
+.globe-svg {
+  width: 440px;
+  max-width: 94vw;
+  height: auto;
+  overflow: visible;
+}
+.globe-rim {
+  fill: rgba(8, 13, 25, 0.6);
+  stroke: rgba(56, 189, 248, 0.5);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 22px rgba(56, 189, 248, 0.28));
+}
+.globe-meridian,
+.globe-parallel {
+  stroke: rgba(56, 189, 248, 0.22);
+  stroke-width: 1;
+}
+.globe-arc {
+  fill: none;
+  stroke: rgba(125, 211, 252, 0.5);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.7));
+}
+.globe-dot {
+  animation: gtwinkle 3.6s ease-in-out infinite;
+}
+.globe-dot.neutral { fill: #7dd3fc; }
+.globe-dot.defend { fill: #22c55e; filter: drop-shadow(0 0 4px rgba(34, 197, 94, 0.9)); }
+.globe-dot.attack { fill: #ff5470; filter: drop-shadow(0 0 4px rgba(255, 84, 112, 0.9)); }
+@keyframes gtwinkle {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 0.95; }
+}
+.globe-ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: gping 3s ease-out infinite;
+}
+.globe-ping.defend { fill: #22c55e; filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.9)); }
+.globe-ping.attack { fill: #ff5470; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.9)); }
+@keyframes gping {
+  0% { transform: scale(0.4); opacity: 0.9; }
+  60% { transform: scale(1.6); opacity: 0.2; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+.globe-caption {
   position: absolute;
-  inset: 0;
-  margin: auto;
-  border-radius: 50%;
+  left: 50%;
+  bottom: 4%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #64748b;
+  background: rgba(8, 13, 25, 0.65);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 12px;
+  padding: 3px 12px;
+  white-space: nowrap;
 }
-.ring-s1 {
-  width: 430px; height: 430px;
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  opacity: 0.9;
-}
-.ring-s2 {
-  width: 560px; height: 560px;
-  border: 1px dashed rgba(56, 189, 248, 0.24);
-  opacity: 0.6;
-  animation: spin 90s linear infinite;
-}
-/* 轨道卫星：绕中心旋转的 “活跃信号” */
-.orbit {
-  position: absolute;
-  inset: 0;
-  margin: auto;
-}
-.orbit-1 { width: 480px; height: 480px; animation: spin 36s linear infinite; opacity: 0.9; }
-.orbit-2 { width: 620px; height: 620px; animation: spin 56s linear infinite reverse; opacity: 0.75; }
-.orbit-3 { width: 330px; height: 330px; animation: spin 20s linear infinite; opacity: 0.6; }
-.sat {
-  position: absolute;
-  top: -5px; left: 50%;
-  margin-left: -5px;
-  width: 10px; height: 10px;
-  border-radius: 50%;
-}
-.sat-a {
-  background: #38bdf8;
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.95);
-}
-.sat-b {
-  width: 7px; height: 7px; margin-left: -3.5px;
-  background: #a78bfa;
-  box-shadow: 0 0 12px rgba(167, 139, 250, 0.95);
-}
-.sat-c {
-  width: 6px; height: 6px; margin-left: -3px;
-  background: #22c55e;
-  box-shadow: 0 0 10px rgba(34, 197, 94, 0.95);
-}
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+.globe-wrap:hover .globe-caption {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.45);
 }
 .hero-content {
   position: relative;
@@ -495,6 +585,7 @@ const toolsByTier = computed(() => {
   text-align: center;
   position: relative;
   padding-top: 26px;
+  cursor: pointer;
   transition: transform 0.2s;
 }
 .stat-item:hover {
@@ -665,11 +756,36 @@ const toolsByTier = computed(() => {
 /* factory: 系统运转 + 数据流转 合一 */
 .factory-section { margin-bottom: 48px; }
 .factory-panel {
+  position: relative;
   background: linear-gradient(135deg, #131c2e, #0f1623);
   border: 1px solid #1e2d44;
   border-radius: 14px;
   padding: 28px 24px 20px;
   overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+.factory-panel:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow: 0 10px 34px rgba(56, 189, 248, 0.1);
+}
+.panel-go {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 12px;
+  padding: 3px 12px;
+  z-index: 2;
+  opacity: 0.75;
+  transition: opacity 0.2s;
+}
+.factory-panel:hover .panel-go {
+  opacity: 1;
 }
 .flow-legend {
   display: flex;
@@ -728,12 +844,13 @@ const toolsByTier = computed(() => {
   border: 1px solid #1e2d44;
   border-radius: 14px;
   padding: 26px 24px;
+  cursor: pointer;
   transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
 }
 .agent-card:hover {
-  border-color: #2a4060;
+  border-color: rgba(56, 189, 248, 0.45);
   transform: translateY(-3px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 0 20px rgba(56, 189, 248, 0.1);
 }
 .agent-dot {
   width: 14px; height: 14px;
