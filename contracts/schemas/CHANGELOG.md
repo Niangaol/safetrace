@@ -19,6 +19,12 @@
 
 ## 变更条目
 
+### v1.1.2（2026-09-30，C-04 对齐；BigPickel）
+
+| 契约 | 生产者 → 消费者 | 变更与兼容性 |
+| --- | --- | --- |
+| `Answer`（`events.md` 内联，`qa.answers` 载荷） | Q4 → 前端/编排层 | 追加**可选**两个对象字段：`stale_warning`（时效评估）与 `injection_guard`（注入筛查状态）。纯追加，既有必填字段与含义不变，旧生产者合法。缺省语义两意：`stale_warning` 缺省 = **未做时效评估**，禁止当作证据新鲜；`injection_guard.screened=false` **必须显式出现**，禁止把未筛查读成"已筛查干净"。实现：`services/qa/freshness.py`（`assess_staleness` / `assess_injection_guard`，DeepSeek 已按上游 v1.1.3/C-04 落地），`qa/agent.py` 在 `qa.answers` 与 SSE `done` 两处统一外显。本条登记契约位：`events.md` §2 描述已同步。 |
+
 ### v1.1.1（2026-09-30，C-03 对齐；BigPickel）
 
 | 契约 | 生产者 → 消费者 | 变更与兼容性 |

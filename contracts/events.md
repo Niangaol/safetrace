@@ -52,6 +52,33 @@
 > **缺省 = 未做注入筛查**：DQ1 不填这两个字段，任何调用方禁止把缺省当作“已筛查且干净”；
 > 注入检测实现不在本仓范围内。
 
+> `qa.answers` 载荷（Answer，内联）对齐上游 v1.1.3 / C-04 的**纯追加**增量，可选字段：
+> `stale_warning`（时效评估）与 `injection_guard`（注入筛查状态）。缺省语义两意：
+> **`stale_warning` 缺省 = 未做时效评估**，禁止当作证据新鲜；**`injection_guard.screened=false`
+> 必须显式出现**，禁止把未筛查读成“已筛查干净”。
+> 形状（本仓 `services/qa/freshness.py` 产出，`qa/agent.py` 在 `qa.answers` 与 SSE `done` 统一发出）：
+>
+> ```jsonc
+> {
+>   "stale_warning": {
+>     "threshold_days": 365,              // 时效阈值（天），本仓取统一保守值
+>     "oldest_published_at": "ISO-8601",  // 最早证据发布时间；全部为未知时省略
+>     "unknown_published_at": 0,          // 缺 published_at 的证据条数
+>     "note": "用户可见提示（全部未知时措辞更重）"
+>   }?,
+>   "injection_guard": {
+>     "screened": false,                  // 本仓无注入检测器，恒为 false（如实，A-04 落地后翻转）
+>     "max_score": 0.0,                   // 保留位：最高注入迹象分，检测器落地后填充
+>     "flags": [],                        // 保留位：命中的注入迹象枚举，检测器落地后填充
+>     "untrusted_evidence": 0,            // trust=untrusted 的证据条数（外部文本暴露面）
+>     "note": "用户可见说明"
+>   }
+> }
+> ```
+>
+> `stale_warning` 显式发出 `null`（值为 null，键始终在场，不允许省略）是唯一
+> “证据新鲜且时效全已知”的情形，此时允许不提示；其余任何过龄/未知情形必须给出用户可见提示。
+
 ## 3. 本仓扩展主题（6 个）
 
 权威 10 主题覆盖不到本仓能力，以下为登记在案的扩展：
