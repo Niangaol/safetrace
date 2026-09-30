@@ -28,16 +28,6 @@ const velX = ref(0)
 const velY = ref(0)
 const DAMPING = 0.94
 
-const isDragging = ref(false)
-let dragStartX = 0
-let dragStartY = 0
-let dragStartRotX = 0
-let dragStartRotY = 0
-let lastDragX = 0
-let lastDragY = 0
-let lastDragTime = 0
-let hasDragged = false
-
 const selected = ref<string | null>(null)
 const hovered = ref<string | null>(null)
 
@@ -71,18 +61,14 @@ onMounted(() => {
 
     let moved = false
     // Apply inertia
-    if (!isDragging.value) {
-      if (Math.abs(velX.value) > 0.01 || Math.abs(velY.value) > 0.01) {
-        rotY.value += velY.value * dt * 60
-        rotX.value = Math.max(-80, Math.min(80, rotX.value + velX.value * dt * 60))
-        velX.value *= DAMPING
-        velY.value *= DAMPING
-        moved = true
-      } else if (autoRotate.value && !hovered.value) {
-        rotY.value += dt * 8
-        moved = true
-      }
-    } else {
+    if (Math.abs(velX.value) > 0.01 || Math.abs(velY.value) > 0.01) {
+      rotY.value += velY.value * dt * 60
+      rotX.value = Math.max(-80, Math.min(80, rotX.value + velX.value * dt * 60))
+      velX.value *= DAMPING
+      velY.value *= DAMPING
+      moved = true
+    } else if (autoRotate.value && !hovered.value) {
+      rotY.value += dt * 8
       moved = true
     }
 
@@ -222,50 +208,8 @@ const selectedNode = computed(() => {
   return projected.value.find(n => n.id === selected.value) ?? null
 })
 
-function startDrag(e: MouseEvent | TouchEvent) {
-  isDragging.value = true
-  hasDragged = false
-  autoRotate.value = false
-  velX.value = 0
-  velY.value = 0
-  const pt = 'touches' in e ? e.touches[0] : e
-  dragStartX = pt.clientX
-  dragStartY = pt.clientY
-  lastDragX = pt.clientX
-  lastDragY = pt.clientY
-  lastDragTime = performance.now()
-  dragStartRotX = rotX.value
-  dragStartRotY = rotY.value
-}
-
-function onDrag(e: MouseEvent | TouchEvent) {
-  if (!isDragging.value) return
-  const pt = 'touches' in e ? e.touches[0] : e
-  const dx = pt.clientX - dragStartX
-  const dy = pt.clientY - dragStartY
-  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasDragged = true
-  rotY.value = dragStartRotY + dx * 0.5
-  rotX.value = Math.max(-80, Math.min(80, dragStartRotX - dy * 0.5))
-  // Track velocity for inertia
-  const now = performance.now()
-  const dtMs = now - lastDragTime
-  if (dtMs > 0) {
-    velY.value = (pt.clientX - lastDragX) / dtMs * 0.5
-    velX.value = -(pt.clientY - lastDragY) / dtMs * 0.5
-  }
-  lastDragX = pt.clientX
-  lastDragY = pt.clientY
-  lastDragTime = now
-}
-
-function endDrag() {
-  isDragging.value = false
-  // If barely moved, it was a click — don't let inertia spin
-  if (!hasDragged) {
-    velX.value = 0
-    velY.value = 0
-  }
-}
+/** 拖拽旋转已下线：用户不希望"必须拖动才能看全图"。
+    视图改为自动缓慢旋转（autoRotate），点节点只做选中看详情，不触发任何跳转。 */
 
 function resetView() {
   rotX.value = -12
@@ -277,11 +221,6 @@ function resetView() {
 }
 
 function toggleSelect(id: string) {
-  // If we just finished dragging, don't select
-  if (hasDragged) {
-    hasDragged = false
-    return
-  }
   selected.value = selected.value === id ? null : id
 }
 
@@ -302,16 +241,7 @@ const legendItems = [
       <button class="df3d-btn" @click="resetView">重置视角</button>
     </div>
 
-    <div
-      class="df3d-scene"
-      @mousedown="startDrag"
-      @touchstart.prevent="startDrag"
-      @mousemove="onDrag"
-      @touchmove.prevent="onDrag"
-      @mouseup="endDrag"
-      @mouseleave="endDrag"
-      @touchend="endDrag"
-    >
+    <div class="df3d-scene">
       <svg :viewBox="`0 0 ${W} ${H}`" class="df3d-svg" preserveAspectRatio="xMidYMid meet">
         <defs>
           <filter id="glow3d" x="-50%" y="-50%" width="200%" height="200%">
@@ -585,9 +515,9 @@ const legendItems = [
   max-width: 580px;
   height: 400px;
   position: relative;
-  cursor: grab;
+  cursor: default;
+  user-select: none;
 }
-.df3d-scene:active { cursor: grabbing; }
 
 .df3d-svg {
   width: 100%;

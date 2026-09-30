@@ -61,7 +61,9 @@ onUnmounted(() => {
 .tw {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* 不要写 `height: 100%`：父容器（flex 行/block）高度是内容决定时，百分比高度会退化成
+     auto，终端窗就塌回内容高度。改为由父级 `align-items: stretch` 拉伸；
+     块级布局里则自然是内容高度。放大态由 .tw.max 的 inset 决定，不受影响。 */
   min-width: 0;
   background: #0b1020;
   border: 1px solid #2a4060;

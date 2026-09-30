@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 
 import { getJson } from '../api'
 import SystemFactory from '../components/SystemFactory.vue'
 import TerminalWindow from '../components/TerminalWindow.vue'
 import ThreatGlobe from '../components/ThreatGlobe.vue'
 import type { CollectStatus, MetricsOverview } from '../types'
-
-const router = useRouter()
 
 /** 智能体运行记录（GET /agents/runs 的真实字段） */
 interface AgentRun {
@@ -137,8 +135,8 @@ const toolsByTier = computed(() => {
         <div class="orb orb-a"></div>
         <div class="orb orb-b"></div>
         <div class="orb orb-c"></div>
-        <div class="globe-viewport" @click="router.push('/dashboard')">
-          <ThreatGlobe @enter="router.push('/dashboard')" />
+        <div class="globe-viewport">
+          <ThreatGlobe />
         </div>
       </div>
       <div class="hero-content">
@@ -146,13 +144,7 @@ const toolsByTier = computed(() => {
           <span class="hero-badge-dot"></span>
           AI Security Intelligence
         </div>
-        <h1 class="hero-title">
-          <!-- 两层叠放实现光扫：base 参与排版，glow 绝对定位覆盖，保证标题真正水平居中 -->
-          <span class="ht-stack">
-            <span class="ht-base">SafeTrace</span>
-            <span class="ht-glow" aria-hidden="true">SafeTrace</span>
-          </span>
-        </h1>
+        <h1 class="hero-title">SafeTrace</h1>
         <p class="hero-subtitle">智能体驱动的 AI 安全知识情报系统</p>
         <p class="hero-desc">
           多源采集 · 七维富化 · 证据链追溯 · 混合检索 · 自动降级
@@ -174,8 +166,6 @@ const toolsByTier = computed(() => {
         v-for="s in stats"
         :key="s.label"
         class="stat-item"
-        title="点击进入态势大屏"
-        @click="router.push('/dashboard')"
       >
         <div class="stat-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -210,8 +200,8 @@ const toolsByTier = computed(() => {
     <section class="factory-section">
       <div class="section-kicker">Pipeline</div>
       <h2 class="section-title">系统运转 · 数据流转</h2>
-      <div class="factory-panel fade-in" title="点击进入态势大屏" @click="router.push('/dashboard')">
-        <span class="panel-go">点击进入大屏 →</span>
+      <div class="factory-panel fade-in">
+        <RouterLink to="/dashboard" class="panel-go">进入态势大屏 →</RouterLink>
         <SystemFactory
           :raw-items="metrics?.collect.raw_items ?? null"
           :vulns="metrics?.collect.vulns ?? null"
@@ -276,8 +266,6 @@ const toolsByTier = computed(() => {
           v-for="a in agents"
           :key="a.graph"
           class="agent-card"
-          title="点击进入态势大屏"
-          @click="router.push('/dashboard')"
         >
           <div class="agent-dot" :style="{ background: a.color, boxShadow: `0 0 12px ${a.color}` }"></div>
           <div class="agent-info">
@@ -328,8 +316,7 @@ const toolsByTier = computed(() => {
 .hero {
   position: relative;
   text-align: center;
-  /* 下方 340px 是完整的北半球穹顶带（canvas 320px）+ 一点呼吸余量 */
-  padding: 96px 24px 344px;
+  padding: 92px 24px 120px;
   border-radius: 16px;
   overflow: hidden;
   margin-bottom: 0;
@@ -379,18 +366,23 @@ const toolsByTier = computed(() => {
   transform: translateX(-50%);
   background: radial-gradient(circle, rgba(167, 139, 250, 0.07), transparent 68%);
 }
-/* 上半球穹顶：ThreatGlobe canvas 区域，完整画出一个北半球，不做容器裁切 */
+/* 全球线框地球：**居中放在标题后面**当背景装饰。
+   - z-index 0 + .hero-content 为 1 → 地球永远在标题/副标题/按钮之下；
+   - pointer-events: none（含子元素）→ 不接收拖动/点击，不会误触发导航；
+   - 尺寸取视口较小者并夹在 360–520px：比标题略大但不压过标题。 */
 .globe-viewport {
   position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  top: 46%;
+  left: 50%;
+  width: clamp(280px, 42vw, 500px);
+  height: clamp(280px, 42vw, 500px);
+  transform: translate(-50%, -50%);
   z-index: 0;
-  height: 320px;
   pointer-events: none;
+  user-select: none;
 }
 .globe-viewport > * {
-  pointer-events: auto;
+  pointer-events: none;
 }
 .hero-content {
   position: relative;
@@ -427,66 +419,51 @@ const toolsByTier = computed(() => {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(0.6); opacity: 0.6; }
 }
+/* 标题：单元素双背景层。
+   第 1 层 = 扫光亮带（background-size 240px，位置被动画推动，从左扫到右）；
+   第 2 层 = 稳态金属渐变（位置恒为 0 0，不动）。
+   这样光扫**必然**与文字严格对齐（不再依赖叠层覆盖），标题也天然水平居中。 */
 .hero-title {
   font-size: 82px;
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.1;
   margin: 0 0 10px;
-}
-/* 标题叠层：父级 block + text-align:center 居中；glow 层绝对定位覆盖在 base 上 */
-.ht-stack {
-  position: relative;
-  display: inline-block;
-}
-.ht-base {
-  position: relative;
-  z-index: 1;
-  font: inherit;
-  background: linear-gradient(
-    178deg,
-    #ffffff 0%,
-    #e8eef7 18%,
-    #9cc8f2 42%,
-    #64b5f6 62%,
-    #1e88e5 82%,
-    #1565c0 100%
-  );
+  display: block;
+  text-align: center;
+  background-image:
+    linear-gradient(
+      102deg,
+      transparent 20%,
+      rgba(255, 255, 255, 0.55) 42%,
+      #ffffff 50%,
+      rgba(255, 255, 255, 0.55) 58%,
+      transparent 80%
+    ),
+    linear-gradient(
+      178deg,
+      #ffffff 0%,
+      #e8eef7 18%,
+      #9cc8f2 42%,
+      #64b5f6 62%,
+      #1e88e5 82%,
+      #1565c0 100%
+    );
+  background-size: 240px 100%, 100% 100%;
+  background-repeat: no-repeat, no-repeat;
+  background-position: -300px 0, 0 0;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
   /* 静态光晕：一次性绘制，不参与光扫动画重绘，避免滤镜拖慢动画 */
   text-shadow: 0 0 40px rgba(56, 189, 248, 0.35), 0 0 90px rgba(56, 189, 248, 0.2);
-}
-/* 真实光扫：一道亮带单独扫过文字表面（文字其余部分保持稳态金属渐变） */
-.ht-glow {
-  position: absolute;
-  left: 0;
-  top: 0;
-  font: inherit;
-  background: linear-gradient(
-    102deg,
-    transparent 18%,
-    rgba(255, 255, 255, 0.5) 40%,
-    rgba(255, 255, 255, 0.95) 50%,
-    rgba(255, 255, 255, 0.5) 60%,
-    transparent 82%
-  );
-  background-size: 240px 100%;
-  background-repeat: no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  pointer-events: none;
-  /* 扫光周期拉到 9s：观感不变，但每秒重绘帧数少一半 */
-  animation: htSweep 9s ease-in-out infinite;
+  animation: htSweep 6s ease-in-out infinite;
 }
 @keyframes htSweep {
-  0%, 12% { background-position: -260px 0; }
-  55% { background-position: 620px 0; }
-  100% { background-position: 1020px 0; }
+  0%, 15% { background-position: -300px 0, 0 0; }
+  60% { background-position: 900px 0, 0 0; }
+  100% { background-position: 1100px 0, 0 0; }
 }
 .hero-subtitle {
   font-size: 21px;
@@ -560,15 +537,13 @@ const toolsByTier = computed(() => {
   border-bottom: 1px solid #1e2d44;
   margin-bottom: 40px;
 }
+/* 统计卡：纯展示，不可点（去掉 hover 位移/手型，避免"看着能点"的错觉） */
 .stat-item {
   text-align: center;
   position: relative;
   padding-top: 26px;
-  cursor: pointer;
-  transition: transform 0.2s;
-}
-.stat-item:hover {
-  transform: translateY(-3px);
+  cursor: default;
+  user-select: none;
 }
 .stat-icon {
   position: absolute;
@@ -587,10 +562,6 @@ const toolsByTier = computed(() => {
   font-family: 'JetBrains Mono', monospace;
   color: #f1f5f9;
   transition: color 0.2s;
-}
-.stat-item:hover .stat-value {
-  color: #7dd3fc;
-  text-shadow: 0 0 18px rgba(56, 189, 248, 0.45);
 }
 .stat-label {
   display: block;
@@ -741,13 +712,14 @@ const toolsByTier = computed(() => {
   border-radius: 14px;
   padding: 28px 24px 20px;
   overflow: hidden;
-  cursor: pointer;
+  cursor: default;
   transition: border-color 0.25s, box-shadow 0.25s;
 }
 .factory-panel:hover {
   border-color: rgba(56, 189, 248, 0.45);
   box-shadow: 0 10px 34px rgba(56, 189, 248, 0.1);
 }
+/* 明确的链接（而不是整块面板当按钮）：点它才跳转，不会误触 */
 .panel-go {
   position: absolute;
   top: 14px;
@@ -761,10 +733,13 @@ const toolsByTier = computed(() => {
   padding: 3px 12px;
   z-index: 2;
   opacity: 0.75;
+  text-decoration: none;
+  cursor: pointer;
   transition: opacity 0.2s;
 }
-.factory-panel:hover .panel-go {
+.panel-go:hover {
   opacity: 1;
+  color: #bae6fd;
 }
 /* 终端日志：贴在数据流转图下方，读数与图一一对应 */
 .factory-term {
@@ -850,6 +825,7 @@ const toolsByTier = computed(() => {
   gap: 20px;
   margin-bottom: 40px;
 }
+/* 智能体卡：纯展示，不可点 */
 .agent-card {
   display: flex;
   align-items: center;
@@ -858,7 +834,8 @@ const toolsByTier = computed(() => {
   border: 1px solid #1e2d44;
   border-radius: 14px;
   padding: 26px 24px;
-  cursor: pointer;
+  cursor: default;
+  user-select: none;
   transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
 }
 .agent-card:hover {

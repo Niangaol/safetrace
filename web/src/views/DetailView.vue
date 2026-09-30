@@ -552,11 +552,14 @@ onMounted(async () => {
 }
 
 /* Linux 窗口风的关系表 */
-/* 终端窗：高度与左侧蛛网图对齐（align-items: stretch 由 .rel-layout 保证） */
-/* 终端窗：宽高都跟左侧蛛网图对齐（rel-layout 是 stretch + gap 16px） */
+/* 终端窗：高度与左侧蛛网图**严格同高**。
+   .rel-layout 是 align-items: stretch 的 flex 行，.rel-term 作为 stretch 项被拉到
+   与 .rel-graph-side（标题 + 蛛网图）同高；.tw-body 再用 flex:1 吃掉标题栏以外的高度
+   并自己滚动，所以终端底边与蛛网图底边对齐。 */
 .rel-term {
   flex: 0 0 clamp(320px, 30vw, 440px);
   max-width: 100%;
+  align-self: stretch;
 }
 .rel-term :deep(.tw-body) {
   flex: 1;
@@ -635,8 +638,10 @@ onMounted(async () => {
   .rel-layout {
     flex-direction: column;
   }
+  /* 纵向堆叠时 stretch 不再管高度，给终端一个明确的高，够长好读 */
   .rel-term {
-    flex: 1 1 0;
+    flex: 0 0 auto;
+    height: 360px;
   }
 }
 </style>
