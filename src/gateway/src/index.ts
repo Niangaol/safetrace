@@ -406,3 +406,6 @@ export { loadModelsConfig };
 export type { ModelProfile, ModelsConfig, RoleName };
 export { MemoryUsageStore, SqliteUsageStore };
 export type { UsageStore };
+// A-02：/v1/decide 路由由调用方注入 decideHandler（问答线编排层接线），此处导出建服务入口。
+export { createGatewayServer } from "./server.js";
+export type { ServerOptions } from "./server.js";

@@ -10,12 +10,14 @@
  *     非拒答条必须带引用作答，expect_abstain 条必须显式拒答
  *  4. 降级透明红线：所有 fallback.events 均 user_visible；降级响应均带 degraded_to
  *  5. MG1 经 AnswerSynthesizer 注入点完成一次真实调用（cache provider，显式可辨）
- *  6. 四 Agent 任务图（监测→富化→问答）拓扑跑通，失败语义可演示
+ *  6. A-02 四层兜底阶梯：工具层缺失显式 unavailable、阶梯路径 escalation_trace 留痕、
+ *     全链未决显式挂起（abstain + decided_by=human）不伪造决策
+ *  7. 四 Agent 任务图（监测→富化→问答）拓扑跑通，失败语义可演示
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { MemoryEventStore, MemoryEventStore as Store, EventBus, sha256, sha256Json } from "@safetrace/shared";
-import type { Answer, FallbackEvent, IntelItem, QueryTurn } from "@safetrace/shared";
+import type { Answer, DecisionReply, DecisionRequest, FallbackEvent, IntelItem, QueryTurn } from "@safetrace/shared";
 import { runIngestOnce } from "@safetrace/ingest";
 import { runEnrichment } from "@safetrace/enrich";
 import {
@@ -24,6 +26,7 @@ import {
   classifyIntent,
   indexChunks,
   readFixtureChunks,
+  runDecisionLadder,
   runTaskGraph,
   synthesizeAnswer,
   type TaskGraph,
@@ -212,8 +215,36 @@ async function main(): Promise<number> {
   console.log("  带 stale_warning 的非拒答答案：" + staleCarriers + " 条（种子证据发布于 2021，阈值 365 天 → 预期全部提示）");
   check(staleCarriers === nonAbstained.length, "过龄证据必须显式带 stale_warning，且正文对用户可见");
 
-  // ---------- 6) 四 Agent 任务图 ----------
-  console.log("\n[6] 编排层四 Agent 任务图（监测→富化→问答）");
+  // ---------- 6) A-02 四层兜底阶梯（工具→规则→LLM→人工） ----------
+  console.log("\n[6] 决策阶梯（A-02：逐层显式下坠，禁静默兜底）");
+  const ladderReq: DecisionRequest = {
+    decision_id: "dec_smoke",
+    kind: "q1_route",
+    state: { question: "Log4Shell 影响哪些版本？" },
+    questions: [{ q_id: "q1", type: "choice", options: ["impact_range", "remediation"] }],
+    trace_id: "tr_smoke_ladder",
+    schema_version: "1.0",
+  };
+  const ladderRule = await runDecisionLadder(ladderReq, { bus, rule: async () => ({ choice: "impact_range", score: 0.9 }) });
+  check(ladderRule.escalation_trace.some((a) => a.layer === "tool" && a.status === "unavailable"),
+    "工具层未接入必须显式记 unavailable（不静默跳过），实际 " + JSON.stringify(ladderRule.escalation_trace.map((a) => a.layer + ":" + a.status)));
+  check(ladderRule.reply.decided_by === "rule_fallback" && (ladderRule.reply.fallback_reason ?? "").length > 0,
+    "规则层命中：decided_by=rule_fallback 且下坠原因显式进响应");
+  const ladderUnresolved = await runDecisionLadder({ ...ladderReq, decision_id: "dec_smoke_unresolved" }, { bus });
+  check(ladderUnresolved.escalation_trace.map((a) => a.layer).join(">") === "tool>rule>llm>human",
+    "阶梯路径完整留痕 escalation_trace=tool>rule>llm>human");
+  check(ladderUnresolved.reply.decision.abstain === true && ladderUnresolved.reply.decided_by === "human" && ladderUnresolved.reply.decision.choice === undefined,
+    "全链未决显式挂起（abstain + decided_by=human），不伪造 choice");
+  const ladderReplies = await store.read<DecisionReply>("decision.replies");
+  check(ladderReplies.length === 2, "decision.replies 全量入总线可 replay（" + ladderReplies.length + " 条）");
+  const ladderLineage = await store.readLineage("tr_smoke_ladder");
+  check(ladderLineage.some((r) => r.stage === "decide.ladder" && r.status === "review"),
+    "未决阶梯留 lineage（stage=decide.ladder, status=review）");
+  check(ladderLineage.every((r) => !JSON.stringify(r).includes("影响哪些版本")),
+    "阶梯 lineage 只存输入输出 hash，不复制决策正文");
+
+  // ---------- 7) 四 Agent 任务图 ----------
+  console.log("\n[7] 编排层四 Agent 任务图（监测→富化→问答）");
   check(Object.keys(AGENT_ROLES).length === 4, "四角色登记在册");
   let taskIngest: Awaited<ReturnType<typeof runIngestOnce>> | undefined;
   const graph: TaskGraph = {
@@ -236,7 +267,7 @@ async function main(): Promise<number> {
   check(tgResult.ok, "任务图全节点执行成功（executed=" + tgResult.executed.join(">") + "）");
 
   // ---------- 汇总：降级透明红线 ----------
-  console.log("\n[7] 降级透明红线（禁静默兜底）");
+  console.log("\n[8] 降级透明红线（禁静默兜底）");
   const silent = fallbackSeen.filter((e) => !e.user_visible);
   check(silent.length === 0, "零静默兜底（fallback.events 全部 user_visible，共 " + fallbackSeen.length + " 条）");
   const degradedAnswers = answers.filter((a) => (a.degraded_to ?? "") !== "");

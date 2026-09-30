@@ -15,6 +15,8 @@ export interface ServerOptions {
   port?: number;
   gateway?: ModelGateway;
   bus?: EventBusType;
+  /** A-02：/v1/decide 决策阶梯处理器（问答线编排层注入）。 */
+  decideHandler?: (req: unknown) => Promise<unknown>;
 }
 
 export function createGatewayServer(opts: ServerOptions = {}) {
@@ -55,6 +57,19 @@ export function createGatewayServer(opts: ServerOptions = {}) {
         const dataDomain = body.data_domain === "private" ? "private" : body.data_domain === "public" ? "public" : undefined;
         const emb = await gw.embed(String(body.role ?? "") as never, (body.texts ?? []) as string[], String(body.trace_id ?? nextId("tr")), dataDomain);
         sendJson(res, 200, emb);
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/decide") {
+        // A-02：四层兜底阶梯入口。decideHandler 由问答线编排层注入（ladder）；
+        // 未注入时明确 501，不假装能决策。
+        const handler = opts.decideHandler;
+        if (!handler) {
+          sendJson(res, 501, { error: "not_implemented", message: "/v1/decide 尚未挂接决策阶梯（A-02 注入 decideHandler）" });
+          return;
+        }
+        const body = await readJson(req);
+        const reply = await handler(body as never);
+        sendJson(res, 200, reply);
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/rerank") {

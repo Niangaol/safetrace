@@ -11,4 +11,5 @@ export * from "./orchestrator/taskgraph.js";
 export * from "./orchestrator/statemachine.js";
 export * from "./orchestrator/compile.js";
 export * from "./orchestrator/taskgraph-machine.js";
+export * from "./ladder/decision-ladder.js";
 export { createServer, createDefaultEngine, startServer, DEFAULT_PORT } from "./server.js";
