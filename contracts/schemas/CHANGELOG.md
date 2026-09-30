@@ -3,6 +3,22 @@
 > 纪律（docs/GITHUB-FLOW.md 第五节）：只允许「新字段追加 + 旧字段标 deprecated」；
 > 禁止改语义、改枚举值含义、删字段。每次契约改动必须在此登记，并在 PR 中三线 sign-off。
 
+## v1.1 汇总（D6 = 2026-10-03 契约冻结前增量，C-01～C-06）
+
+> 全部为**纯追加**：既有必填字段、枚举语义、字段含义均未改动；旧生产者与旧消费者保持兼容。
+> 缺省语义一律按"未提供/未知"处理，禁止消费者把缺省当作"已筛查/已评估/可信/新鲜"。
+
+| 台账 | 契约/配置 | 追加内容 | 状态 |
+|---|---|---|---|
+| C-01 | DecisionReply.json + openapi | `decided_by` 追加 `human` 枚举 | 代码完成，待三线 sign-off |
+| C-02 | RetrievalResponse.json（chunk） | 可选 `published_at` + `trust` | 代码完成，待三线 sign-off |
+| C-03 | QualityVerdict（events.md 内联） | 可选 `injection_score` + `injection_flags` | 代码完成，待三线 sign-off |
+| C-04 | Answer（events.md 内联） | 可选 `stale_warning` + `injection_guard` | 代码完成，待三线 sign-off |
+| C-05 | config/models.yml + openapi 请求体 | provider `trust_boundary` + role `data_domain` + 隔离闸门 | 代码完成，待三线 sign-off |
+| C-06 | CHANGELOG + validate_contracts.py | v1.1.x 逐条登记 + expected 集合/CHANGELOG 交叉校验 | 本轮落地 |
+
+> schema 文件数仍为 8（C-03/C-04 为 events.md 内联契约，C-05 为配置文件，均不新增 schema 文件）。
+
 ## v1.1.4（2026-09-30，D6 冻结前增量；C-05）
 
 | 契约/配置 | 生产者 → 消费者 | 变更与兼容性 |

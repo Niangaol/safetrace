@@ -283,6 +283,25 @@ def check_events_consistency() -> list[str]:
     missing = expected - schema_files
     if missing:
         problems.append(f"[events] 契约文件缺失：{sorted(missing)}")
+    extra = schema_files - expected
+    if extra:
+        problems.append(
+            "[events] schema 目录出现未登记文件（新增契约须走 contract 流程并更新 expected 集合）："
+            f"{sorted(extra)}"
+        )
+
+    # C-06：expected 集合与 CHANGELOG 登记表必须一致，防止"改了文件不改记录"。
+    changelog_path = SCHEMA_DIR / "CHANGELOG.md"
+    if changelog_path.exists():
+        changelog = changelog_path.read_text(encoding="utf-8")
+        unlogged = sorted(
+            name for name in expected
+            if f"| {name[:-5]} " not in changelog and f"| {name[:-5]}（" not in changelog
+        )
+        if unlogged:
+            problems.append(f"[changelog] CHANGELOG 未登记以下契约：{unlogged}")
+        if "## v1.1." not in changelog:
+            problems.append("[changelog] 缺少 v1.1.x 增量登记段（契约追加必须逐条登记）")
     return problems
 
 
