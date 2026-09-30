@@ -31,9 +31,10 @@ async function sample() {
 test("source chunks keep each parser text and exact RawDoc provenance, not merged text", async () => {
   const r = await sample();
   const built = await buildSourceEvidenceChunks(r.parsed, r.fetched, r.merged, r.verdicts, r.lineage_parent_by_intel_id);
-  assert.equal(built.chunks.length, 4);
+  // 7 条 parsed = 四个基础源各 1 条 + USN 3 条公告（E-01 第 7 源）
+  assert.equal(built.chunks.length, 7);
   assert.deepEqual(built.skipped, []);
-  assert.equal(new Set(built.chunks.map(c => c.chunk_id)).size, 4);
+  assert.equal(new Set(built.chunks.map(c => c.chunk_id)).size, 7);
   for (const [i, chunk] of built.chunks.entries()) {
     const parsed = r.parsed[i]!;
     const raw = r.fetched.find(d => d.payload_ref === parsed.raw_refs[0])!;
@@ -52,7 +53,7 @@ test("review/quarantine and missing DQ lineage cannot become source evidence", a
   for (const verdict of ["review", "quarantine"] as const) {
     const out = await buildSourceEvidenceChunks(r.parsed, r.fetched, r.merged, r.verdicts.map(v => ({ ...v, verdict })), r.lineage_parent_by_intel_id);
     assert.equal(out.chunks.length, 0);
-    assert.equal(out.skipped.length, 4);
+    assert.equal(out.skipped.length, 7);
   }
   const out = await buildSourceEvidenceChunks(r.parsed, r.fetched, r.merged, r.verdicts, {});
   assert.equal(out.chunks.length, 0);

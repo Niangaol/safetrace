@@ -10,21 +10,22 @@ test("pipeline：离线全链路，总线可读回 raw.docs / intel.items / dq.v
   const res = await runIngestOnce({ store, offline: true });
 
   // —— 结果计数 ——
-  assert.equal(res.fetched.length, 4); // 四个 active 源全部回放
-  assert.equal(res.parsed.length, 4);
-  assert.equal(res.merged.length, 1); // 同一 CVE 的 4 源报道归并为一条
+  assert.equal(res.fetched.length, 5); // 五个 active 源全部回放（含 E-01 第 7 源 ubuntu_usn）
+  assert.equal(res.parsed.length, 7); // KEV/NVD/OSV/cve.org 各 1 条 + USN fixture 3 条公告
+  assert.equal(res.merged.length, 1); // 同一 CVE 的五源报道归并为一条
   assert.equal(res.verdicts.length, 1);
-  assert.equal(res.fallbackEvents.length, 4); // 每个源一次 fixture 回放降级
+  assert.equal(res.fallbackEvents.length, 5); // 每个源一次 fixture 回放降级
   assert.equal(res.degraded_to, "fixture"); // 红线：降级在响应对象上显式可见
 
   // —— 归并结果：多源引用 + 强标识齐全 ——
   const merged = res.merged[0]!;
   assert.equal(merged.intel_id, "intel_kev_cve_2021_44228");
-  assert.deepEqual(merged.cve_ids, ["CVE-2021-44228"]);
+  assert.deepEqual(merged.cve_ids, ["CVE-2021-44228", "CVE-2021-45046"]); // USN-5197-1 带出姊妹 CVE
   assert.deepEqual(merged.ghsa_ids, ["GHSA-jfh8-c2jp-5v3q"]);
-  assert.deepEqual([...merged.source_ids].sort(), ["cisa_kev", "cve_org", "nvd_cve", "osv"]);
+  assert.deepEqual([...merged.source_ids].sort(), ["cisa_kev", "cve_org", "nvd_cve", "osv", "ubuntu_usn"]);
+  assert.deepEqual([...(merged.aliases ?? [])].sort(), ["USN-5192-1", "USN-5192-2", "USN-5197-1"]);
   assert.equal(merged.published_at, "2021-12-10T00:00:00.000Z"); // 取最早（KEV）
-  assert.ok(merged.raw_refs.length === 4);
+  assert.ok(merged.raw_refs.length === 5);
   assert.match(merged.first_seen_at, /Z$/);
   assert.equal(res.verdicts[0]!.verdict, "pass"); // 干净数据放行
 
@@ -33,10 +34,10 @@ test("pipeline：离线全链路，总线可读回 raw.docs / intel.items / dq.v
   const intels = await store.read<IntelItem>("intel.items");
   const verdicts = await store.read<QualityVerdict>("dq.verdicts");
   const falls = await store.read<FallbackEvent>("fallback.events");
-  assert.equal(rawDocs.length, 4);
+  assert.equal(rawDocs.length, 5);
   assert.equal(intels.length, 1);
   assert.equal(verdicts.length, 1);
-  assert.equal(falls.length, 4);
+  assert.equal(falls.length, 5);
   assert.deepEqual(intels[0]!.payload.source_ids, merged.source_ids);
   assert.equal(verdicts[0]!.payload.item_id, merged.intel_id);
 
@@ -59,9 +60,10 @@ test("pipeline：离线全链路，总线可读回 raw.docs / intel.items / dq.v
   assert.ok(res.trace_id.startsWith("tr_"));
   const lineage = await store.readLineage(res.trace_id);
   const stageRows = (stage: string) => lineage.filter((row) => row.stage === stage);
-  assert.equal(stageRows("ingest.fetch").length, 4);
-  assert.equal(stageRows("ingest.parse").length, 4);
-  assert.equal(stageRows("ingest.fallback").length, 4);
+  // 5 个 active 源（E-01 第 7 源 ubuntu_usn 接入后）：fetch/parse/fallback 各一行
+  assert.equal(stageRows("ingest.fetch").length, 5);
+  assert.equal(stageRows("ingest.parse").length, 5);
+  assert.equal(stageRows("ingest.fallback").length, 5);
   assert.equal(stageRows("ingest.dedupe").length, 1);
   assert.equal(stageRows("ingest.dq1").length, 1);
   assert.ok(stageRows("ingest.fetch").every((row) => row.status === "degraded"));
@@ -73,7 +75,7 @@ test("pipeline：离线全链路，总线可读回 raw.docs / intel.items / dq.v
   const dqLineage = stageRows("ingest.dq1")[0]!;
   assert.ok(res.lineage_parent_by_intel_id[res.merged[0]!.intel_id]);
   assert.ok(res.causation_by_intel_id[res.merged[0]!.intel_id]);
-  assert.ok(dqLineage.parent_lineage_ids.length >= 5, "multi-source merged DQ result links all four parser records plus dedupe");
+  assert.ok(dqLineage.parent_lineage_ids.length >= 6, "multi-source merged DQ result links all five parser records plus dedupe");
   assert.ok(dqLineage.output_refs.some((ref) => ref.kind === "QualityVerdict" && /^[a-f0-9]{64}$/.test(ref.sha256 ?? "")));
   assert.ok(!JSON.stringify(lineage).includes("CVE-2021-44228 Log4Shell"), "lineage stores IDs/hashes, not duplicated raw/advisory text");
 

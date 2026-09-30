@@ -16,6 +16,8 @@ import { fetchKev } from "./sources/kev.js";
 import { fetchNvd } from "./sources/nvd.js";
 import { fetchOsv } from "./sources/osv.js";
 import { fetchCveOrg } from "./sources/cveorg.js";
+import { fetchUsn } from "./sources/usn.js";
+import { parseUsn } from "./adapters/usn.js";
 import { dedupeAll } from "./dedupe.js";
 import { assessQualityVerdict } from "./dq1.js";
 import { sha256PayloadRef } from "./common.js";
@@ -30,6 +32,8 @@ export interface RunIngestOnceOpts {
   sourceIds?: string[];
   /** 调用方可指定 trace_id 以关联 ingest/enrich/index 全链路。 */
   trace_id?: string;
+  /** 单轮抓取条目上限，透传给各源采集器（未实现的源忽略）。 */
+  limit?: number;
 }
 
 export interface IngestRunResult {
@@ -66,6 +70,7 @@ const SOURCE_RUNNERS: SourceRunner[] = [
   { id: "nvd_cve", run: (o) => fetchNvd(o), parse: parseNvd },
   { id: "osv", run: (o) => fetchOsv(o), parse: parseOsv },
   { id: "cve_org", run: (o) => fetchCveOrg(o), parse: parseCveOrg },
+  { id: "ubuntu_usn", run: (o) => fetchUsn(o), parse: parseUsn },
 ];
 
 export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunResult> {
@@ -92,6 +97,7 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
       raw = await runner.run({
         offline: opts.offline,
         traceId,
+        ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
         emit: (event) => { sourceEvents.push(event); },
       });
     } catch {

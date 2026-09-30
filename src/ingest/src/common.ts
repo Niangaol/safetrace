@@ -33,6 +33,8 @@ export interface FetchOpts {
   /** 强制离线（测试/冒烟用）；为 true 时直接回放预置样本。 */
   offline?: boolean;
   traceId?: string;
+  /** 单轮抓取条目上限（源侧自行实现，未实现的源忽略此项）。 */
+  limit?: number;
   /** 降级事件回调：pipeline 用它把 FallbackEvent 收进 fallback.events 主题。 */
   emit?: (event: FallbackEvent) => void | Promise<void>;
 }

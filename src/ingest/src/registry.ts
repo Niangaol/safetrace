@@ -55,6 +55,17 @@ export const SOURCES: readonly SourceEntry[] = [
     status: "active",
   },
   {
+    // E-01 第 7 源：厂商安全公告渠道（Ubuntu Security Notices，官方公开 JSON 接口，免 key）
+    source_id: "ubuntu_usn",
+    source_type: "vendor_advisory",
+    url: "https://ubuntu.com/security/notices.json",
+    poll_interval_s: 1800,
+    // robots.txt 对 * 声明 Crawl-delay: 1；本源单轮只发 1 个请求，实际频率由 poll 间隔决定
+    rate_per_min: 10,
+    requires_api_key: false,
+    status: "active",
+  },
+  {
     source_id: "ghsa",
     source_type: "ghsa",
     url: "https://api.github.com/advisories",
