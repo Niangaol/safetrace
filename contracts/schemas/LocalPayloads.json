@@ -106,7 +106,8 @@
               "poc_dead_link",
               "key5_missing",
               "boilerplate",
-              "multi_id_mismatch"
+              "multi_id_mismatch",
+              "unknown_version"
             ]
           }
         },
@@ -114,7 +115,32 @@
         "quarantine_ref": {"type": ["string", "null"]},
         "reviewer": {"type": ["string", "null"]},
         "reviewed_at": {"type": ["string", "null"]},
-        "gate_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}
+        "gate_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "injection_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "注入迹象评分 0-1（可选）。缺省 = 未做注入筛查，禁止调用方当作已筛查且干净；DQ1 当前不填，检测实现不在本仓"
+        },
+        "injection_flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "instruction_override",
+              "role_confusion",
+              "zero_width_chars",
+              "base64_hidden",
+              "html_entity_encoded",
+              "comment_embedded",
+              "exfil_instruction",
+              "fake_system_prompt",
+              "citation_spoof",
+              "multi_stage"
+            ]
+          },
+          "description": "命中的注入迹象标签（可选）。缺省或空数组不等于已筛查"
+        }
       }
     },
     "QueryTurn": {

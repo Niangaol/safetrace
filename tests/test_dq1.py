@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+from pathlib import Path
 
 import pytest
 from scripts.contracts import load_schema, validate
@@ -257,6 +259,37 @@ def test_quarantine_payload_also_matches_contract() -> None:
     assert validate(schema, payload) == []
     assert payload["verdict"] == "quarantine"
     assert FLAG_TS_NO_TZ in payload["flags"]
+
+
+def test_old_shape_without_injection_fields_still_valid() -> None:
+    """C-03 对齐：注入位为可选，旧生产者（不带注入字段）必须仍合法。"""
+
+    payload = evaluate(CLEAN).to_payload()
+    schema = load_schema("LocalPayloads.json")["definitions"]["QualityVerdict"]
+    assert validate(schema, payload) == []
+    assert "injection_score" not in payload and "injection_flags" not in payload
+
+
+def test_injection_sample_fixture_matches_contract() -> None:
+    """C-03 对齐：注入样例 fixture 必须过内联 QualityVerdict 契约。"""
+
+    path = Path(__file__).resolve().parent.parent / "fixtures" / "qualityverdict.injection.sample.json"
+    sample = json.loads(path.read_text(encoding="utf-8"))
+    schema = load_schema("LocalPayloads.json")["definitions"]["QualityVerdict"]
+    assert validate(schema, sample) == [], validate(schema, sample)
+
+
+def test_injection_fields_reject_bad_values() -> None:
+    """C-03 对齐：越界评分、未知注入标签必须被拒；合法标签可通过。"""
+
+    schema = load_schema("LocalPayloads.json")["definitions"]["QualityVerdict"]
+    base = evaluate(CLEAN).to_payload()
+    out_of_range = {**base, "injection_score": 1.4}
+    assert validate(schema, out_of_range) != []
+    unknown_tag = {**base, "injection_flags": ["fake_language"]}
+    assert validate(schema, unknown_tag) != []
+    valid = {**base, "injection_score": 0.87, "injection_flags": ["instruction_override"]}
+    assert validate(schema, valid) == [], validate(schema, valid)
 
 
 def test_dimension_scores_cover_all_five_axes() -> None:

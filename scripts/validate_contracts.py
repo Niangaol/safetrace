@@ -130,6 +130,7 @@ FIXTURE_SCHEMA: dict[str, str | None] = {
     "evidence_paper.sample.json": "DimensionEvidence.json",
     "eventenvelope.sample.json": "EventEnvelope.json",
     "nvd_cve.sample.json": None,
+    "qualityverdict.injection.sample.json": None,
 }
 
 

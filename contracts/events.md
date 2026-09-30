@@ -46,6 +46,12 @@
 | `decision.replies` | DecisionReply.json | D4 | Y5/Q1/Q3 | 本仓暂无 D4 |
 | `fallback.events` | FallbackEvent（内联） | FB1 各层 | A1 | `services/enrich/s2_events.py::publish_degraded` |
 
+> `dq.verdicts` 载荷（QualityVerdict，机读契约在 `LocalPayloads.json` 的 definitions）为本仓对齐上游
+> 的**纯追加**增量：`flags` 登记 `unknown_version`；可选 `injection_score`（0-1）与 `injection_flags`
+> （十类注入迹象枚举，样例 `fixtures/qualityverdict.injection.sample.json`）。
+> **缺省 = 未做注入筛查**：DQ1 不填这两个字段，任何调用方禁止把缺省当作“已筛查且干净”；
+> 注入检测实现不在本仓范围内。
+
 ## 3. 本仓扩展主题（6 个）
 
 权威 10 主题覆盖不到本仓能力，以下为登记在案的扩展：

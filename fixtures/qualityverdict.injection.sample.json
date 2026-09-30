@@ -1,0 +1,12 @@
+{
+  "item_id": "intel_lz3k9x_cve_2021_44228",
+  "item_kind": "intel",
+  "quality_score": 0.42,
+  "dimension_scores": { "structure": 1, "completeness": 0.8, "consistency": 0.4, "timeliness": 0.9, "sourcing": 0.3 },
+  "flags": ["multi_id_mismatch"],
+  "injection_score": 0.87,
+  "injection_flags": ["instruction_override", "fake_system_prompt"],
+  "verdict": "review",
+  "reviewer": "analyst_pending",
+  "gate_version": "1.0.0"
+}
