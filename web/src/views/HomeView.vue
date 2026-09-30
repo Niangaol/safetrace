@@ -157,10 +157,9 @@ const toolsByTier = computed(() => {
       </RouterLink>
     </section>
 
-    <!-- system factory animation -->
+    <!-- system factory: 运转状态 + 数据流转合二为一 -->
     <section class="factory-section">
-      <h2 class="section-title">系统运转</h2>
-      <p class="section-subtitle">五条流水线循环运行 · 采集 → 分流 → 富化 → 底座 → 问答</p>
+      <h2 class="section-title">系统运转 · 数据流转</h2>
       <div class="factory-panel fade-in">
         <SystemFactory
           :raw-items="metrics?.collect.raw_items ?? null"
@@ -169,6 +168,15 @@ const toolsByTier = computed(() => {
           :coverage-ratio="metrics?.enrich.coverage_ratio ?? null"
           :chunks="metrics?.knowledge.chunks ?? null"
         />
+        <div class="flow-legend">
+          <span class="legend-chip"><b>Y</b> 监测线</span>
+          <span class="legend-arrow">→</span>
+          <span class="legend-chip"><b>F</b> 富化线</span>
+          <span class="legend-arrow">→</span>
+          <span class="legend-chip"><b>S</b> 底座线</span>
+          <span class="legend-arrow">→</span>
+          <span class="legend-chip"><b>Q</b> 问答线</span>
+        </div>
       </div>
     </section>
 
@@ -176,8 +184,7 @@ const toolsByTier = computed(() => {
     <section class="agents-section">
       <h2 class="section-title">智能体与工具</h2>
       <p class="section-subtitle">
-        四条编排线的运行数字来自 <code>/api/v1/agents/runs</code>，工具权限与成本档位来自
-        <code>/api/v1/agents/tools</code>（无记录时如实显示「未运行」）
+        运行数字来自 <code>/agents/runs</code> · 无记录如实显示「未运行」
       </p>
       <div class="agents-grid">
         <div v-for="a in agents" :key="a.graph" class="agent-card">
@@ -216,51 +223,21 @@ const toolsByTier = computed(() => {
         </table>
       </details>
     </section>
-
-    <!-- pipeline -->
-    <section class="pipeline-section">
-      <h2 class="section-title">数据流转</h2>
-      <div class="pipeline-flow">
-        <div class="pipe-step">
-          <span class="pipe-num">Y</span>
-          <span class="pipe-label">监测线</span>
-          <span class="pipe-desc">采集 · 去重 · 派发</span>
-        </div>
-        <span class="pipe-arrow">→</span>
-        <div class="pipe-step">
-          <span class="pipe-num">F</span>
-          <span class="pipe-label">富化线</span>
-          <span class="pipe-desc">论文 · 资产 · POC · CVSS · 修复 · 一致性 · AI风险</span>
-        </div>
-        <span class="pipe-arrow">→</span>
-        <div class="pipe-step">
-          <span class="pipe-num">S</span>
-          <span class="pipe-label">底座线</span>
-          <span class="pipe-desc">知识库 · 总线 · 索引 · 工具</span>
-        </div>
-        <span class="pipe-arrow">→</span>
-        <div class="pipe-step">
-          <span class="pipe-num">Q</span>
-          <span class="pipe-label">问答线</span>
-          <span class="pipe-desc">意图 · 检索 · 推理 · 合成</span>
-        </div>
-      </div>
-    </section>
   </div>
 </template>
 
 <style scoped>
 .home {
-  max-width: 960px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 0 0 40px;
+  padding: 0 0 48px;
 }
 
 /* hero */
 .hero {
   position: relative;
   text-align: center;
-  padding: 60px 24px 48px;
+  padding: 72px 24px 56px;
   border-radius: 16px;
   overflow: hidden;
   margin-bottom: 0;
@@ -291,7 +268,7 @@ const toolsByTier = computed(() => {
   margin-bottom: 20px;
 }
 .hero-title {
-  font-size: 48px;
+  font-size: 56px;
   font-weight: 800;
   letter-spacing: -1px;
   background: linear-gradient(135deg, #f1f5f9, #38bdf8 60%, #818cf8);
@@ -301,7 +278,7 @@ const toolsByTier = computed(() => {
   margin: 0 0 8px;
 }
 .hero-subtitle {
-  font-size: 18px;
+  font-size: 20px;
   color: #e2e8f0;
   margin: 0 0 4px;
   font-weight: 500;
@@ -350,24 +327,24 @@ const toolsByTier = computed(() => {
 .stats-bar {
   display: flex;
   justify-content: center;
-  gap: 48px;
-  padding: 32px 24px;
+  gap: 72px;
+  padding: 40px 24px;
   border-bottom: 1px solid #1e2d44;
-  margin-bottom: 32px;
+  margin-bottom: 40px;
 }
 .stat-item {
   text-align: center;
 }
 .stat-value {
   display: block;
-  font-size: 28px;
+  font-size: 36px;
   font-weight: 700;
   font-family: 'JetBrains Mono', monospace;
   color: #f1f5f9;
 }
 .stat-label {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -378,15 +355,15 @@ const toolsByTier = computed(() => {
 .features {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-bottom: 40px;
+  gap: 20px;
+  margin-bottom: 48px;
 }
 .feature-card {
   position: relative;
   background: linear-gradient(135deg, #131c2e, #0f1623);
   border: 1px solid #1e2d44;
-  border-radius: 12px;
-  padding: 28px 24px;
+  border-radius: 14px;
+  padding: 32px 28px;
   text-decoration: none;
   color: inherit;
   transition: all 0.2s;
@@ -445,27 +422,68 @@ const toolsByTier = computed(() => {
 
 /* section */
 .section-title {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 600;
   color: #f1f5f9;
   text-align: center;
-  margin: 0 0 4px;
+  margin: 0 0 20px;
 }
 .section-subtitle {
   font-size: 12px;
   color: #64748b;
   text-align: center;
-  margin: 0 0 24px;
+  margin: -12px 0 24px;
 }
 
-/* factory */
-.factory-section { margin-bottom: 40px; }
+/* factory: 系统运转 + 数据流转 合一 */
+.factory-section { margin-bottom: 48px; }
 .factory-panel {
   background: linear-gradient(135deg, #131c2e, #0f1623);
   border: 1px solid #1e2d44;
-  border-radius: 12px;
-  padding: 20px;
+  border-radius: 14px;
+  padding: 28px 24px 20px;
   overflow: hidden;
+}
+.flow-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid #16213a;
+}
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.legend-chip b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #38bdf8, #0284c7);
+  color: #06121f;
+  font-weight: 800;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.legend-chip span {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.legend-arrow {
+  color: #2a4060;
+  font-size: 18px;
+  font-weight: 700;
+}
+@media (max-width: 700px) {
+  .flow-legend { gap: 10px; }
 }
 
 /* agents */
@@ -545,56 +563,7 @@ const toolsByTier = computed(() => {
   color: #64748b;
 }
 
-/* pipeline */
-.pipeline-section { margin-bottom: 20px; }
-.pipeline-flow {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-.pipe-step {
-  flex: 1;
-  min-width: 140px;
-  background: #131c2e;
-  border: 1px solid #1e2d44;
-  border-radius: 10px;
-  padding: 16px 14px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-.pipe-num {
-  width: 32px; height: 32px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #38bdf8, #0284c7);
-  color: #06121f;
-  font-weight: 800;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 4px;
-}
-.pipe-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #e2e8f0;
-}
-.pipe-desc {
-  font-size: 10px;
-  color: #64748b;
-  text-align: center;
-}
-.pipe-arrow {
-  display: flex;
-  align-items: center;
-  color: #2a4060;
-  font-size: 20px;
-  padding: 0 8px;
-}
+/* agents grid 使用的 margin 保留在 .agents-grid 上 */
 
 @media (max-width: 700px) {
   .features { grid-template-columns: 1fr; }
