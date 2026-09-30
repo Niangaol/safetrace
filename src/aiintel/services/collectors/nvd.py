@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
+import urllib.parse
 from typing import Any
 
 from aiintel.services.collectors.base import BaseCollector, RawItemData, parse_datetime
@@ -41,31 +43,43 @@ MAX_WINDOW = dt.timedelta(days=119)
 MAX_RESULTS = 20_000
 
 
+def _nvd_datetime(value: dt.datetime) -> str:
+    """NVD 参数日期必须用 ISO8601（URL 编码 +00:00）。
+
+    本环境实测：`lastModStartDate` 用 epoch 毫秒会被 NVD 边缘以 HTTP 404（空
+    响应）拒绝；同一窗口换成 `%2B00:00` ISO 形式则正常返回。不要回到 ms 格式。
+    """
+    return value.isoformat(timespec="milliseconds").replace("+00:00", "%2B00:00")
+
+
 class NvdCollector(BaseCollector):
     name = "nvd"
     priority = 10
-    rate_limit_per_min = 10
+    # 匿名限速实测约 5 req/30s（再快会 429）；留边际余量取 8/min
+    rate_limit_per_min = 8
 
-    def _search_url(self, since: dt.datetime | None) -> str:
-        """构造 lastMod 时间窗查询。
+    def _page_url(self, keyword: str, since: dt.datetime | None, start_index: int) -> str:
+        """keywordSearch 服务端精筛 + lastMod 时间窗。
 
-        注意：不能用 hasKev 兜底——KEV 只有约 1% 的漏洞，会漏掉绝大多数 AI 组件漏洞。
-        漏采在这里不可接受，改为"最近 119 天全量 + 客户端 AI 关键词过滤"。
+        keywordSearch：NVD 直接按关键词过滤（实测 ollama→41、llm→319 条），
+        免去"119 天全窗 38 万条逐页客户端过滤"（实测 0 命中且要约 30 分钟）。
+        每个关键词单独发请求（NVD 多词并集语义不可靠，实测并集返回 0 条）。
         """
-
         now = dt.datetime.now(dt.UTC)
         start = since or (now - MAX_WINDOW)
         if now - start > MAX_WINDOW:
             logger.warning("NVD 时间窗超过 119 天，收窄为最近 119 天")
             start = now - MAX_WINDOW
         return (
-            f"{API}?lastModStartDate={int(start.timestamp() * 1000)}"
-            f"&lastModEndDate={int(now.timestamp() * 1000)}"
-            f"&resultsPerPage={PAGE_SIZE}"
+            f"{API}?keywordSearch={urllib.parse.quote(keyword)}"
+            f"&lastModStartDate={_nvd_datetime(start)}"
+            f"&lastModEndDate={_nvd_datetime(now)}"
+            f"&resultsPerPage={PAGE_SIZE}&startIndex={start_index}"
         )
 
     @staticmethod
-    def _is_ai_related(cve: dict) -> bool:
+    def _is_ai_related(vuln: dict) -> bool:
+        cve = vuln.get("cve") or vuln  # NVD 列表元素是 {"cve": {...}} 包装层
         haystack = " ".join(
             [
                 cve.get("id", ""),
@@ -77,20 +91,34 @@ class NvdCollector(BaseCollector):
 
     async def fetch(self, mode: str = "incremental") -> list[RawItemData]:
         since = None if mode == "full" else self.watermark()
-        base_url = self._search_url(since)
         logger.info("NVD 查询: mode=%s since=%s", mode, since)
 
         items: list[RawItemData] = []
-        start_index = 0
-        while True:
-            payload: dict[str, Any] = await self._get_json(f"{base_url}&startIndex={start_index}")
-            vulns = payload.get("vulnerabilities") or []
-            items.extend(self._to_item(cve) for cve in vulns if self._is_ai_related(cve))
-            total = int(payload.get("totalResults") or 0)
-            start_index += len(vulns)
-            if not vulns or start_index >= total or len(items) >= MAX_RESULTS:
-                break
-        logger.info("NVD 命中 AI 相关 %d 条（扫描 %d 条）", len(items), min(start_index, total))
+        seen: set[str] = set()
+        for keyword in AI_KEYWORDS:
+            start_index = 0
+            while True:
+                # 每个请求前都按 rate_limit 限速（关键词之间、分页之间都要）
+                await asyncio.sleep(60 / self.rate_limit_per_min)
+                url = self._page_url(keyword, since, start_index)
+                payload: dict[str, Any] = await self._get_json(url)
+                vulns = payload.get("vulnerabilities") or []
+                for cve in vulns:
+                    if not self._is_ai_related(cve):
+                        continue
+                    item = self._to_item(cve)
+                    if item.external_id in seen:
+                        continue
+                    seen.add(item.external_id)
+                    items.append(item)
+                    if len(items) >= MAX_RESULTS:
+                        logger.info("NVD 命中达 MAX_RESULTS=%d，提前停止", MAX_RESULTS)
+                        return items
+                total = int(payload.get("totalResults") or 0)
+                start_index += len(vulns)
+                if not vulns or start_index >= total:
+                    break
+        logger.info("NVD 命中 AI 相关 %d 条", len(items))
         return items
 
     @staticmethod
