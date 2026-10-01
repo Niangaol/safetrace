@@ -210,11 +210,33 @@ function tokenClass(t: InlineToken): string {
   return t.kind ? `hl hl-${t.kind}` : ''
 }
 
-function stageState(name: string): 'done' | 'active' | 'idle' {
+/**
+ * 进度条要区分"还没走到"和"这一轮**根本没执行**"，否则两者长得一模一样，
+ * 读者会以为系统卡住了。
+ *
+ * 后端是**按实际执行步骤**发 stage 事件的（`services/qa/agent.py` 里
+ * `generate` / `reasoning` / `check` 只在 `evidence` 非空的分支里发）：
+ * 检索命中 0 条证据 → 走"无证据如实拒答"分支 → 直接跳 `done`，
+ * 这三步**故意不执行**（没有证据就不生成、不推理、不自检，避免无据编造）。
+ * 这时前端不能把 3/4/5 画成灰色"待运行"——那是**假状态**，
+ * 要显式标成"未执行"并说明为什么跳过。
+ */
+function stageState(name: string): 'done' | 'active' | 'skipped' | 'idle' {
+  // 进行中的阶段优先判 active：后端是"进入某阶段时就发事件"，
+  // 若先判 reachedStages 会让当前阶段立刻变绿，失去"正在跑"的指示。
   if (qa.thinking && qa.stage === name) return 'active'
   if (reachedStages.value.has(name)) return 'done'
-  return 'idle'
+  // 已收尾（拿到 done）却始终没有这个 stage → 本轮没执行它
+  return finished.value ? 'skipped' : 'idle'
 }
+
+/** 本轮是否走了"无证据拒答"分支：后端会发一条 step=no_evidence 的轨迹 */
+const abstainedNoEvidence = computed(() => qa.traces.some((t) => t.step === 'no_evidence'))
+
+/** 收尾后仍未执行的阶段名（用于进度条下方的如实说明） */
+const skippedStages = computed(() =>
+  finished.value ? STAGE_ORDER.filter((n) => !reachedStages.value.has(n)) : [],
+)
 
 /** retrieve 阶段的实际轮次与命中数，作为"多轮检索真的发生过"的证据 */
 const retrieveRounds = computed(() => qa.stages.filter((s) => s.stage === 'retrieve'))
@@ -333,11 +355,27 @@ onMounted(async () => {
       </span>
     </div>
     <div class="pipeline">
-      <div v-for="(name, i) in STAGE_ORDER" :key="name" class="pipeline-step" :class="stageState(name)">
+      <div
+        v-for="(name, i) in STAGE_ORDER"
+        :key="name"
+        class="pipeline-step"
+        :class="stageState(name)"
+      >
         <span class="pipeline-index">{{ i + 1 }}</span>
         <span class="pipeline-name">{{ STAGE_LABEL[name] }}</span>
+        <span v-if="stageState(name) === 'skipped'" class="pipeline-skip">未执行</span>
       </div>
     </div>
+    <!-- 未执行的阶段必须解释原因，不能让人误读成"卡住/坏了" -->
+    <p v-if="skippedStages.length" class="pipeline-note">
+      <template v-if="abstainedNoEvidence">
+        本轮检索未命中可引用证据，已按<b>无证据拒答</b>处理
+        （如实告知"知识库中暂无可支撑该问题的证据"而不是编造）：
+      </template>
+      <template v-else>本次运行中以下阶段没有执行：</template>
+      {{ skippedStages.map((s) => STAGE_LABEL[s]).join('、') }}。
+      <template v-if="abstainedNoEvidence">如需这几步，请先补齐知识库切片或换一个知识库能回答的问题。</template>
+    </p>
     <p v-if="qa.stages.length" class="muted" style="font-size: 11px; margin: 8px 0 0">
       实际到达的阶段：
       {{ qa.stages.map((s) => STAGE_LABEL[s.stage] ?? s.stage).join(' → ') }}
@@ -708,6 +746,26 @@ onMounted(async () => {
   border-color: rgba(56, 189, 248, 0.6);
   color: var(--text);
   background: rgba(56, 189, 248, 0.12);
+}
+.pipeline-step.skipped {
+  border-color: rgba(120, 120, 120, 0.35);
+  color: var(--muted);
+  background: transparent;
+  opacity: 0.8;
+}
+.pipeline-skip {
+  margin-left: 4px;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px dashed var(--border);
+  opacity: 0.85;
+}
+.pipeline-note {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 8px 0 0;
+  line-height: 1.7;
 }
 .pipeline-index {
   font-family: 'JetBrains Mono', monospace;
