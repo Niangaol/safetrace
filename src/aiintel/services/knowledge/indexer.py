@@ -353,11 +353,26 @@ def enrichment_chunk_text(
         for poc in value.get("pocs") or []:
             lines.append(f"POC 候选：{poc.get('url')}（可信度 {poc.get('tier')}）")
     elif dimension == "asset":
+        # ⚠️ 判据**不能**用 `if not lines`：`lines` 里已经有 `identity`（段首那行），
+        # 所以它在任何情况下都非空 —— 早期就是这么写的，导致下面的兜底**从未生效**。
+        # 必须单独记"有没有真的产出资产行"。
+        has_asset_line = False
         for product in value.get("products") or []:
-            lines.append(
-                f"受影响资产：{product.get('vendor') or ''}:{product.get('product')} "
-                f"版本 {product.get('affected_versions')}"
-            )
+            if not isinstance(product, dict):
+                continue
+            label = f"{product.get('vendor') or ''}:{product.get('product') or ''}".strip(":")
+            if not label:
+                continue
+            lines.append(f"受影响资产：{label} 版本 {product.get('affected_versions')}")
+            has_asset_line = True
+        # ⚠️ `products` 可能为空**或里面是空对象**（资产清单未接入时 `degraded_to=mock`）——
+        # 实测 12 条 asset 富化的 `products` 全空，于是切片只剩编号。
+        # 这种"只有身份、没有结论"的切片是**纯噪音**：它对任何查询都像个弱匹配，
+        # 在 RRF 里排名反而很高，会挤掉真正的结论
+        # （实测问"怎么修复"时 `asset` 空切片排在 `fix` 结论前面）。
+        # 所以补上实际有的字段；仍为空则由下面的守卫拦掉。
+        if not has_asset_line and value.get("exposure_level"):
+            lines.append(f"暴露面评估：{value['exposure_level']}")
     elif dimension == "ai_risk":
         lines.append(
             f"AI 风险分类：{value.get('label') or value.get('category')}（{value.get('reason')}）"
@@ -365,6 +380,12 @@ def enrichment_chunk_text(
 
     text = "\n".join(line for line in lines if line and line.strip())
     if not text:
+        return ""
+    # ⚠️ **只有身份、没有正文的切片不要建**。`identity` 是调用方传进来的漏洞编号，
+    # 它本身不含任何结论信息；建出来的切片（如 `"CVE-2026-31001"`，14 字）
+    # 在检索里是纯噪音 —— 它跟任何查询都有微弱相似度，RRF 融合时反而容易进前列，
+    # 把真正的结论挤下去（实测踩到）。宁可少建一条，也不要污染检索空间。
+    if not text.strip() or text.strip() == identity.strip():
         return ""
     degraded = ""
     if evidence:

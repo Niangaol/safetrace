@@ -230,12 +230,88 @@ function stageState(name: string): 'done' | 'active' | 'skipped' | 'idle' {
   return finished.value ? 'skipped' : 'idle'
 }
 
+/** 进度条下方的选中阶段说明（避免只剩一个孤零零的步骤名） */
+const currentStage = computed(() => {
+  const names = qa.stages.map((s) => s.stage)
+  const last = names[names.length - 1]
+  if (last === 'done') return '完成'
+  if (last && STAGE_LABEL[last]) return STAGE_LABEL[last]
+  return ''
+})
+
+/** 每步的视觉状态 + 中文标签，模板只渲染结果、不再自己判断 */
+const STEP_TAG: Record<string, string> = {
+  done: '完成',
+  active: '进行中',
+  skipped: '未执行',
+  idle: '待运行',
+}
+const steps = computed(() =>
+  STAGE_ORDER.map((name, i) => {
+    const state = stageState(name)
+    return { name, index: i + 1, label: STAGE_LABEL[name], state, tag: STEP_TAG[state] }
+  }),
+)
+
 /** 本轮是否走了"无证据拒答"分支：后端会发一条 step=no_evidence 的轨迹 */
 const abstainedNoEvidence = computed(() => qa.traces.some((t) => t.step === 'no_evidence'))
 
 /** 收尾后仍未执行的阶段名（用于进度条下方的如实说明） */
 const skippedStages = computed(() =>
   finished.value ? STAGE_ORDER.filter((n) => !reachedStages.value.has(n)) : [],
+)
+
+/**
+ * 关键指标条：问答完成后一次性把"跑了多久 / 什么模型 / 几条引用 / 花了多少钱"摆出来。
+ * 之前这些信息散落在页面最底部的「本次运行」面板里，等于藏在最下面没人看；
+ * 数据完全相同（都来自后端 `done` 事件），只是换了位置。
+ */
+const headlineStats = computed(() =>
+  qa.meta
+    ? [
+        { k: '耗时', v: `${qa.meta.elapsedMs ?? '—'} ms` },
+        { k: '引用', v: `${qa.meta.citationCount} 条` },
+        { k: '模型', v: qa.meta.model ?? '—' },
+        { k: '成本', v: `¥${(qa.meta.costCny ?? 0).toFixed(4)}` },
+      ]
+    : [],
+)
+
+/** 运行参数条：这些是"本次是怎么提交的"，属于上下文，不该和结论指标抢主位 */
+const runParams = computed(() =>
+  qa.meta
+    ? [
+        {
+          k: '数据域',
+          v: qa.domain === 'private' ? '私有域' : '公开域',
+          tone: qa.domain === 'private' ? 'warn' : '',
+          hint: qa.domain === 'private' ? '仅检索本地边界/内部数据' : '检索全部公开情报源',
+        },
+        {
+          k: '降级',
+          v: qa.meta.degraded ? '是' : '否',
+          tone: qa.meta.degraded ? 'warn' : 'ok',
+          hint: qa.meta.degraded ? qa.degradedReason || '详见下方限制说明' : '未降级',
+        },
+        { k: '会话', v: qa.meta.sessionId ?? '—', mono: true },
+      ]
+    : [],
+)
+
+/**
+ * 限制与状态说明块是否需要出现。
+ * 只做显隐，不改任何一条文案——每条都是后端如实返回的（占位答案 / 降级 /
+ * 时效 / 注入筛查），漏渲染等于把限制条件藏起来。
+ */
+const hasLimits = computed(
+  () =>
+    qa.error !== '' ||
+    isSample.value ||
+    isPlaceholderAnswer.value ||
+    qa.degraded ||
+    qa.domain === 'private' ||
+    !!qa.staleWarning ||
+    !!qa.injectionGuard,
 )
 
 /** retrieve 阶段的实际轮次与命中数，作为"多轮检索真的发生过"的证据 */
@@ -288,56 +364,89 @@ onMounted(async () => {
 </script>
 
 <template>
-  <h1 class="page-title">情报问答 · 一次完整问答</h1>
-  <p class="page-subtitle">
-    提问 → 检索证据 → 推理链 → 带引用答案，一屏看完（每一步都可展开核对）
-  </p>
+  <!-- 页头：kicker + 标题 + 关键指标（指标就来自后端 done 事件，只是提前展示） -->
+  <header class="qa-head">
+    <div class="qa-head-main">
+      <span class="section-kicker">RAG · 可追溯问答</span>
+      <h1 class="page-title">情报问答 · 一次完整问答</h1>
+      <p class="page-subtitle">
+        提问 → 检索证据 → 推理链 → 带引用答案，一屏看完（每一步都可展开核对）
+      </p>
+    </div>
+    <div v-if="headlineStats.length" class="qa-head-stats">
+      <div v-for="s in headlineStats" :key="s.k" class="head-stat">
+        <span class="head-stat-k">{{ s.k }}</span>
+        <span class="head-stat-v">{{ s.v }}</span>
+      </div>
+    </div>
+  </header>
 
-  <!-- 提问区 -->
-  <div class="toolbar">
-    <input
-      v-model="question"
-      placeholder="输入问题后回车，例如：CVE-2026-31001 怎么修复？"
-      style="flex: 1 1 260px; min-width: 0"
-      @keyup.enter="submit()"
-    />
-    <button :disabled="!question.trim() || qa.thinking" @click="submit()">
-      <span v-if="qa.thinking" class="spinner" style="margin-right: 6px"></span>
-      {{ qa.thinking ? '生成中…' : '提问' }}
-    </button>
-    <button class="secondary" :disabled="!qa.thinking" @click="qa.stop()">中断</button>
-    <!-- C-05 数据域：public/private 由后端强制隔离与出网，前端只如实把选择发过去。
-         私有态按钮区的 title 说清语义，避免"选了私有=数据绝对安全"的误解。 -->
-    <div class="domain-switch" :class="{ private: qa.domain === 'private' }" role="group" aria-label="数据域">
-      <button
-        v-for="d in (['public', 'private'] as const)"
-        :key="d"
-        type="button"
-        :class="{ active: qa.domain === d }"
-        :disabled="isSample"
-        :title="
-          d === 'public'
-            ? '公开域：检索全部公开情报源（默认）'
-            : '私有域：仅检索本地边界/内部数据；后端按 C-05 隔离、出网策略拒绝（A-03），前端不做安全承诺'
-        "
-        @click="qa.setDomain(d)"
+  <!-- 提问区：终端式输入控制台，作为整页的视觉重心 -->
+  <div class="panel fade-in qa-ask">
+    <div class="ask-bar">
+      <span class="ask-title">Ask · 提问</span>
+      <!-- C-05 数据域：public/private 由后端强制隔离与出网，前端只如实把选择发过去。
+           私有态按钮区的 title 说清语义，避免"选了私有=数据绝对安全"的误解。 -->
+      <div
+        class="domain-switch"
+        :class="{ private: qa.domain === 'private' }"
+        role="group"
+        aria-label="数据域"
       >
-        {{ d === 'public' ? '公开域' : '私有域' }}
+        <button
+          v-for="d in (['public', 'private'] as const)"
+          :key="d"
+          type="button"
+          :class="{ active: qa.domain === d }"
+          :disabled="isSample"
+          :title="
+            d === 'public'
+              ? '公开域：检索全部公开情报源（默认）'
+              : '私有域：仅检索本地边界/内部数据；后端按 C-05 隔离、出网策略拒绝（A-03），前端不做安全承诺'
+          "
+          @click="qa.setDomain(d)"
+        >
+          {{ d === 'public' ? '公开域' : '私有域' }}
+        </button>
+      </div>
+    </div>
+
+    <div class="ask-console">
+      <span class="ask-prompt" aria-hidden="true">❯</span>
+      <input
+        v-model="question"
+        class="ask-input"
+        placeholder="输入问题后回车，例如：CVE-2026-31001 怎么修复？"
+        @keyup.enter="submit()"
+      />
+      <div class="ask-actions">
+        <button :disabled="!question.trim() || qa.thinking" @click="submit()">
+          <span v-if="qa.thinking" class="spinner" style="margin-right: 6px"></span>
+          {{ qa.thinking ? '生成中…' : '提问' }}
+        </button>
+        <button class="secondary" :disabled="!qa.thinking" @click="qa.stop()">中断</button>
+      </div>
+    </div>
+    <div class="ask-hint">
+      <kbd>Enter</kbd> 提交 ·
+      <template v-if="qa.domain === 'private'">
+        当前为<b>私有域</b>：只检索本地边界/内部数据，不访问外部源
+      </template>
+      <template v-else>当前为<b>公开域</b>：检索全部公开情报源</template>
+    </div>
+
+    <div class="chips-row">
+      <span class="chips-label">示例问题</span>
+      <button
+        v-for="s in SUGGESTIONS"
+        :key="s"
+        class="chip"
+        :disabled="qa.thinking"
+        @click="submit(s)"
+      >
+        {{ s }}
       </button>
     </div>
-  </div>
-
-  <div style="display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px">
-    <button
-      v-for="s in SUGGESTIONS"
-      :key="s"
-      class="secondary"
-      style="font-size: 12px; padding: 5px 12px"
-      :disabled="qa.thinking"
-      @click="submit(s)"
-    >
-      {{ s }}
-    </button>
   </div>
 
   <!-- 流水线进度 -->
@@ -354,19 +463,21 @@ onMounted(async () => {
         </template>
       </span>
     </div>
-    <div class="pipeline">
-      <div
-        v-for="(name, i) in STAGE_ORDER"
-        :key="name"
-        class="pipeline-step"
-        :class="stageState(name)"
-      >
-        <span class="pipeline-index">{{ i + 1 }}</span>
-        <span class="pipeline-name">{{ STAGE_LABEL[name] }}</span>
-        <span v-if="stageState(name) === 'skipped'" class="pipeline-skip">未执行</span>
+    <div class="pipeline is-upgraded">
+      <div v-for="s in steps" :key="s.name" class="pipeline-step" :class="`state-${s.state}`">
+        <span class="pipeline-num">{{ s.index }}</span>
+        <div class="pipeline-meta">
+          <div class="pipeline-title">{{ s.label }}</div>
+          <div class="pipeline-tag">
+            <span :class="['tag', `tag-${s.state}`]">{{ STEP_TAG[s.state] }}</span>
+          </div>
+        </div>
+        <span v-if="s.state === 'active'" class="pulse-dot"></span>
       </div>
     </div>
-    <!-- 未执行的阶段必须解释原因，不能让人误读成"卡住/坏了" -->
+    <p v-if="currentStage" class="pipeline-status">
+      当前阶段：<strong>{{ currentStage }}</strong>
+    </p>
     <p v-if="skippedStages.length" class="pipeline-note">
       <template v-if="abstainedNoEvidence">
         本轮检索未命中可引用证据，已按<b>无证据拒答</b>处理
@@ -385,59 +496,87 @@ onMounted(async () => {
     </p>
   </div>
 
-  <!-- 答案占位/降级说明：必须在最显眼处 -->
-  <div v-if="isSample" class="notice warn" style="margin-bottom: 14px">
-    <strong>当前为渲染样例（`/qa?demo=1`）。</strong>
-    内容取自本仓一次真实问答的实测输出，用于快速验收排版与高亮；
-    <strong>不代表系统此刻的运行状态</strong>。
-  </div>
-  <div v-if="isPlaceholderAnswer" class="notice warn" style="margin-bottom: 14px">
-    <strong>当前为演示占位答案，不是模型分析结果。</strong>
-    后端未配置 LLM 凭据（<code>LLM_API_KEY</code>），走 cache provider 占位，
-    因此 <code>cost_cny = 0</code>。检索、引用、推理链都是真实的；只有最终文字是占位。
-  </div>
-  <div v-else-if="qa.degraded" class="notice warn" style="margin-bottom: 14px">
-    <strong>{{ qa.llmDegraded ? '本次回答由降级模型生成' : '本次回答处于降级状态' }}</strong>
-    <!-- 必须说清"降级"是哪种：模型降级（云端不可用/预算耗尽，答案不是云端模型产出的）
-         与"自检质量分偏低"（答案本身支撑不足）对读者的含义完全不同。 -->
-    <span v-if="qa.degradedReason">：{{ qa.degradedReason }}</span>
-    <span v-else>（后端 <code>degraded=true</code>）</span>
-    ，请对照下方证据判断可信度。
-  </div>
-  <div v-if="qa.error" class="notice error" style="margin-bottom: 14px">{{ qa.error }}</div>
-  <!-- C-05 私有域意图提示：只要本次处于 private，就常驻说明"只查本地边界"，
-       后端策略拒绝时会由上面的 qa.error 如实透出（4xx 业务错误不做 mock 回退）。 -->
-  <div v-if="qa.domain === 'private'" class="notice warn" style="margin-bottom: 14px">
-    <strong>私有域问答（仅本地边界）。</strong>
-    本轮以 <code>data_domain=private</code> 提交：只检索本地索引/内部数据，不访问外部源；
-    输出可能更稀疏，若查询超出本地可用证据会被如实说明，不会用公开数据顶替。
-  </div>
-  <!-- C-04 时效提示：契约要求"过龄或未知必须显式可见"。
-       stale_warning 为 null 表示证据新鲜且时效全已知——那是唯一不用提示的情况。 -->
-  <div v-if="qa.staleWarning" class="notice warn" style="margin-bottom: 14px">
-    {{ qa.staleWarning.note }}
-  </div>
-  <!-- C-04 注入筛查状态（契约 v1.1.3；A-04 已落地，本仓有检测器）：
-       screened=true = 本轮做过规则筛查（筛出危险时也是 true，含义是"筛过"而非"干净"，
-       检出时 note 写"检出 N/total…"并给出 flags）；
-       screened=false 只在"无引用"时出现（没有输入就没有筛查动作），必须显式说"未筛查"。
-       note 结尾如实声明"不保证覆盖全部注入手法"——界面不得替后端把"没检出"读成"一定安全"。 -->
-  <div
-    v-if="qa.injectionGuard"
-    class="notice"
-    :class="{ warn: (qa.injectionGuard.flags?.length ?? 0) > 0 }"
-    style="margin-bottom: 14px"
-  >
-    <strong>{{
-      qa.injectionGuard.screened ? '注入筛查：已执行' : '注入筛查：未执行'
-    }}</strong>
-    <span v-if="qa.injectionGuard.screened === false">（本轮无引用证据，无筛查动作）</span>
-    <template v-if="(qa.injectionGuard.flags?.length ?? 0) > 0">
-      <span class="inject-flags">
-        <span v-for="f in qa.injectionGuard.flags" :key="f" class="badge warn">{{ f }}</span>
-      </span>
-    </template>
-    <div style="margin-top: 4px">{{ qa.injectionGuard.note }}</div>
+  <!--
+    答案占位 / 降级 / 报错 / 私有域 / 时效 / 注入筛查：这些是"本次结果的可信边界"。
+    原来是一串各自独立的 warn 盒子，视觉上互相竞争、也看不出是同一类东西；
+    现在归到一个"限制与状态"块里（文案一字未改，只换排版），条目化之后
+    可以一眼扫完，且仍然固定出现在答案之前——不能让限制条件被折叠进角落。
+  -->
+  <div v-if="hasLimits" class="limits fade-in" :class="{ 'has-error': !!qa.error }">
+    <div class="limits-head">
+      <span class="limits-title"><span class="dot" />限制与状态</span>
+      <span class="limits-sub">以下均由后端如实返回，不是界面装饰</span>
+    </div>
+    <ul class="limits-list">
+      <li v-if="qa.error" class="limit-item is-error">
+        <span class="limit-mark">!</span>
+        <span class="limit-body">{{ qa.error }}</span>
+      </li>
+      <li v-if="isSample" class="limit-item">
+        <span class="limit-mark">!</span>
+        <span class="limit-body">
+          <strong>当前为渲染样例（<code class="mono">/qa?demo=1</code>）。</strong>
+          内容取自本仓一次真实问答的实测输出，用于快速验收排版与高亮；
+          <strong>不代表系统此刻的运行状态</strong>。
+        </span>
+      </li>
+      <li v-if="isPlaceholderAnswer" class="limit-item">
+        <span class="limit-mark">!</span>
+        <span class="limit-body">
+          <strong>当前为演示占位答案，不是模型分析结果。</strong>
+          后端未配置 LLM 凭据（<code class="mono">LLM_API_KEY</code>），走 cache provider 占位，
+          因此 <code class="mono">cost_cny = 0</code>。检索、引用、推理链都是真实的；只有最终文字是占位。
+        </span>
+      </li>
+      <!-- 必须说清"降级"是哪种：模型降级（云端不可用/预算耗尽，答案不是云端模型产出的）
+           与"自检质量分偏低"（答案本身支撑不足）对读者的含义完全不同。 -->
+      <li v-else-if="qa.degraded" class="limit-item">
+        <span class="limit-mark">!</span>
+        <span class="limit-body">
+          <strong>{{
+            qa.llmDegraded ? '本次回答由降级模型生成' : '本次回答处于降级状态'
+          }}</strong>
+          <span v-if="qa.degradedReason">：{{ qa.degradedReason }}</span>
+          <span v-else>（后端 <code class="mono">degraded=true</code>）</span>
+          ，请对照下方证据判断可信度。
+        </span>
+      </li>
+      <!-- C-05 私有域意图提示：只要本次处于 private，就常驻说明"只查本地边界"，
+           后端策略拒绝时会由上面的 qa.error 如实透出（4xx 业务错误不做 mock 回退）。 -->
+      <li v-if="qa.domain === 'private'" class="limit-item is-info">
+        <span class="limit-mark">i</span>
+        <span class="limit-body">
+          <strong>私有域问答（仅本地边界）。</strong>
+          本轮以 <code class="mono">data_domain=private</code> 提交：只检索本地索引/内部数据，
+          不访问外部源；输出可能更稀疏，若查询超出本地可用证据会被如实说明，
+          不会用公开数据顶替。
+        </span>
+      </li>
+      <!-- C-04 时效提示：契约要求"过龄或未知必须显式可见"。
+           stale_warning 为 null 表示证据新鲜且时效全已知——那是唯一不用提示的情况。 -->
+      <li v-if="qa.staleWarning" class="limit-item">
+        <span class="limit-mark">!</span>
+        <span class="limit-body">{{ qa.staleWarning.note }}</span>
+      </li>
+      <!-- C-04 注入筛查状态（契约 v1.1.3；A-04 已落地，本仓有检测器）：
+           screened=true = 本轮做过规则筛查（筛出危险时也是 true，含义是"筛过"而非"干净"，
+           检出时 note 写"检出 N/total…"并给出 flags）；
+           screened=false 只在"无引用"时出现（没有输入就没有筛查动作），必须显式说"未筛查"。
+           note 结尾如实声明"不保证覆盖全部注入手法"——界面不得替后端把"没检出"读成"一定安全"。 -->
+      <li v-if="qa.injectionGuard" class="limit-item" :class="{ 'is-error': (qa.injectionGuard.flags?.length ?? 0) > 0 }">
+        <span class="limit-mark">{{ (qa.injectionGuard.flags?.length ?? 0) > 0 ? '!' : 'i' }}</span>
+        <span class="limit-body">
+          <strong>{{
+            qa.injectionGuard.screened ? '注入筛查：已执行' : '注入筛查：未执行'
+          }}</strong>
+          <span v-if="qa.injectionGuard.screened === false">（本轮无引用证据，无筛查动作）</span>
+          <span v-if="(qa.injectionGuard.flags?.length ?? 0) > 0" class="inject-flags">
+            <span v-for="f in qa.injectionGuard.flags" :key="f" class="badge warn">{{ f }}</span>
+          </span>
+          <span class="limit-detail">{{ qa.injectionGuard.note }}</span>
+        </span>
+      </li>
+    </ul>
   </div>
 
   <!-- 轨迹：过程可视化（干到哪一步显示到哪一步） -->
@@ -708,12 +847,15 @@ onMounted(async () => {
         <strong>¥{{ (qa.meta.costCny ?? 0).toFixed(4) }}</strong>
         <span v-if="qa.meta.costCny === 0" class="muted" style="font-size: 11px">（cache 占位，未真实调用）</span>
       </div>
-      <div><span class="label">降级</span><strong>{{ qa.meta.degraded ? '是' : '否' }}</strong></div>
+      <div>
+        <span class="label">降级</span>
+        <strong>{{ qa.meta.degraded ? '是' : '否' }}</strong>
+      </div>
       <div>
         <span class="label">数据域</span>
         <strong>{{ qa.domain === 'private' ? '私有域' : '公开域' }}</strong>
       </div>
-      <div><span class="label">会话</span><code style="font-size: 11px">{{ qa.meta.sessionId }}</code></div>
+      <div><span class="label">会话</span><code class="mono" style="font-size: 11px">{{ qa.meta.sessionId }}</code></div>
     </div>
     <p v-if="qa.metrics" class="muted" style="font-size: 11px; margin: 10px 0 0">
       今日累计 LLM 花费 ¥{{ qa.metrics.cost.total_cny.toFixed(2) }} / 预算 ¥{{ qa.metrics.cost.daily_budget_cny }}
@@ -722,10 +864,19 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* ── 检索流水线：带连线的时间轴，而不是一排药丸 ──────────────
+   药丸式的五个步骤在一行里彼此孤立，看不出"先后顺序"；
+   改成 stepper（序号圆点 + 连接线 + 名称 + 状态标签）之后，
+   "走到哪一步"是一条线，而不是五个并列状态。 */
 .pipeline {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+.pipeline.is-upgraded {
+  flex-wrap: nowrap;
+  gap: 0;
+  align-items: stretch;
 }
 .pipeline-step {
   display: flex;
@@ -736,42 +887,341 @@ onMounted(async () => {
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--muted);
+  min-width: 0;
 }
-.pipeline-step.done {
-  border-color: rgba(34, 197, 94, 0.4);
-  color: var(--text);
-  background: rgba(34, 197, 94, 0.08);
+/* stepper 单步：去掉外框，靠序号圆点与连线表达结构 */
+.pipeline-step.state-done,
+.pipeline-step.state-active,
+.pipeline-step.state-skipped,
+.pipeline-step.state-idle {
+  flex: 1 1 0;
+  border: none;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  position: relative;
+  opacity: 1;
 }
-.pipeline-step.active {
-  border-color: rgba(56, 189, 248, 0.6);
-  color: var(--text);
-  background: rgba(56, 189, 248, 0.12);
+/* 连接线：画在每步之间，圆点之后、下一圆点之前 */
+.pipeline-step.state-done::after,
+.pipeline-step.state-active::after,
+.pipeline-step.state-skipped::after,
+.pipeline-step.state-idle::after {
+  content: '';
+  position: absolute;
+  left: calc(10px + 22px + 8px);
+  right: -1px;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
 }
-.pipeline-step.skipped {
-  border-color: rgba(120, 120, 120, 0.35);
+.pipeline-step.state-done::after { background: rgba(34, 197, 94, 0.45); }
+.pipeline-step.state-active::after { background: linear-gradient(90deg, var(--accent), var(--border)); }
+/* 最后一步不画线 */
+.pipeline-step:last-child::after { display: none; }
+/* 已到达的步给一层极淡的底，避免和"待运行"糊在一起 */
+.pipeline-step.state-done { background: rgba(34, 197, 94, 0.06); }
+.pipeline-step.state-active {
+  background: rgba(56, 189, 248, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+
+.pipeline-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  position: relative;
+  z-index: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.pipeline-step.state-done .pipeline-num {
+  color: #06121f;
+  background: #4ade80;
+  border-color: #4ade80;
+}
+.pipeline-step.state-active .pipeline-num {
+  color: #06121f;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.pipeline-step.state-skipped .pipeline-num {
   color: var(--muted);
   background: transparent;
-  opacity: 0.8;
+  border-style: dashed;
 }
-.pipeline-skip {
-  margin-left: 4px;
-  font-size: 11px;
-  padding: 1px 4px;
+
+.pipeline-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pipeline-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted-light);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pipeline-step.state-done .pipeline-title { color: var(--text); }
+.pipeline-step.state-active .pipeline-title { color: var(--text-bright); }
+.pipeline-step.state-skipped .pipeline-title { color: var(--muted); }
+
+.tag {
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 5px;
   border-radius: 3px;
-  border: 1px dashed var(--border);
-  opacity: 0.85;
+  border: 1px solid transparent;
+  white-space: nowrap;
 }
+.tag-done { color: #4ade80; background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.3); }
+.tag-active { color: var(--accent); background: var(--accent-glow); border-color: rgba(56, 189, 248, 0.4); }
+.tag-skipped { color: var(--muted); border-color: var(--border); border-style: dashed; }
+.tag-idle { color: #475569; background: rgba(100, 116, 139, 0.1); }
+
+.pulse-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: pulse 1.2s infinite;
+}
+
+.pipeline-status {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pipeline-status strong { color: var(--text); font-weight: 600; }
 .pipeline-note {
   font-size: 11px;
   color: var(--muted);
   margin: 8px 0 0;
   line-height: 1.7;
 }
-.pipeline-index {
+/* 窄屏（5 步会被压扁）退回可换行的药 pills，但保留序号与状态标签 */
+@media (max-width: 900px) {
+  .pipeline.is-upgraded { flex-wrap: wrap; gap: 6px; }
+  .pipeline-step.state-done,
+  .pipeline-step.state-active,
+  .pipeline-step.state-skipped,
+  .pipeline-step.state-idle {
+    flex: 1 1 auto;
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+  }
+  .pipeline-step.state-done { border-color: rgba(34, 197, 94, 0.4); }
+  .pipeline-step.state-active { border-color: rgba(56, 189, 248, 0.6); }
+  .pipeline-step.state-skipped { border-color: rgba(120, 120, 120, 0.35); }
+  .pipeline-step::after { display: none; }
+}
+
+/* ── 提问控制台：把输入框做成页面的视觉重心 ────────────── */
+.ask-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.ask-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.ask-title::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.ask-console {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 14px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.06), 0 0 24px rgba(56, 189, 248, 0.07);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.ask-console:focus-within {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-glow), 0 0 26px rgba(56, 189, 248, 0.16);
+}
+.ask-prompt {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.ask-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 10px 0;
+  font-size: 15px;
+  color: var(--text-bright);
+  font-family: inherit;
+}
+.ask-input:focus { box-shadow: none; border: none; }
+.ask-input::placeholder { color: #475569; }
+.ask-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ask-actions button { padding: 8px 18px; }
+.ask-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.ask-hint kbd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--muted-light);
+}
+@media (max-width: 620px) {
+  .ask-console { flex-wrap: wrap; padding: 10px 12px; }
+  .ask-actions { width: 100%; }
+  .ask-actions button { flex: 1; }
+}
+
+/* ── 预置问题：做成"示例问题"标签行，而不是一排无名按钮 ── */
+.chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 0;
+  align-items: center;
+}
+.chips-label {
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.chip {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--muted-light);
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.chip:hover {
+  color: var(--text-bright);
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  box-shadow: none;
+  transform: none;
+}
+.chip:active { transform: none; }
+
+/* ── 限制与状态说明：统一成"标题 + 条目列表" ───────────── */
+.limits {
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.07), rgba(251, 191, 36, 0.03));
+  border-left: 3px solid var(--medium);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.limits.has-error { border-color: rgba(244, 63, 94, 0.35); border-left-color: var(--critical); }
+.limits-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.limits-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-bright);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.limits-title .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--medium);
+  box-shadow: 0 0 8px var(--medium);
+}
+.limits.has-error .limits-title .dot { background: var(--critical); box-shadow: 0 0 8px var(--critical); }
+.limits-sub { font-size: 11px; color: var(--muted); }
+.limits-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.limit-item {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted-light);
+  padding-top: 8px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.18);
+}
+.limit-item:first-child { border-top: none; padding-top: 0; }
+.limit-mark {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--medium);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  margin-top: 1px;
+}
+.limit-item.is-error .limit-mark {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--critical);
+  border-color: rgba(244, 63, 94, 0.4);
+}
+.limit-item.is-info .limit-mark {
+  background: var(--accent-glow);
+  color: var(--accent);
+  border-color: rgba(56, 189, 248, 0.4);
+}
+.limit-body { min-width: 0; }
+.limit-body strong { color: var(--text-bright); font-weight: 600; }
+.limit-body code, .limit-body .mono {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
-  opacity: 0.7;
 }
+.limit-detail { margin-top: 3px; }
 
 .qa-grid {
   display: grid;

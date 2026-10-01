@@ -88,8 +88,23 @@ def doc_key(owner_type: str, owner_id: str, chunk_no: int) -> str:
 
 
 def parse_doc_key(doc: str) -> tuple[str, str, str]:
-    owner_type, owner_id, chunk_no = doc.split(DOC_SEP, 2)
-    return owner_type, owner_id, chunk_no
+    """把切片键（`owner_type::owner_id::chunk_no`）拆成三元组。
+
+    ⚠️ **必须容错，不能抛**：这个函数在检索主链路上被到处调用
+    （去重、组合键匹配、取内容），而键来自数据库里的历史数据 ——
+    一条格式异常的老切片不该让**整轮检索**崩掉（实测：畸形键会
+    抛 `ValueError: not enough values to unpack`，把整个问答打挂）。
+
+    代价是缺失字段用空串补齐，调用方据此自然匹配不到任何东西（等于跳过该条），
+    这正是我们要的"宁少一条，不整轮失败"。
+    """
+
+    parts = doc.split(DOC_SEP, 2)
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    padded = [*parts, "", ""][:3]
+    logger.debug("切片键格式异常，按空串补齐后跳过匹配: %r", doc)
+    return padded[0], padded[1], padded[2]
 
 
 async def embed(text: str) -> list[float] | None:
@@ -261,32 +276,44 @@ async def _semantic_recall(
         #    于是"50 条候选"会展开成 **1257 条内容**，嵌入那一步要 11 秒。
         #    语义重排关心的是"**哪个漏洞**相关"，不是"哪个切片相关"，
         #    所以每个 owner 只取一条代表切片（`chunk_no` 最小的那条，通常是开头）。
-        from sqlalchemy import func as sa_func
         from sqlalchemy import tuple_
 
         keys = [parse_doc_key(doc) for doc in candidates]
         pairs = {(k[0], k[1]) for k in keys}
-        inner = (
-            select(
-                Chunk.owner_type.label("ot"),
-                Chunk.owner_id.label("oi"),
-                sa_func.min(Chunk.chunk_no).label("cn"),
+
+        # 先按**组合键**取回这些 owner 的切片（`tuple_` 是必须的，见上）；
+        # 再在 Python 里按 owner_type 决定取多少条 —— 比拼一段带 `min()` 的
+        # 相关子查询清晰得多，且这里的行数本来就可控。
+        #
+        # 两类 owner 取法不同：
+        # - `vuln` 每个 owner **只取代表切片**（`chunk_no` 最小 = 开头那条），
+        #   否则一个漏洞几十个切片会把余弦计算的配额吃光（实测 50 候选 → 1257 条内容、
+        #   嵌入要 11 秒）；
+        # - `enrichment` / `paper` **保留全部切片**。富化是"一维一切片"，
+        #   只取 `chunk_no` 最小那条等于只拿字典序第一个维度 ——
+        #   实测问"怎么修复"却召回 `#0 = ai_risk`（风险分类），**拿不到 `fix` 结论**。
+        #   保留全部维度后由**余弦相似度**决定哪个维度最相关（语义检索本该如此）。
+        all_dims_types = {"enrichment", "paper"}
+        rows = session.execute(
+            select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content).where(
+                tuple_(Chunk.owner_type, Chunk.owner_id).in_(pairs)
             )
-            .where(tuple_(Chunk.owner_type, Chunk.owner_id).in_(pairs))
-            .group_by(Chunk.owner_type, Chunk.owner_id)
-        ).subquery()
-        stmt = select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content).join(
-            inner,
-            (Chunk.owner_type == inner.c.ot)
-            & (Chunk.owner_id == inner.c.oi)
-            & (Chunk.chunk_no == inner.c.cn),
-        )
-        rows = session.execute(stmt).all()
+        ).all()
+
+        best_no: dict[tuple[str, str], int] = {}
+        for owner_type, owner_id, chunk_no, _content in rows:
+            if owner_type in all_dims_types:
+                continue
+            key = (owner_type, owner_id)
+            if key not in best_no or chunk_no < best_no[key]:
+                best_no[key] = chunk_no
+        rows = [r for r in rows if r[0] in all_dims_types or r[2] == best_no.get((r[0], r[1]))]
         logger.debug(
-            "语义重排候选：%d 个切片 key → %d 个 owner → %d 条代表切片",
+            "语义重排候选：%d 个切片 key → %d 个 owner → %d 条待算余弦（%d 类 owner 保留全部维度）",
             len(candidates),
             len(pairs),
             len(rows),
+            len(all_dims_types),
         )
     else:
         stmt = select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content)
@@ -395,24 +422,73 @@ def _prefer_enriched(session: Any, docs: list[str]) -> list[str]:
     if not docs:
         return docs
     vuln_owners = {parse_doc_key(d)[1] for d in docs if d.startswith("vuln::")}
-    if not vuln_owners:
-        return docs
     try:
-        rows = session.execute(
-            select(Vuln.cve_id)
-            .where(Vuln.cve_id.in_(vuln_owners))
-            .where(select(Enrichment.id).where(Enrichment.vuln_id == Vuln.id).exists())
-        ).all()
-        enriched = {r[0] for r in rows}
+        enriched: set[str] = set()
+        if vuln_owners:
+            rows = session.execute(
+                select(Vuln.cve_id)
+                .where(Vuln.cve_id.in_(vuln_owners))
+                .where(select(Enrichment.id).where(Enrichment.vuln_id == Vuln.id).exists())
+            ).all()
+            enriched = {r[0] for r in rows}
     except Exception as exc:  # noqa: BLE001 - 偏好失败不该影响检索
         logger.debug("富化偏好不可用，保持原序: %s", exc)
         return docs
-    if not enriched:
-        return docs
-    hot = [d for d in docs if d.startswith("vuln::") and parse_doc_key(d)[1] in enriched]
-    cold = [d for d in docs if d not in hot]
-    logger.debug("富化偏好：%d 条已富化提前", len(hot))
-    return hot + cold
+
+    # ⚠️ 三级优先，**顺序不能反**（实测踩过）：
+    #
+    #   ① `enrichment` 切片本身 —— 这是**结论**（"修复建议：升级到 X"），
+    #      用户问"怎么修"要的就是它；
+    #   ② `vuln` 切片，但该漏洞**有富化** —— 点进去面板有内容；
+    #   ③ 其余（未富化漏洞、论文等）。
+    #
+    # 早期实现只做了 ②（提升"已富化漏洞的 vuln 切片"），**漏了 ①** ——
+    # 于是 vLLM 的 `vuln` 切片排在它自己的 `fix` 结论前面，
+    # 实测问"怎么修复"返回 6 条全是 `vuln`、**一条修复结论都没有**。
+    conclusion = [d for d in docs if d.startswith("enrichment::")]
+    hot = [
+        d
+        for d in docs
+        if d.startswith("vuln::") and parse_doc_key(d)[1] in enriched and d not in conclusion
+    ]
+    cold = [d for d in docs if d not in conclusion and d not in hot]
+    logger.debug("富化偏好：结论 %d 条、已富化漏洞切片 %d 条提前", len(conclusion), len(hot))
+    return conclusion + hot + cold
+
+
+def _converge_by_owner(docs: list[str], *, per_owner: int = 1) -> list[str]:
+    """每个 `(owner_type, owner_id)` **最多保留 `per_owner` 条**，其余丢弃。
+
+    ## 为什么必须做
+
+    融合后的候选是**切片级**的，而一个 owner 可能贡献几十条切片：
+    实测一个漏洞有几十个 `vuln` 切片（`chunk_no` 0..N），
+    而 `enrichment` 是**一维一条**。
+
+    于是 `top_k` 名额被切片多的 owner 吃光 —— 实测问
+    `CVE-2026-31001 怎么修复？`，返回的 6 条全是 `vuln` 切片，
+    **一条修复结论都没有**。这不是"检索不到"，是"排不进来"。
+
+    收敛到每 owner 一条后，引用列表变成"**一个漏洞一条**"，
+    这本来也是引用该有的粒度（用户点开的是漏洞，不是内部切片）。
+
+    ## 保留哪一条
+
+    **保留该 owner 在 `docs` 里排名最前的那条**（即融合分数最高的）。
+    对 `vuln` 而言通常是开头那条（含 CVE 编号与概述）；
+    对 `enrichment` 而言是被问到的那个维度的结论。
+    """
+
+    seen: dict[tuple[str, str], int] = {}
+    out: list[str] = []
+    for doc in docs:
+        key = parse_doc_key(doc)[:2]
+        n = seen.get(key, 0)
+        if n >= per_owner:
+            continue
+        seen[key] = n + 1
+        out.append(doc)
+    return out
 
 
 async def hybrid_search(
@@ -503,12 +579,39 @@ async def hybrid_search(
         fusion_scores = _rrf_scores(active)
         # 同等相关时**优先展示已富化的条目**（见函数说明：不改变相关性，只做同分偏好）
         fused = _prefer_enriched(session, fused)
+        # **每个 owner 只占一个名额**：否则切片多的 owner（`vuln` 一条漏洞几十个切片）
+        # 会把 `top_k` 吃光，`enrichment` 结论（一维一条）永远排不进去。
+        # 这一步是"问了怎么修却答不出修复建议"的直接修复点。
+        fused = _converge_by_owner(fused)
+        import os as _os
 
+        if _os.environ.get("DSH_DEBUG_FUSE"):
+            _d: dict[str, int] = {}
+            for _x in fused:
+                _d[_x.split("::")[0]] = _d.get(_x.split("::")[0], 0) + 1
+            logger.warning("DEBUG fused 构成=%s 前8=%s", _d, fused[:8])
+
+        # ⚠️ **必须按组合键取内容，且必须在这里做「每 owner 一条」的收敛。**
+        #
+        # 两个坑（都在本文件另一处犯过，这里是同一类问题的第二次出现）：
+        #
+        # 1. **两个独立 `.in_()` 是笛卡尔放宽**：`(owner_type, owner_id)` 是组合键，
+        #    拆开写等于 `owner_type ∈ … AND owner_id ∈ …`，会把 `enrichment` 切片
+        #    换到别的 owner 上。实测冷启动库上 `fused` 的正确组合只有 50 个，
+        #    却查出 69 条 `enrichment`（跨 owner 串了）。
+        # 2. **一个 owner 有几十条切片**（`vuln` 最多、`enrichment` 一维一条）。
+        #    `top_k * 3` 的融合名额会被切片多的 owner 占满 ——
+        #    实测问"CVE-2026-31001 怎么修复"，`enrichment` 只召回 1/1451，
+        #    结果**引用里一条修复结论都没有**（这正是"问了怎么修却答不出"的直接原因）。
+        #
+        # 所以：先按 owner 去重（`vuln` 取开头那条 = `chunk_no` 最小；`enrichment`
+        # 取融合排名最高的那条，即修复/影响结论），再让每个 owner 只占一个名额。
         keys = {parse_doc_key(doc) for doc in fused}
+        from sqlalchemy import tuple_
+
         rows = session.execute(
             select(Chunk.owner_type, Chunk.owner_id, Chunk.chunk_no, Chunk.content).where(
-                Chunk.owner_type.in_({k[0] for k in keys}),
-                Chunk.owner_id.in_({k[1] for k in keys}),
+                tuple_(Chunk.owner_type, Chunk.owner_id).in_({(k[0], k[1]) for k in keys})
             )
         ).all()
         content_map = {doc_key(r[0], r[1], r[2]): r[3] for r in rows}

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import random
 import uuid
 from pathlib import Path
@@ -1063,12 +1064,103 @@ def seed(db_path: str) -> dict[str, int]:
     return counts
 
 
+def seed_enrichment_chunks(db_path: str) -> int:
+    """把 `enrichment` 表里的富化结论**也切成检索切片**，返回写入条数。
+
+    ## 为什么必须补这一步
+
+    `seed()` 只写 `enrichment` **表**，不写对应的 `chunk` ——
+    实测冷启动（fresh clone → `demo_seed.py`）后：
+
+    | | 冷启动库 | 完整库 |
+    | --- | --- | --- |
+    | `enrichment` 行 | 69 | 583 |
+    | **`enrichment` 切片** | **0** | **583** |
+
+    后果是**问"这个漏洞怎么修"召回不到任何修复结论** ——
+    而黄金集 20 题问的全是这些合成 CVE。评委会看到问答质量明显低于本机演示。
+
+    修法：用**与在线路径同一套口径**（`indexer.enrichment_chunk_text()`）
+    从 `enrichment` 表派生切片，避免两处口径漂移。
+
+    ## 为什么单独跑一次而不是塞进 `seed()`
+
+    `seed()` 里的 chunk 是**裸 SQL** 先于 ORM session 写入的（简化表没有
+    `embedding` 列，ORM 会报列不存在），而 `enrichment` 是 session 里写的。
+    所以只能在 commit 之后回读一次 —— 这样也更简单：数据已经是最终形态。
+    """
+
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _root = _Path(__file__).resolve().parent.parent
+    if str(_root / "src") not in _sys.path:
+        _sys.path.insert(0, str(_root / "src"))
+
+    from sqlalchemy import create_engine, text
+
+    from aiintel.services.knowledge.indexer import enrichment_chunk_text
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    written = 0
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                "select v.cve_id, e.dimension, e.value, e.evidence "
+                "from enrichment e join vuln v on v.id = e.vuln_id "
+                "where v.cve_id is not null and e.evidence is not null and e.evidence != '[]' "
+                "order by v.cve_id, e.dimension"
+            )
+        ).all()
+
+        # 每个 owner 的切片编号接着 `vuln` 切片的编号往后排，避免不同 owner_type
+        # 之间的编号含义混乱；`enrichment` 是独立 owner_type，从 0 起即可。
+        next_no: dict[str, int] = {}
+        for cve, dim, value, evidence in rows:
+            val = value
+            if isinstance(val, str) and val:
+                try:
+                    val = json.loads(val)
+                except ValueError:
+                    val = {}
+            ev = evidence
+            if isinstance(ev, str) and ev:
+                try:
+                    ev = json.loads(ev)
+                except ValueError:
+                    ev = []
+            body = enrichment_chunk_text(str(dim or ""), val or {}, ev or [], identity=str(cve))
+            if not body:
+                continue
+            n = next_no.get(str(cve), 0)
+            next_no[str(cve)] = n + 1
+            conn.execute(
+                text(
+                    "INSERT INTO chunk (id, owner_type, owner_id, chunk_no, content, tsv, "
+                    "created_at) VALUES (:id, 'enrichment', :owner_id, :chunk_no, :content, "
+                    ":tsv, :created_at)"
+                ),
+                {
+                    "id": uuid.uuid4().hex,
+                    "owner_id": str(cve),
+                    "chunk_no": n,
+                    "content": body,
+                    "tsv": body,
+                    "created_at": _hours_ago(1),
+                },
+            )
+            written += 1
+    engine.dispose()
+    return written
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="生成演示数据")
     parser.add_argument("--db", default="data/demo.db", help="SQLite 文件路径")
     args = parser.parse_args()
 
     counts = seed(args.db)
+    counts["enrichment_chunks"] = seed_enrichment_chunks(args.db)
     print(f"已生成演示数据 -> {args.db}")
     for key, value in counts.items():
         print(f"  {key}: {value}")
