@@ -3,8 +3,8 @@
  * 职责（02-report 第二节）：统一模型抽象 / provider 配置化切换 / 限流排队 /
  * 降级熔断 / token 计量。红线：业务代码只认 role；禁止 import provider SDK。
  */
-import { degrade, nowIso, sha256Json } from "@safetrace/shared";
-import type { EventBus, FallbackEvent, LineageArtifactRef } from "@safetrace/shared";
+import { assembleLlmContextMessages, degrade, LlmContextError, MemoryLlmContextStore, nowIso, sha256Json } from "@safetrace/shared";
+import type { EventBus, FallbackEvent, LlmContextStore, LlmPromptAssembly, LineageArtifactRef } from "@safetrace/shared";
 import { CircuitBreaker, type CircuitState } from "./circuit.js";
 import { loadModelsConfig, type DataDomain, type ModelProfile, type ModelsConfig, type RoleName } from "./profiles.js";
 import { Semaphore, TokenBucket } from "./limiter.js";
@@ -21,6 +21,8 @@ export { createCliCloudConfirm, cloudFallbackPolicy, type CloudFallbackPolicy, t
 export interface GatewayOptions {
   configPath?: string;
   usageStore?: UsageStore;
+  /** Context catalog; production callers inject a SQLite-backed store, tests use the in-memory defaults. */
+  contextStore?: LlmContextStore;
   /** Persistent per-attempt lineage sink; production callers should inject the shared EventBus. */
   bus?: EventBus;
   /** 强制所有 role 使用指定 provider（演练用：验证切配置不改代码） */
@@ -79,12 +81,14 @@ export class ModelGateway {
   private cfg: ModelsConfig;
   private runtime = new Map<RoleName, RoleRuntime>();
   private usage: UsageStore;
-  /** 归一化 prompt 缓存：模型故障时提供兜底答案（L3） */
+  private contextStore: LlmContextStore;
+  /** Exact-request response cache; provider prefix caching is optimized by stable prompt order. */
   private cache = new Map<string, LlmReply>();
 
   constructor(private opts: GatewayOptions = {}) {
     this.cfg = loadModelsConfig(opts.configPath);
     this.usage = opts.usageStore ?? new MemoryUsageStore();
+    this.contextStore = opts.contextStore ?? new MemoryLlmContextStore();
     for (const [name, profile] of Object.entries(this.cfg.roles)) {
       this.runtime.set(name as RoleName, {
         profile,
@@ -143,23 +147,51 @@ export class ModelGateway {
     return this.usage.totals();
   }
 
-  async chat(role: RoleName, messages: ChatMessage[], params: ChatParams = {}, traceId = "tr_ad-hoc", dataDomain?: DataDomain): Promise<LlmReply> {
+  async chat(role: RoleName, messages: ChatMessage[], params: ChatParams = {}, traceId = "tr_ad-hoc", dataDomain?: DataDomain, contextKey?: string): Promise<LlmReply> {
     const rt = this.mustRole(role);
     await rt.bucket.take(1);
     const release = await rt.semaphore.acquire();
     const t0 = Date.now();
     const requestedDomain = dataDomain ?? rt.profile.data_domain ?? "public";
     try {
+      const selectedContextKey = contextKey ?? "gateway.chat." + role;
+      let assembly: LlmPromptAssembly;
+      try {
+        const snapshot = this.contextStore.resolve({ context_key: selectedContextKey, role, data_domain: requestedDomain });
+        if (snapshot.blocks.length === 0 || (contextKey !== undefined && !snapshot.task_context_found)) throw new LlmContextError("no active context matched the task/role/domain");
+        assembly = assembleLlmContextMessages(messages, snapshot);
+      } catch (error) {
+        await degrade({
+          layer: "L3", trigger: "LLM context resolution failed; provider call was skipped", degradedOf: "llm-context:unavailable", traceId,
+          label: "模型上下文不可用；本次停止模型调用并沿规则/模板/人工回退",
+          recoveryHint: "检查 llm_context_sets / llm_context_blocks 中对应 role、task_key、data_domain 的 active 版本。",
+          emit: async (event) => { await this.emitFallback(event); },
+        });
+        try {
+          await this.opts.bus?.recordLineage({
+            trace_id: traceId, stage: "mg1.context_gate", operation_version: "llm-context.resolve.v1", status: "rejected",
+            input_refs: [{ kind: "LlmContextRequest", id: selectedContextKey, sha256: sha256Json({ context_key: selectedContextKey, role, data_domain: requestedDomain }) }],
+            execution: { component_version: "llm-context.v1" },
+            decision: { reason: "context lookup failed; no provider request was sent" },
+            error: error instanceof LlmContextError ? error.name : "context_store_unavailable",
+          });
+        } catch { /* lineage failure must not open the model path */ }
+        throw new LlmContextError("LLM context unavailable; provider request was skipped");
+      }
+      const preparedMessages = assembly.messages as ChatMessage[];
+      const inputRefs: LineageArtifactRef[] = [
+        { kind: "ChatMessages", id: traceId, sha256: sha256Json({ messages: preparedMessages, params }) },
+        ...assembly.context_refs,
+        { kind: "LlmContextSnapshot", id: selectedContextKey, sha256: assembly.context_sha256 },
+      ];
       return await this.withFallback<LlmReply>(role, "chat", async (providerName, modelId) => {
-        const key = role + "|" + providerName + "|" + modelId + "|" + normalizePrompt(messages);
+        const key = sha256Json({ role, provider: providerName, model_id: modelId, data_domain: requestedDomain, context_key: selectedContextKey, messages: preparedMessages, params });
         const hit = this.cache.get(key);
-        if (hit) {
-          return { ...hit, cached: true, degraded_to: "", latency_ms: Date.now() - t0 };
-        }
-        const out = await this.callChat(providerName, modelId, rt, messages, params);
+        if (hit) return { ...hit, cached: true, degraded_to: "", latency_ms: Date.now() - t0 };
+        const out = await this.callChat(providerName, modelId, rt, preparedMessages, params);
         this.cache.set(key, out);
         return out;
-      }, traceId, [{ kind: "ChatMessages", id: traceId, sha256: sha256Json({ messages, params }) }], requestedDomain);
+      }, traceId, inputRefs, requestedDomain);
     } finally {
       release();
     }
@@ -530,11 +562,6 @@ export class ModelGateway {
     if (!rt) throw new Error("未配置的模型角色: " + role);
     return rt;
   }
-}
-
-/** 归一化 prompt：缓存键（去空白、小写）。 */
-function normalizePrompt(messages: ChatMessage[]): string {
-  return messages.map((m) => m.role + ":" + m.content.trim().toLowerCase()).join("\n");
 }
 
 export { loadModelsConfig };

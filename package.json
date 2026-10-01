@@ -26,6 +26,7 @@
     "gateway:serve": "tsx src/gateway/src/server.ts",
     "qa:serve": "tsx src/qa/src/server.ts",
     "qa:decision:serve": "node --env-file-if-exists=.env.local --import tsx scripts/qa-decision-server.ts",
+    "llm:context": "node --env-file-if-exists=.env.local --import tsx scripts/llm-context.ts",
     "crawl:page": "node --env-file-if-exists=.env.local --import tsx scripts/crawl-page.ts",
     "demo:serve": "node --env-file-if-exists=.env.local --import tsx scripts/local-demo-server.ts",
     "cli:ask": "tsx src/qa/src/cli.ts",

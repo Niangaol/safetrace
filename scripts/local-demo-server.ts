@@ -5,7 +5,8 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { readIngestDiagnostics } from "./ingest-diagnostics.js";
-import { EventBus, MemoryEventStore, nextId, sha256, sha256Json } from "@safetrace/shared";
+import { EventBus, MemoryEventStore, MemoryLlmContextStore, nextId, sha256, sha256Json, SqliteLlmContextStore } from "@safetrace/shared";
+import type { LlmContextStore } from "@safetrace/shared";
 import { ModelGateway } from "@safetrace/gateway";
 import { synthesizeAnswerWithStepFun } from "../src/qa/src/stepfun-answerer.js";
 import { refineQ1WithStepFun, rewriteQ2WithStepFun, shouldRewriteQ2WithStepFun } from "../src/qa/src/stepfun-planner.js";
@@ -23,6 +24,7 @@ type Dataset = {
   store: MemoryEventStore;
   bus: EventBus;
   gateway?: ModelGateway;
+  contextStore: LlmContextStore;
   model_config_error?: string;
   fetched: RawDoc[];
   parsed: IntelItem[];
@@ -33,7 +35,7 @@ type Dataset = {
 };
 
 /** 每次启动重新跑离线采集和富化，不读取 web/src/mock.ts 或伪造看板数字。 */
-export async function loadDataset(): Promise<Dataset> {
+export async function loadDataset(contextStore: LlmContextStore = new MemoryLlmContextStore()): Promise<Dataset> {
   const store = new MemoryEventStore();
   const bus = new EventBus({ store });
   const result = await runIngestOnce({ store, offline: true });
@@ -47,10 +49,10 @@ export async function loadDataset(): Promise<Dataset> {
   });
   let gateway: ModelGateway | undefined;
   let modelConfigError: string | undefined;
-  try { gateway = new ModelGateway({ bus }); }
+  try { gateway = new ModelGateway({ bus, contextStore }); }
   catch { modelConfigError = "MG1 model configuration could not be loaded; Q4 template remains available"; }
   return {
-    store, bus, gateway, ...(modelConfigError ? { model_config_error: modelConfigError } : {}),
+    store, bus, gateway, contextStore, ...(modelConfigError ? { model_config_error: modelConfigError } : {}),
     fetched: result.fetched, parsed: result.parsed, intel,
     enrichments: new Map(enriched.map((e) => [e.intel_id, e])), index,
     chunkCount: chunks.length,
@@ -168,7 +170,7 @@ function sendSse(res: ServerResponse, value: Record<string, unknown>): void {
 /** 返回可测的 HTTP server；不在 import 时启动，测试可用随机端口。 */
 export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPath?: string } = {}): Server {
   let qaCount = 0;
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const path = url.pathname;
@@ -312,10 +314,14 @@ export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPat
       fail(res, 500, error instanceof Error ? error.message : String(error));
     }
   });
+  server.once("close", () => data.contextStore.close());
+  return server;
 }
 
 async function start(): Promise<void> {
-  const data = await loadDataset();
+  const contextStore = new SqliteLlmContextStore();
+  let data: Dataset;
+  try { data = await loadDataset(contextStore); } catch (error) { contextStore.close(); throw error; }
   const server = createLocalDemoServer(data);
   const port = Number(process.env.PORT ?? "8000");
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT 必须为 1-65535");

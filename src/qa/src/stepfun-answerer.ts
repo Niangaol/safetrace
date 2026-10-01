@@ -14,6 +14,7 @@ export interface StepFunChatClient {
     params: { temperature?: number; max_tokens?: number },
     traceId: string,
     dataDomain: "public",
+    contextKey?: string,
   ): Promise<StepFunChatReply>;
 }
 
@@ -153,7 +154,7 @@ export async function synthesizeAnswerWithStepFun(
         role: "user",
         content: JSON.stringify({ question, intent: plan.intents, slots: plan.slots, evidence: evidencePayload(evidence) }),
       },
-    ], { temperature: 0.2, max_tokens: 600 }, evidence.trace_id, "public");
+    ], { temperature: 0.2, max_tokens: 600 }, evidence.trace_id, "public", "qa.q4.answer");
     if (reply.provider !== "stepplan" || reply.degraded_to) {
       fallbackReason = "MG1 未返回 StepPlan 首选通道，已触发缓存兜底";
       throw new Error("StepPlan provider unavailable");

@@ -35,6 +35,26 @@ A-02 请求需由上游提供真实校准分布；下面的概率仅为 JSON 形
 
 本地 handler 会检查请求形状和 public-facts allowlist；传给 StepPlan 的载荷不包含原始 `state`、`calibrated_option_probabilities`、问题 ID 或未允许字段。示例故意省略 `rule_candidate` 以演示 StepPlan 分支；正常请求若 `public_facts.rule_candidate` 与 typed option 一致且 rule 概率 ≥0.65，会先由本地规则短路，不调模型。缺少上游校准分布时不会发请求，并沿阶梯挂起/转人工；handler 只做数值/总和校验，不能替上游证明概率已统计校准。
 
+### 数据库结构化 ctx（每次模型接入都带关联 ctx）
+
+所有 `chat` 调用都由 MG1 在发请求前解析一份**数据库里的 ctx 快照**，而不是把提示词散落在各家 adapter 里。默认落库在 `var/safetrace.sqlite`（`SQLITE_PATH` 可覆盖）的两张表：`llm_context_sets`（context_id + version + task_key + role + data_domain + priority + active）与 `llm_context_blocks`（block 内容及 SHA-256）。
+
+- **关联口径**：每次调用按 `task_key`（如 `qa.q1.intent`、`qa.q2.rewrite`、`qa.q4.answer`、`qa.decision.choice`、`ingest.advisory.extract`、`enrich.f1.paper_review`）+ `role` + `data_domain` 取用；`task_key`/`role` 为 `*` 的公共规则会先拼进去。
+- **顺序固定**：稳定块（通用规则 → 任务规则）拼成一个 `system` 消息放最前，变化快的块（带 `max_age_seconds` 的易变事实）紧随其后，真实问题和检索证据永远排在最后，保证**稳定前缀逐字节不变**、尽量命中 prompt-prefix 缓存。
+- **版本与留痕**：ctx 版本不可变，改内容必须发新版本；`mg1.chat` lineage 会记录 `LlmContextSet`、`LlmPromptStablePrefix`、`LlmContextSnapshot` 三类引用（只存 SHA-256，不复制提示词正文）。
+- **出云边界**：`data_domain=public` 的调用只会看到 public ctx，private ctx 不会被拼进公网请求；`private` 调用可以额外看到 public 规则。
+- **fail-closed**：显式要求某个 task_key 但库里没有对应 active 版本时，直接拒绝并记 `llm-context:unavailable` 降级事件，**不发 provider 请求**，由上层沿用规则/模板/人工兜底，避免缺 ctx 的“裸提示词”悄悄出云。
+
+```powershell
+npm run llm:context -- list                       # 看 role/task/domain/版本/块 hash（不输出正文）
+npm run llm:context -- show safetrace.qa.q1.intent 2   # 查看某版本完整内容
+npm run llm:context -- put .\my-context.json      # 发新版本并激活（JSON 需带 task_key/role/data_domain/description/blocks）
+npm run llm:context -- activate safetrace.qa.q1.intent 1   # 回滚到旧版本
+npm run llm:context -- deactivate safetrace.qa.q1.intent   # 停用；相关 task 调用立即 fail-closed
+```
+
+内置默认 ctx 只写“边界纪律”（不得编造、只从允许选项里选、证据不足要弃权），**不是**新的安全保证；A-04 仍是部分启发式。
+
 **安全边界说明**：A-04 当前是有界本地启发式检测器，能挡住已知注入标记，不是完整的 prompt-injection 防护保证；不要把未知/敏感资料发送到云端。DQ1、去重、契约校验、F4 与 F6 仍由确定性逻辑负责。以上新模型路径有 mock 测试；除此前记录的 Q4 验证外，本轮不代表真实云端调用已完成。
 
 ## 启动

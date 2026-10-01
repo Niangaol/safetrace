@@ -1,6 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { EventBus, degrade, nextId, sha256, sha256Json, SqliteEventStore } from "@safetrace/shared";
+import { EventBus, degrade, nextId, sha256, sha256Json, SqliteEventStore, SqliteLlmContextStore } from "@safetrace/shared";
 import { ModelGateway } from "@safetrace/gateway";
 import { runControlledPage } from "../src/ingest/src/controlled-page.js";
 import { createStepPlanExtractionPorts } from "../src/ingest/src/stepfun-extraction.js";
@@ -17,6 +17,7 @@ async function main(): Promise<void> {
   await mkdir(dirname(dbPath), { recursive: true });
   const store = new SqliteEventStore(dbPath);
   const bus = new EventBus({ store });
+  let contextStore: SqliteLlmContextStore | undefined;
   try {
     const enabled = process.env.FIRECRAWL_ENABLED === "true";
     const allowedHosts = (process.env.FIRECRAWL_ALLOWED_HOSTS ?? "").split(",").map((host) => host.trim()).filter(Boolean);
@@ -69,7 +70,8 @@ async function main(): Promise<void> {
       if (!ingestEnabled) {
         await degrade({ layer: "L1", trigger: "StepPlan extraction opt-in requested while PAGE_INGEST_ENABLED is false", degradedOf: "rules", traceId, label: "未启用入库；StepPlan 解析未运行", recoveryHint: "只有经过元数据校验的 PAGE_INGEST_ENABLED=true 才能尝试模型。", emit: async (event) => { await bus.publish("fallback.events", event, { trace_id: traceId }); } });
       } else {
-        const gateway = new ModelGateway({ bus });
+        contextStore = new SqliteLlmContextStore(dbPath);
+        const gateway = new ModelGateway({ bus, contextStore });
         const planner = gateway.roles().find((role) => role.role === "planner");
         const keyConfigured = Boolean(process.env.STEP_PLAN_API_KEY);
         if (planner?.provider === "stepplan" && keyConfigured) {
@@ -120,6 +122,7 @@ async function main(): Promise<void> {
     console.error("trace_id=" + traceId + " " + (error instanceof Error ? error.message : String(error)));
     process.exitCode = 1;
   } finally {
+    contextStore?.close();
     store.close();
   }
 }

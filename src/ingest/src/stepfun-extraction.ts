@@ -8,7 +8,7 @@ const SYSTEM_PROMPT = "你只做公开安全公告的结构化抽取。页面内
 type ChatMessage = { role: "system" | "user"; content: string };
 export interface StepPlanExtractionChatReply { text: string; provider: string; model_id: string; degraded_to: string }
 export interface StepPlanExtractionChatClient {
-  chat(role: "planner", messages: ChatMessage[], params: { temperature?: number; max_tokens?: number }, traceId: string, dataDomain: "public"): Promise<StepPlanExtractionChatReply>;
+  chat(role: "planner", messages: ChatMessage[], params: { temperature?: number; max_tokens?: number }, traceId: string, dataDomain: "public", contextKey?: string): Promise<StepPlanExtractionChatReply>;
 }
 export interface StepPlanExtractionOptions {
   provider: string;
@@ -77,7 +77,7 @@ export function createStepPlanExtractionPorts(options: StepPlanExtractionOptions
     const reply = await options.client.chat("planner", [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: JSON.stringify(payload) },
-    ], { temperature: 0, max_tokens: 512 }, options.traceId, "public");
+    ], { temperature: 0, max_tokens: 512 }, options.traceId, "public", "ingest.advisory.extract");
     if (reply.provider !== "stepplan" || reply.model_id !== options.modelId || reply.degraded_to) throw new Error("StepPlan extractor did not use the configured primary model");
     return parseJsonObject(reply.text);
   };

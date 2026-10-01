@@ -4,7 +4,7 @@ import type { PaperLink } from "@safetrace/shared";
 interface ChatMessage { role: "system" | "user"; content: string }
 export interface StepFunPaperReviewReply { text: string; provider: string; model_id: string; degraded_to: string }
 export interface StepFunPaperReviewClient {
-  chat(role: "planner", messages: ChatMessage[], params: { temperature?: number; max_tokens?: number }, traceId: string, dataDomain: "public"): Promise<StepFunPaperReviewReply>;
+  chat(role: "planner", messages: ChatMessage[], params: { temperature?: number; max_tokens?: number }, traceId: string, dataDomain: "public", contextKey?: string): Promise<StepFunPaperReviewReply>;
 }
 export interface PaperReviewRequest { trace_id: string; intel_id: string; query: string; papers: PaperLink[] }
 export type PaperReviewOutcome =
@@ -50,7 +50,7 @@ export function createStepFunPaperReviewer(options: StepFunPaperReviewOptions): 
     const reply = await options.client.chat("planner", [
       { role: "system", content: "你只做论文候选的二次相关性排序。只能返回给定 paper_id 的子集与顺序；不能创建论文、补造事实、改 relevance_score 或声称看过摘要。输入只含公开标题/规则词项，不含摘要全文或 URL。无把握时 abstain=true。confidence 是非校准的模型自评，仅用于是否保留这条人工建议。只输出 JSON：{\"paper_ids\":[\"existing-id\"],\"confidence\":0.9,\"abstain\":false}。此结果只是 review sidecar，不会更改 F1/F4/F6 契约结果。" },
       { role: "user", content: JSON.stringify(userPayload) },
-    ], { temperature: 0, max_tokens: 256 }, request.trace_id, "public");
+    ], { temperature: 0, max_tokens: 256 }, request.trace_id, "public", "enrich.f1.paper_review");
     if (reply.provider !== "stepplan" || reply.model_id !== options.modelId || reply.degraded_to) throw new Error("StepPlan paper reviewer provider/model mismatch or fallback");
     const body = parseJsonObject(reply.text);
     if (!body || Object.keys(body).some((key) => !["paper_ids", "confidence", "abstain"].includes(key)) || typeof body.abstain !== "boolean") throw new Error("StepPlan paper-review JSON schema rejected");

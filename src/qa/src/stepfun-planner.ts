@@ -173,7 +173,7 @@ export async function refineQ1WithStepFun(
     const reply = await options.client.chat("planner", [
       { role: "system", content: "你只负责 Q1 意图分类，不回答漏洞事实。只能选择 intent=impact_range/remediation/attack_chain/trend/concept/paper_related；若 rule_intents 非空，只能从候选中选。无法判断时用 uncertain 并给一个简短澄清问题。不要补造 CVE、产品或版本，槽位由规则提供。只输出 JSON，例如 {\"intent\":\"uncertain\",\"clarify_question\":\"你想了解哪方面？\"}。" },
       { role: "user", content: JSON.stringify({ question: trimmed, rule_intents: plan.intents, rule_confidence: plan.confidence, extracted_slots: plan.slots }) },
-    ], { temperature: 0, max_tokens: 512 }, options.traceId, "public");
+    ], { temperature: 0, max_tokens: 512 }, options.traceId, "public", "qa.q1.intent");
     if (reply.provider !== "stepplan" || reply.model_id !== options.modelId || reply.degraded_to) {
       throw new Error("MG1 did not return the configured StepPlan planner");
     }
@@ -263,7 +263,7 @@ export async function rewriteQ2WithStepFun(
     const reply = await options.client.chat("planner", [
       { role: "system", content: "你只负责改写 Q2 的检索词，不要回答问题或创造证据。保留用户已指定的 CVE ID；不能添加其他 CVE、URL、产品或版本；如果原问题已经清楚就只做最小改写。只输出 JSON：{\"query\":string}。" },
       { role: "user", content: JSON.stringify({ question: question.trim(), intents: plan.intents, slots: plan.slots, current_query: plan.rewrite_text, retrieval_hits: original.chunks.length, top_score: topScore }) },
-    ], { temperature: 0, max_tokens: 512 }, options.traceId, "public");
+    ], { temperature: 0, max_tokens: 512 }, options.traceId, "public", "qa.q2.rewrite");
     if (reply.provider !== "stepplan" || reply.model_id !== options.modelId || reply.degraded_to) {
       throw new Error("MG1 did not return the configured StepPlan planner");
     }

@@ -1,4 +1,4 @@
-import { degrade, EventBus, nextId, sha256Json, SqliteEventStore } from "@safetrace/shared";
+import { degrade, EventBus, nextId, sha256Json, SqliteEventStore, SqliteLlmContextStore } from "@safetrace/shared";
 import type { EnrichmentResult, IntelItem, QualityVerdict } from "@safetrace/shared";
 import { createStepFunPaperReviewer, runEnrichment } from "@safetrace/enrich";
 import type { PaperReviewPort } from "@safetrace/enrich";
@@ -28,6 +28,7 @@ async function main(): Promise<void> {
   const previousOfflineFixtures = process.env.OFFLINE_FIXTURES;
   const limit = readLimit();
   const store = new SqliteEventStore(dbPath);
+  let contextStore: SqliteLlmContextStore | undefined;
   const bus = new EventBus({ store });
   try {
     process.env.OFFLINE_FIXTURES = offline ? "true" : "false";
@@ -50,7 +51,8 @@ async function main(): Promise<void> {
         await bus.recordLineage({ trace_id: traceId, stage: "enrich.llm_optin", operation_version: "enrich-llm-optin.v1", status: "rejected", decision: { reason: "StepPlan F1 advisory requested in fixture/offline mode; no model request made" } });
         await degrade({ layer: "L3", trigger: "F1 StepPlan advisory requested while enrichment is offline", degradedOf: "rule-ranked-papers", traceId, label: "离线富化不调用 StepPlan；保留规则结果", recoveryHint: "需在线检索时设置 SAFETRACE_ENRICH_OFFLINE=false，并单独开启 SAFETRACE_ENRICH_LLM_ENABLED=true。", emit: async (event) => { await bus.publish("fallback.events", event, { trace_id: traceId }); } });
       } else {
-        const gateway = new ModelGateway({ bus });
+        contextStore = new SqliteLlmContextStore(dbPath);
+        const gateway = new ModelGateway({ bus, contextStore });
         const planner = gateway.roles().find((role) => role.role === "planner");
         const keyConfigured = Boolean(process.env.STEP_PLAN_API_KEY);
         if (planner?.provider === "stepplan" && keyConfigured) {
@@ -76,6 +78,7 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ completed_this_batch: batch.length, pending_after_batch: Math.max(0, pending.length - batch.length), mode: offline ? "fixture/offline" : "live", trace_id: traceId }));
   } finally {
     if (previousOfflineFixtures === undefined) delete process.env.OFFLINE_FIXTURES; else process.env.OFFLINE_FIXTURES = previousOfflineFixtures;
+    contextStore?.close();
     store.close();
   }
 }

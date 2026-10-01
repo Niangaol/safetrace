@@ -6,8 +6,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { EventBus, nextId, SqliteEventStore } from "@safetrace/shared";
-import type { EventBus as EventBusType } from "@safetrace/shared";
+import { EventBus, nextId, SqliteEventStore, SqliteLlmContextStore } from "@safetrace/shared";
+import type { EventBus as EventBusType, LlmContextStore } from "@safetrace/shared";
 import { ModelGateway } from "./index.js";
 import type { ChatMessage, ChatParams } from "./types.js";
 
@@ -16,6 +16,7 @@ export interface ServerOptions {
   host?: string;
   gateway?: ModelGateway;
   bus?: EventBusType;
+  contextStore?: LlmContextStore;
   /** A-02：/v1/decide 决策阶梯处理器（问答线编排层注入）。 */
   decideHandler?: (req: unknown) => Promise<unknown>;
 }
@@ -26,7 +27,9 @@ export function createGatewayServer(opts: ServerOptions = {}) {
   mkdirSync(dirname(dbPath), { recursive: true });
   const store = ownsStore ? new SqliteEventStore(dbPath) : undefined;
   const bus = opts.bus ?? (store ? new EventBus({ store }) : undefined);
-  const gw = opts.gateway ?? new ModelGateway({ ...(bus ? { bus } : {}) });
+  const ownsContextStore = opts.contextStore === undefined && opts.gateway === undefined && ownsStore;
+  const contextStore = opts.contextStore ?? (ownsContextStore ? new SqliteLlmContextStore(dbPath) : undefined);
+  const gw = opts.gateway ?? new ModelGateway({ ...(bus ? { bus } : {}), ...(contextStore ? { contextStore } : {}) });
   const port = opts.port ?? Number(process.env.PORT ?? 8317);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -88,7 +91,7 @@ export function createGatewayServer(opts: ServerOptions = {}) {
     }
   });
 
-  if (store) server.once("close", () => store.close());
+  if (store || (ownsContextStore && contextStore)) server.once("close", () => { store?.close(); if (ownsContextStore) contextStore?.close(); });
   const host = opts.host ?? "127.0.0.1";
   return { server, port, host, listen: () => new Promise<void>((resolve) => server.listen(port, host, resolve)) };
 }

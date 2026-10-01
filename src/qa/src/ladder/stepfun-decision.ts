@@ -179,7 +179,7 @@ export function createStepPlanDecisionResolver(options: StepPlanDecisionOptions)
       const reply = await client.chat("planner", [
         { role: "system", content: "你是决策候选选择器。只使用给定的公开结构化事实和 options，choice 必须逐字等于其中一个 option；不确定时 abstain=true。confidence 是仅用于拒答阈值的模型自评，不是 calibrated_prob。只输出 JSON：{\"choice\":\"option\",\"confidence\":0.9,\"abstain\":false}。" },
         { role: "user", content: JSON.stringify(modelInput) },
-      ], { temperature: 0, max_tokens: 256 }, ctx.trace_id, "public");
+      ], { temperature: 0, max_tokens: 256 }, ctx.trace_id, "public", "qa.decision.choice");
       if (reply.provider !== "stepplan" || reply.model_id !== options.modelId || reply.degraded_to) throw new Error("StepPlan decision provider/model mismatch or fallback");
       const body = parseJsonObject(reply.text);
       if (!body || Object.keys(body).some((key) => !["choice", "confidence", "abstain"].includes(key)) || typeof body.abstain !== "boolean") throw new Error("StepPlan decision JSON schema rejected");
