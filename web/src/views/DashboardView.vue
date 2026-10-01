@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref, watch, nextTick } from 'vue'
 import { RouterLink } from 'vue-router'
-import * as echarts from 'echarts'
+// 按需引入 echarts：本页只用到柱状图/折线图 + 直角坐标系 + 提示框 + 图例。
+// 原来 `import * as echarts from 'echarts'` 会把整个库打进主包（实测 1.18 MB / gzip 399 KB），
+// 对这种只画两张图的页面是纯浪费；按需引入后主包显著变小。
+import { BarChart, LineChart } from 'echarts/charts'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import * as echarts from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 import { getJson } from '../api'
 import StatCards from '../components/StatCards.vue'

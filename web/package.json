@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "smoke:data-source": "node scripts/smoke-data-source.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",

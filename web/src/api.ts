@@ -76,14 +76,18 @@ export function streamChat(
         const frames = buffer.split('\n\n')
         buffer = frames.pop() ?? ''
         for (const frame of frames) {
-          const line = frame.trim()
-          if (!line.startsWith('data:')) continue
-          const raw = line.slice(5).trim()
-          if (!raw) continue
-          try {
-            onEvent(JSON.parse(raw))
-          } catch {
-            // 非 JSON 的心跳/注释帧直接忽略
+          // SSE 帧可能同时带 `event:` 与 `data:` 行，逐行找出 data 载荷即可
+          // （原来只取整帧第一行，遇到多行帧会静默丢事件）
+          for (const line of frame.split('\n')) {
+            const trimmed = line.trim()
+            if (!trimmed.startsWith('data:')) continue
+            const raw = trimmed.slice(5).trim()
+            if (!raw) continue
+            try {
+              onEvent(JSON.parse(raw))
+            } catch {
+              // 非 JSON 的心跳/注释帧直接忽略
+            }
           }
         }
       }
