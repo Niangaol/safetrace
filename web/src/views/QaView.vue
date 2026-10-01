@@ -864,6 +864,21 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* ── 提问区：顶部一条强调光带，"从这里开始"一眼可见 ────── */
+.qa-ask {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+.qa-ask::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--accent-2), transparent);
+  opacity: 0.7;
+}
+
 /* ── 检索流水线：带连线的时间轴，而不是一排药丸 ──────────────
    药丸式的五个步骤在一行里彼此孤立，看不出"先后顺序"；
    改成 stepper（序号圆点 + 连接线 + 名称 + 状态标签）之后，
@@ -1223,10 +1238,60 @@ onMounted(async () => {
 }
 .limit-detail { margin-top: 3px; }
 
+/* ── 页头：标题在左，关键指标在右 ───────────────────────── */
+.qa-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.qa-head-main { min-width: 0; }
+.qa-head-main .section-kicker {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 7px;
+}
+.qa-head-main .page-title { margin-bottom: 5px; }
+.qa-head-main .page-subtitle { margin-bottom: 0; max-width: 62ch; }
+
+.qa-head-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+.head-stat {
+  min-width: 92px;
+  padding: 9px 14px;
+  border-radius: var(--radius);
+  background: linear-gradient(140deg, var(--panel) 0%, var(--bg-elevated) 100%);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.head-stat-k {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.head-stat-v {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-bright);
+  white-space: nowrap;
+}
+
+/* 三栏：证据 / 推理链 / 答案 —— 答案列更宽，让四段式正文有可读的行宽 */
 .qa-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.2fr;
+  grid-template-columns: 1fr 1fr 1.35fr;
   gap: 14px;
+  align-items: start;
 }
 @media (max-width: 1200px) {
   .qa-grid { grid-template-columns: 1fr; }
@@ -1319,6 +1384,7 @@ onMounted(async () => {
   display: inline-flex;
   gap: 4px;
   margin-left: 8px;
+  vertical-align: middle;
 }
 
 .cite-chip {
@@ -1461,6 +1527,16 @@ onMounted(async () => {
 }
 .meta-grid > div { display: flex; flex-direction: column; gap: 2px; }
 .meta-grid .label { font-size: 11px; }
+.meta-grid .mono { font-family: 'JetBrains Mono', monospace; }
+
+/* 答案列是全页主角：给一点底色差与顶部强调线，和两侧的证据/推理链拉开层次 */
+.qa-grid > .panel:last-child {
+  background: linear-gradient(180deg, var(--panel) 0%, #101827 100%);
+  border-color: var(--border-bright);
+  box-shadow: var(--shadow);
+}
+.qa-grid > .panel:last-child .panel-header h3 { color: var(--accent); }
+.answer-body { font-size: 13.5px; }
 
 /* ── C-05 数据域切换 ───────────────────────────────────── */
 

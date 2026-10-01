@@ -32,7 +32,39 @@
 
 ## 快速开始
 
-### 1. 本地开发
+> ⚠️ **想最快看到东西？直接用「0. 最短路径」** —— 零依赖、5 分钟、不用 Docker 与数据库。
+> 下面的完整路线需要 PostgreSQL + Redis + 一个真实的 `LLM_API_KEY`。
+>
+> **两条路线都必须「先造数据」**：演示数据由脚本生成，而 `data/` 在 `.gitignore` 里
+> （41MB 的演示库**不随仓库分发**）。跳过造数据会得到**空库**，
+> 问答只会回"没有证据" —— 这是全新 clone 后最常见的踩坑点。
+
+### 0. 最短路径（SQLite + 真实 LLM，零依赖）
+
+```bash
+pip install -e ".[dev]"
+cp .env.example .env            # 填 LLM_API_KEY；没有 key 就设 DEMO_MODE=true
+
+# ① 造演示库（SQLite）—— 这一步不能省，否则库是空的
+python -m scripts.demo_seed --db data/demo.db
+
+# ② 起后端
+python -m uvicorn aiintel.api.main:app --host 127.0.0.1 --port 8000
+
+# ③ 前端
+cd web && npm install && npx vite --port 5180 --host
+```
+
+打开 <http://localhost:5180/>。导航栏显示「**实时数据**」= 已连上后端。
+
+**没有 `LLM_API_KEY` 时**：设 `DEMO_MODE=true`，问答走占位回答并**明确标注降级**
+（引用与证据链仍然真实可用，只是答案正文由占位模型给出）。
+
+> ⚠️ SQLite 路线**不要**跑 `alembic upgrade head` —— 迁移里有
+> `pg_available_extensions` 等 PG 专用调用，在 SQLite 上会报
+> `no such table: pg_available_extensions`。SQLite 的表由 `demo_seed.py` 建。
+
+### 1. 完整路线（PostgreSQL + Redis）
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
@@ -41,6 +73,11 @@ pip install -e ".[dev]"
 cp .env.example .env        # 填入 LLM_API_KEY
 docker compose up -d postgres redis ollama
 alembic upgrade head
+
+# 灌演示数据：先造一个 SQLite 源库，再搬进 PG（与方言无关，PG 上会用真 pgvector 列）
+python -m scripts.demo_seed  --db data/seed.db
+python -m scripts.seed_from_demo
+
 uvicorn aiintel.api.main:app --reload
 ```
 
@@ -50,6 +87,9 @@ uvicorn aiintel.api.main:app --reload
 docker compose up -d
 docker compose exec ollama ollama pull qwen2.5:7b-instruct
 ```
+
+⚠️ compose 起的 PG **初始是空的**，数据同样需要显式灌入（见上一步的
+`seed_from_demo`）。可用 `python -m scripts.check_db_after_ingest` 体检。
 
 服务：API `:8000`、Postgres `:5432`、Redis `:6379`、Ollama `:11434`、Prometheus `:9090`。
 
