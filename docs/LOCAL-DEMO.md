@@ -27,7 +27,7 @@ npm run demo:serve
 npm run dev --prefix web
 ```
 
-打开 <http://127.0.0.1:5173/>。Vite 的 `/api` 代理指向窗口 A 的 8000 端口；两个窗口都不要关。
+打开 <http://127.0.0.1:5173/>。Vite 的 `/api` 代理指向窗口 A 的 8000 端口；两个窗口都不要关。顶部导航新增“采集诊断”页：它读取 `var/safetrace.sqlite` 最近一次持久化 trace，与 demo 启动时的内存 fixture 数据分开；没有数据库/静态演示模式时会明确提示。
 
 ## 建议手测
 

@@ -4,6 +4,7 @@
  */
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
+import { readIngestDiagnostics } from "./ingest-diagnostics.js";
 import { EventBus, MemoryEventStore, nextId } from "@safetrace/shared";
 import type { EnrichmentResult, IntelItem, QueryTurn, RawDoc } from "@safetrace/shared";
 import { runIngestOnce } from "@safetrace/ingest";
@@ -155,7 +156,7 @@ function sendSse(res: ServerResponse, value: Record<string, unknown>): void {
 }
 
 /** 返回可测的 HTTP server；不在 import 时启动，测试可用随机端口。 */
-export function createLocalDemoServer(data: Dataset): Server {
+export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPath?: string } = {}): Server {
   let qaCount = 0;
   return createServer(async (req, res) => {
     try {
@@ -164,6 +165,10 @@ export function createLocalDemoServer(data: Dataset): Server {
       if (req.method === "GET" && path === "/api/v1/health") {
         sendJson(res, 200, { status: "ok", data_mode: MODE, degraded_to: MODE,
           source_count: data.fetched.length, intel_count: data.intel.length, chunk_count: data.chunkCount });
+        return;
+      }
+      if (req.method === "GET" && path === "/api/v1/ingest/diagnostics") {
+        sendJson(res, 200, readIngestDiagnostics(options.diagnosticsDbPath));
         return;
       }
       if (req.method === "GET" && path === "/api/v1/metrics/overview") {

@@ -1,6 +1,7 @@
 /** Y 线流水线单测：离线全链路（4 源回放 → 解析 → 归并 → 闸门 → 总线可读回）。 */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { MemoryEventStore } from "@safetrace/shared";
 import type { FallbackEvent, IntelItem, QualityVerdict, RawDoc } from "@safetrace/shared";
 import { runIngestOnce } from "../src/pipeline.js";
@@ -107,4 +108,49 @@ test("pipeline：planned 源（ghsa/arxiv）无采集器，指定即静默跳过
   assert.equal(res.verdicts.length, 0);
   assert.equal(res.degraded_to, undefined); // 无抓取即无降级：不标记
   assert.equal((await store.read("raw.docs")).length, 0);
+});
+
+test("pipeline：将上游 KEV CVE IDs 传给 OSV/cve.org，避免在线模式静默跳过", async () => {
+  const oldFetch = globalThis.fetch;
+  const oldOffline = process.env.OFFLINE_FIXTURES;
+  const urls: string[] = [];
+  const kev = JSON.parse(await readFile("fixtures/sources/kev.sample.json", "utf8")) as unknown;
+  const cveOrg = JSON.parse(await readFile("fixtures/sources/cveorg.sample.json", "utf8")) as unknown;
+  const osv = { id: "CVE-2021-44228", aliases: ["GHSA-jfh8-c2jp-5v3q"], summary: "Log4j2 remote code execution", details: "OSV live response", published: "2021-12-10T00:00:00Z", modified: "2021-12-10T00:00:00Z", affected: [] };
+  process.env.OFFLINE_FIXTURES = "false";
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    urls.push(url);
+    const body = url.includes("known_exploited_vulnerabilities") ? kev : url.includes("api.osv.dev") ? osv : cveOrg;
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const store = new MemoryEventStore();
+    const result = await runIngestOnce({ store, offline: false, sourceIds: ["cisa_kev", "osv", "cve_org"] });
+    assert.ok(urls.some((url) => url.includes("api.osv.dev/v1/vulns/CVE-2021-44228")), "OSV must receive upstream CVE ID");
+    assert.ok(urls.some((url) => url.includes("cveawg.mitre.org/api/cve/CVE-2021-44228")), "cve.org must receive upstream CVE ID");
+    assert.ok(result.fetched.some((doc) => doc.source_id === "osv"));
+    assert.ok(result.fetched.some((doc) => doc.source_id === "cve_org"));
+    assert.ok(result.parsed.some((item) => item.source_ids.includes("osv") && item.cve_ids.includes("CVE-2021-44228")), "OSV id 自身为 CVE 时也必须进入 cve_ids 以便跨源归并");
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldOffline === undefined) delete process.env.OFFLINE_FIXTURES; else process.env.OFFLINE_FIXTURES = oldOffline;
+  }
+});
+test("pipeline：OSV/cve.org 无上游 CVE 输入时记为 not_requested 且不出网", async () => {
+  const oldFetch = globalThis.fetch;
+  const oldOffline = process.env.OFFLINE_FIXTURES;
+  process.env.OFFLINE_FIXTURES = "false";
+  globalThis.fetch = (async () => { throw new Error("不应发出请求"); }) as typeof fetch;
+  try {
+    const store = new MemoryEventStore();
+    const result = await runIngestOnce({ store, offline: false, sourceIds: ["osv", "cve_org"] });
+    assert.equal(result.fetched.length, 0);
+    const rows = await store.readLineage(result.trace_id);
+    assert.ok(rows.some((row) => row.operation_version === "osv.fetch.v1" && row.decision?.reason?.startsWith("not_requested:")));
+    assert.ok(rows.some((row) => row.operation_version === "cve_org.fetch.v1" && row.decision?.reason?.startsWith("not_requested:")));
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldOffline === undefined) delete process.env.OFFLINE_FIXTURES; else process.env.OFFLINE_FIXTURES = oldOffline;
+  }
 });

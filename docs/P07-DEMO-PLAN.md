@@ -10,11 +10,11 @@
 | 资产 | 内容 | 状态 |
 |---|---|---|
 | `scripts/local-demo-server.ts` | 本机 API（127.0.0.1:8000，`PORT` 可覆盖）：启动时真跑 离线采集→去重→DQ1→富化；每次问答真跑 Q1→Q2→Q4 模板链路 | ✅ 255 行 |
-| 端点 | `/api/v1/health`、`/metrics/overview`、`/collect/status`、`/vulns`（分页/筛选/排序）、`/vulns/:id`、`/vulns/:id/evidence`、`POST /api/v1/qa/chat`（SSE） | ✅ |
-| 前端 | `web/src/api.ts` 开关改为 `VITE_DEMO_MODE` 环境变量（默认真后端，预置模式才用 mock）；大屏/列表/详情/问答页已接 | ✅ 基本接好 |
+| 端点 | `/api/v1/health`、`/metrics/overview`、`/collect/status`、`/vulns`（分页/筛选/排序）、`/vulns/:id`、`/vulns/:id/evidence`、`POST /api/v1/qa/chat`（SSE）、`GET /api/v1/ingest/diagnostics`（只读 SQLite） | ✅ |
+| 前端 | `web/src/api.ts` 开关改为 `VITE_DEMO_MODE` 环境变量（默认真后端，预置模式才用 mock）；大屏/列表/详情/问答/采集诊断页已接。诊断页独立读取持久化 SQLite，不把 demo 的内存 fixture 当真实采集 | ✅ 基本接好 |
 | 测试 | `src/qa/test/local-demo-server.test.ts`（82 行，随机端口可测） | ✅ |
 | 文档 | `docs/LOCAL-DEMO.md`（运行手册 + 手测清单，含拒答/澄清用例） | ✅ |
-| 诚实标识 | 全接口带 `data_mode=fixture`、`degraded_to=fixture`；未实测的时效/费用显示 null/“—”；富化维度带 `mock:true` | ✅ 符合红线 3/5 |
+| 诚实标识 | demo 数据接口带 `data_mode=fixture`、`degraded_to=fixture`；未实测的时效/费用显示 null/“—”；富化维度带 `mock:true`。采集诊断 API 独立返回 SQLite 可用性与最近 trace，不伪装为 demo fixture | ✅ 符合红线 3/5 |
 
 分支自曝限制（`docs/LOCAL-DEMO.md` 写明，演示时照念）：Q2 目前只检索 fixture 证据索引，**尚未接入本次采集结果**；不是联网采集、无 LLM、无真实资产。
 

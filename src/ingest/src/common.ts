@@ -35,6 +35,10 @@ export interface FetchOpts {
   traceId?: string;
   /** 单轮抓取条目上限（源侧自行实现，未实现的源忽略此项）。 */
   limit?: number;
+  /** 上游源已经解析出的 CVE IDs，供 OSV/cve.org 做关联查询；由 pipeline 有界传入。 */
+  cveIds?: string[];
+  /** 无查询目标/查无记录时解释 null 返回，避免被误读为联网成功。 */
+  onNoData?: (reason: string) => void;
   /** 降级事件回调：pipeline 用它把 FallbackEvent 收进 fallback.events 主题。 */
   emit?: (event: FallbackEvent) => void | Promise<void>;
 }
@@ -49,44 +53,56 @@ export type HttpAttempt =
   | { ok: true; data: unknown; etag?: string }
   | { ok: false; reason: string };
 
-/**
- * 指数退避重试（默认 3 次）：网络异常、5xx、429 一律退避后重试。
- * 返回结构化失败原因，由调用方决定是否走 fixture 回放（显式降级）。
- */
+/** 解析 Retry-After（秒或 HTTP-date），上限 30 秒；缺失则回退指数退避。 */
+function retryAfterMs(header: string | null, fallback: number): number {
+  if (!header) return fallback;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.min(30_000, Math.max(0, seconds * 1000));
+  const date = Date.parse(header);
+  return Number.isFinite(date) ? Math.min(30_000, Math.max(0, date - Date.now())) : fallback;
+}
+
+/** 有界重试：网络错误/5xx/429 退避；404 等确定性 4xx 不重试。 */
 export async function fetchJsonWithRetry(
   url: string,
   init: RequestInit = {},
   attempts = 3,
 ): Promise<HttpAttempt> {
   let lastReason = "未发起请求";
+  let nextDelay: number | undefined;
   for (let i = 0; i < attempts; i += 1) {
-    if (i > 0) await sleep(2 ** i * 500); // 0.5s → 1s → 2s
+    if (i > 0) await sleep(nextDelay ?? Math.min(4_000, 500 * 2 ** (i - 1)));
     try {
       const res = await fetch(url, {
         ...init,
         headers: { Accept: "application/json", ...(init.headers as Record<string, string>) },
       });
       if (res.status === 429) {
-        lastReason = `HTTP 429 限流：${url}`;
+        lastReason = "HTTP 429 限流：" + url;
+        nextDelay = retryAfterMs(res.headers.get("retry-after"), Math.min(4_000, 500 * 2 ** i));
         continue;
       }
       if (!res.ok) {
-        lastReason = `HTTP ${res.status}：${url}`;
-        continue;
+        lastReason = "HTTP " + res.status + "：" + url;
+        if (res.status >= 500 && i + 1 < attempts) {
+          nextDelay = Math.min(4_000, 500 * 2 ** i);
+          continue;
+        }
+        return { ok: false, reason: lastReason };
       }
-      const text = await res.text();
+      const body = await res.text();
       try {
-        return { ok: true, data: JSON.parse(text) as unknown, etag: res.headers.get("etag") ?? undefined };
+        return { ok: true, data: JSON.parse(body) as unknown, etag: res.headers.get("etag") ?? undefined };
       } catch {
-        return { ok: false, reason: `响应体非 JSON：${url}` };
+        return { ok: false, reason: "响应体非 JSON：" + url };
       }
     } catch (err) {
-      lastReason = `网络异常：${err instanceof Error ? err.message : String(err)}`;
+      lastReason = "网络异常：" + (err instanceof Error ? err.message : String(err));
+      nextDelay = Math.min(4_000, 500 * 2 ** i);
     }
   }
   return { ok: false, reason: lastReason };
 }
-
 /** 读 JSON：相对路径按仓库根解析，绝对路径原样使用（适配器读 RawDoc.payload_ref）。 */
 export async function readJsonFile(ref: string): Promise<unknown> {
   const abs = path.isAbsolute(ref) ? ref : path.join(REPO_ROOT, ref);

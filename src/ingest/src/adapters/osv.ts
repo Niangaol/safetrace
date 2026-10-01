@@ -64,7 +64,7 @@ export async function parseOsv(raw: RawDoc): Promise<ParseResult> {
       warnings.push("vuln 缺 id，跳过该条");
       continue;
     }
-    const cveIds: string[] = [];
+    const cveIds: string[] = /^CVE-[0-9]{4}-[0-9]{4,}$/.test(osvId) ? [osvId] : [];
     const ghsaIds: string[] = [];
     const aliases: string[] = [];
     if (osvId.startsWith("GHSA-")) ghsaIds.push(osvId);

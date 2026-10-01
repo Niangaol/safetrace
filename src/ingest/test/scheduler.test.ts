@@ -126,3 +126,25 @@ test("scheduler：runLogPath 落盘为 JSONL，可被 uptime.readRunLog 读回",
     await rm(dir, { recursive: true, force: true });
   }
 });
+test("scheduler：从持久 intel.items 给 OSV 传 CVE seed，且不依赖本轮 KEV runner", async () => {
+  const { makeEnvelope } = await import("@safetrace/shared");
+  const store = new MemoryEventStore();
+  await store.append(makeEnvelope("intel.items", { intel_id: "intel_seed", cve_ids: ["CVE-2026-76504"], source_ids: ["cisa_kev"], published_at: "2026-09-30T00:00:00.000Z", title: "seed" }));
+  assert.deepEqual((await store.read<{ cve_ids: string[] }>("intel.items"))[0]?.payload.cve_ids, ["CVE-2026-76504"]);
+  const originalFetch = globalThis.fetch;
+  const originalOffline = process.env.OFFLINE_FIXTURES;
+  const urls: string[] = [];
+  process.env.OFFLINE_FIXTURES = "false";
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    urls.push(String(input));
+    return new Response(JSON.stringify({ id: "CVE-2026-76504", aliases: [], summary: "Test advisory", details: "Live lookup probe", published: "2026-09-30T00:00:00Z", modified: "2026-09-30T00:00:00Z", affected: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const clock = makeClock(T0, DAY);
+    const summary = await runIngestScheduler({ store, offline: false, sourceIds: ["osv"], maxCycles: 1, nowMs: clock.nowMs, sleep: clock.sleep, runLogPath: null });
+    assert.ok(urls.some((url) => url.includes("api.osv.dev/v1/vulns/CVE-2026-76504")), JSON.stringify({ urls, records: summary.records }));
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOffline === undefined) delete process.env.OFFLINE_FIXTURES; else process.env.OFFLINE_FIXTURES = originalOffline;
+  }
+});

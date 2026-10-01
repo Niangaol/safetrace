@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import DashboardView from './views/DashboardView.vue'
 import DetailView from './views/DetailView.vue'
 import IntelView from './views/IntelView.vue'
+import IngestDiagnosticsView from './views/IngestDiagnosticsView.vue'
 import QaView from './views/QaView.vue'
 
 export const router = createRouter({
@@ -12,6 +13,7 @@ export const router = createRouter({
     { path: '/dashboard', component: DashboardView },
     { path: '/intel', component: IntelView },
     { path: '/intel/:id', component: DetailView, props: true },
+    { path: '/ingest-diagnostics', component: IngestDiagnosticsView },
     { path: '/qa', component: QaView },
   ],
 })

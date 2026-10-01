@@ -46,9 +46,16 @@ export async function fetchCveOrg(opts: FetchCveOrgOpts = {}): Promise<RawDoc | 
     const payload = (await readJsonFile(FIXTURE)) as Record<string, unknown>;
     return buildRawDoc(payload, fetchedAt, FIXTURE, SOURCE_ID + "_fixture");
   }
-  const cveId = (opts.cveId ?? "").trim();
-  if (cveId === "") return null;
+  const cveId = (opts.cveId ?? opts.cveIds?.[0] ?? "").trim();
+  if (cveId === "") {
+    opts.onNoData?.("not_requested: no upstream CVE IDs available");
+    return null;
+  }
   const attempt = await fetchJsonWithRetry(entry.url + encodeURIComponent(cveId));
+  if (!attempt.ok && attempt.reason.includes("HTTP 404")) {
+    opts.onNoData?.("queried " + cveId + "; cve.org has no record");
+    return null;
+  }
   if (!attempt.ok) {
     await degradeToFixture("cve.org 连续抓取失败：" + attempt.reason, traceId, opts.emit);
     const payload = (await readJsonFile(FIXTURE)) as Record<string, unknown>;

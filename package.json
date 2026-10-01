@@ -32,6 +32,7 @@
     "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/commit-msg .githooks/pre-push",
     "trace:lineage": "tsx scripts/trace-lineage.ts",
     "ingest:once": "tsx scripts/ingest-once.ts",
+    "enrich:pending": "tsx scripts/enrich-pending.ts",
     "review:queue": "tsx scripts/review-queue.ts",
     "page:demo": "tsx scripts/demo-page-ingest.ts",
     "pilot:doctor": "tsx scripts/pilot-doctor.ts",

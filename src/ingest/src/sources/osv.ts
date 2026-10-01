@@ -2,7 +2,7 @@
  * Y1 · OSV 采集器：POST /v1/querybatch 批量包查询（body {queries:[{package?...}]}）；
  * 也可按 CVE 列表逐条 GET /v1/vulns/{id}（OSV 记录可被 CVE 别名解析），合并为 querybatch 同构结果。
  */
-import { nextId, nowIso } from "@safetrace/shared";
+import { degrade, nextId, nowIso } from "@safetrace/shared";
 import type { RawDoc } from "@safetrace/shared";
 import {
   degradeToFixture,
@@ -26,8 +26,6 @@ export interface OsvPackageQuery {
 export interface FetchOsvOpts extends FetchOpts {
   /** 包查询列表（POST querybatch）。 */
   queries?: OsvPackageQuery[];
-  /** CVE 列表（逐条 GET /v1/vulns/{id}，OSV 支持别名解析）。 */
-  cveIds?: string[];
 }
 
 /** 从登记的 querybatch URL 反推 OSV 站点基址（https://api.osv.dev）。 */
@@ -60,8 +58,11 @@ export async function fetchOsv(opts: FetchOsvOpts = {}): Promise<RawDoc | null> 
     return buildRawDoc(await readJsonFile(FIXTURE), fetchedAt, FIXTURE, SOURCE_ID + "_fixture");
   }
   const queries = opts.queries ?? [];
-  const cveIds = (opts.cveIds ?? []).filter((x) => x.trim() !== "");
-  if (queries.length === 0 && cveIds.length === 0) return null;
+  const cveIds = [...new Set((opts.cveIds ?? []).map((x) => x.trim()).filter(Boolean))].slice(0, 10);
+  if (queries.length === 0 && cveIds.length === 0) {
+    opts.onNoData?.("not_requested: no upstream CVE IDs available");
+    return null;
+  }
 
   if (queries.length > 0) {
     const attempt = await fetchJsonWithRetry(entry.url, {
@@ -80,13 +81,26 @@ export async function fetchOsv(opts: FetchOsvOpts = {}): Promise<RawDoc | null> 
 
   // CVE 列表：逐条 GET，成功记录合并成 {results:[{vulns:[...]}]}
   const results: unknown[] = [];
+  const failed: string[] = [];
   for (const id of cveIds) {
     const attempt = await fetchJsonWithRetry(osvBase(entry.url) + "/v1/vulns/" + encodeURIComponent(id));
     if (attempt.ok) results.push({ vulns: [attempt.data] });
+    else if (!attempt.reason.includes("HTTP 404")) failed.push(id + ": " + attempt.reason);
+  }
+  if (results.length === 0 && failed.length === 0) {
+    opts.onNoData?.("queried " + cveIds.length + " CVE IDs; OSV has no matching records");
+    return null;
   }
   if (results.length === 0) {
-    await degradeToFixture("OSV CVE 列表连续失败：" + cveIds.join(","), traceId, opts.emit);
+    await degradeToFixture("OSV CVE 查询全部失败：" + failed.slice(0, 3).join("；"), traceId, opts.emit);
     return buildRawDoc(await readJsonFile(FIXTURE), fetchedAt, FIXTURE, SOURCE_ID + "_fixture");
+  }
+  if (failed.length > 0) {
+    await degrade({
+      layer: "L2", trigger: "OSV 部分 CVE 查询失败：" + failed.length + "/" + cveIds.length,
+      degradedOf: "partial", traceId, label: "OSV 部分结果（仅展示成功匹配的记录，失败项未回填 fixture）",
+      recoveryHint: "外网恢复后重试这些 CVE ID", emit: opts.emit,
+    });
   }
   const payload = { results };
   const payloadRef = await persistPayload(SOURCE_ID, payload, fetchedAt);

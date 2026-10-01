@@ -5,6 +5,7 @@ import { IS_DEMO_MODE } from '../api'
 const links = [
   { to: '/dashboard', label: '态势大屏', icon: 'M3 3h7v7H3V3zm0 11h7v7H3v-7zm11-11h7v7h-7V3zm0 11h7v7h-7v-7z' },
   { to: '/intel', label: '情报列表', icon: 'M12 2l9 4v6c0 5.5-3.8 10.7-9 12-5.2-1.3-9-6.5-9-12V6l9-4z' },
+  { to: '/ingest-diagnostics', label: '采集诊断', icon: 'M3 3v18h18 M7 14l4-4 3 3 6-7' },
   { to: '/qa', label: '情报问答', icon: 'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.6 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.6-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z' },
 ]
 </script>

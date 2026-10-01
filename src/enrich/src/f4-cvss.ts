@@ -22,6 +22,7 @@ import type { FallbackEvent, IntelItem, ScoreAssessment, ScoreSource } from "@sa
 export interface HttpResponseLike {
   ok: boolean;
   status: number;
+  headers?: { get(name: string): string | null };
   text(): Promise<string>;
   json(): Promise<unknown>;
 }

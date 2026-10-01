@@ -139,3 +139,22 @@ export interface MetricsOverview {
     breakdown: Record<string, number>
   }
 }
+
+export type IngestSourceState = "live" | "partial" | "fixture" | "no_new_data" | "failed"
+export type IngestRunMode = "live" | "mixed" | "fixture" | "no_data"
+export interface IngestDiagnosticSource { source_id: string; state: IngestSourceState; raw_docs: number; intel_items: number; detail: string }
+export interface IngestDiagnosticFallback { trigger: string; count: number; user_visible: boolean }
+export interface IngestDiagnosticCounts {
+  raw_docs: number; intel_events: number; unique_intel_ids: number; dq_verdicts: number;
+  dq_pass: number; dq_degrade: number; dq_review: number; dq_quarantine: number;
+  enrich_items: number; enrich_degraded_items: number; accepted_items: number; enrich_coverage: number | null; fallback_events: number
+}
+export interface IngestDiagnosticRun {
+  trace_id: string; started_at: string; last_activity_at: string; mode: IngestRunMode;
+  sources: IngestDiagnosticSource[]; counts: IngestDiagnosticCounts; fallbacks: IngestDiagnosticFallback[]; warnings: string[]
+}
+export interface IngestDiagnostics {
+  generated_at: string; database_available: boolean; database_name: string; nvd_api_key_configured: boolean;
+  total_runs: number; latest_run: IngestDiagnosticRun | null;
+  recent_runs: Array<Pick<IngestDiagnosticRun, "trace_id" | "started_at" | "last_activity_at" | "mode" | "counts">>; note?: string
+}

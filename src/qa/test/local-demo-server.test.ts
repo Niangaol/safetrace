@@ -9,7 +9,8 @@ let base: string;
 
 before(async () => {
   const dataset = await loadDataset();
-  server = createLocalDemoServer(dataset);
+  const absentDb = "tmp/absent-ingest-diagnostics-" + process.pid + ".sqlite";
+  server = createLocalDemoServer(dataset, { diagnosticsDbPath: absentDb });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
 });
@@ -79,4 +80,13 @@ test("本地演示 API：拒绝空问题和未知路由", async () => {
   assert.equal(invalid.status, 400);
   const missing = await fetch(base + "/api/v1/no-such-route");
   assert.equal(missing.status, 404);
+});
+
+test("采集诊断 API：无持久化 SQLite 时明确说明 fixture 不是真采集", async () => {
+  const response = await fetch(base + "/api/v1/ingest/diagnostics");
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { database_available: boolean; latest_run: unknown; note?: string };
+  assert.equal(payload.database_available, false);
+  assert.equal(payload.latest_run, null);
+  assert.match(payload.note ?? "", /fixture 演示不等于真实联网采集/);
 });

@@ -184,30 +184,53 @@ CREATE TABLE IF NOT EXISTS dead_letters (
 
 export class SqliteEventStore implements EventStore {
   private db: DatabaseSync;
-  private seq = 0;
-
 
   constructor(path = ":memory:") {
     this.db = new DatabaseSync(path);
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec(SCHEMA_SQL);
-    const row = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS m FROM events").get() as { m: number };
-    this.seq = row.m;
-
+    // 兼容旧库：串行迁移重复 seq，再建立全库唯一约束，防止多个 store 实例各自取 MAX(seq) 撞号。
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const duplicates = this.db.prepare("SELECT seq FROM events GROUP BY seq HAVING COUNT(*) > 1").all() as Array<{ seq: number }>;
+      for (const duplicate of duplicates) {
+        const rows = this.db.prepare("SELECT event_id FROM events WHERE seq = ? ORDER BY rowid").all(duplicate.seq) as Array<{ event_id: string }>;
+        for (const row of rows.slice(1)) {
+          const next = this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM events").get() as { n: number };
+          this.db.prepare("UPDATE events SET seq = ? WHERE event_id = ?").run(next.n, row.event_id);
+        }
+      }
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_seq_unique ON events(seq)");
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction may already be closed */ }
+      throw error;
+    }
   }
 
   async append<T>(env: Envelope<T>): Promise<boolean> {
-    const exists = this.db.prepare("SELECT 1 FROM events WHERE event_id = ?").get(env.event_id);
-    if (exists) return false; // 幂等：重复投递直接吞掉
-    this.seq += 1;
-    this.db
-      .prepare(
-        "INSERT INTO events (event_id, topic, occurred_at, trace_id, causation_id, payload, schema_version, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        env.event_id, env.topic, env.occurred_at, env.trace_id,
-        env.causation_id, JSON.stringify(env.payload), env.schema_version, this.seq,
-      );
-    return true;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const exists = this.db.prepare("SELECT 1 FROM events WHERE event_id = ?").get(env.event_id);
+      if (exists) {
+        this.db.exec("COMMIT");
+        return false; // 幂等：重复投递直接吞掉
+      }
+      const next = this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM events").get() as { n: number };
+      this.db
+        .prepare(
+          "INSERT INTO events (event_id, topic, occurred_at, trace_id, causation_id, payload, schema_version, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          env.event_id, env.topic, env.occurred_at, env.trace_id,
+          env.causation_id, JSON.stringify(env.payload), env.schema_version, next.n,
+        );
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction may already be closed */ }
+      throw error;
+    }
   }
 
   async read<T>(topic: Topic, offset = 0, limit = 100): Promise<Envelope<T>[]> {

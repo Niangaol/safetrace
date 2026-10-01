@@ -65,6 +65,30 @@ test("sqlite store：幂等 + 顺序读", async () => {
   store.close();
 });
 
+test("sqlite store：多个已打开实例原子分配全局唯一 seq", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = join(process.cwd(), "tmp", "sqlite-seq-" + process.pid + "-" + Date.now());
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, "events.sqlite");
+  const first = new SqliteEventStore(path);
+  const second = new SqliteEventStore(path);
+  try {
+    await Promise.all([
+      first.append(makeEnvelope("raw.docs", { source_id: "one" })),
+      second.append(makeEnvelope("raw.docs", { source_id: "two" })),
+    ]);
+    const inspect = new DatabaseSync(path, { readOnly: true });
+    try {
+      const rows = inspect.prepare("SELECT seq FROM events ORDER BY seq").all() as Array<{ seq: number }>;
+      assert.deepEqual(rows.map((row) => row.seq), [1, 2]);
+    } finally { inspect.close(); }
+  } finally {
+    first.close();
+    second.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("lineage：canonical SHA-256 ignores object key order", () => {
   assert.equal(sha256Json({ b: 2, a: 1 }), sha256Json({ a: 1, b: 2 }));
   assert.notEqual(sha256Json({ a: 1 }), sha256Json({ a: 2 }));

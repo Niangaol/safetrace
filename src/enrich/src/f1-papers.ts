@@ -12,6 +12,9 @@ export type { HttpFetcher } from "./f4-cvss.js";
 
 const ARXIV_API = "https://export.arxiv.org/api/query";
 const MAX_RESULTS = 5;
+const ARXIV_MIN_INTERVAL_MS = 3_000;
+const ARXIV_SUCCESS_CACHE = new Map<string, PaperLink[]>();
+let lastArxivRequestAt = 0;
 
 /** 查询词最小长度（过滤 of/the/an 之类噪声词）。 */
 const MIN_TERM_LEN = 3;
@@ -43,27 +46,55 @@ export interface PapersResult {
   degraded_to?: string;
 }
 
-/**
- * arXiv Atom 检索。query 为检索短语（拼进 search_query=all:"..."）。
- * 返回论文列表（按 relevance 降序，至多 5 条）+ 降级标记。
- */
+/** arXiv Atom 检索：成功结果按规范化查询词缓存；在线请求串行限速并对 429/5xx 有界重试。 */
+function retryAfterMilliseconds(header: string | null, fallback: number): number {
+  if (!header) return fallback;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.min(30_000, Math.max(0, seconds * 1000));
+  const date = Date.parse(header);
+  return Number.isFinite(date) ? Math.min(30_000, Math.max(0, date - Date.now())) : fallback;
+}
+
+async function wait(milliseconds: number): Promise<void> {
+  if (milliseconds > 0) await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/** arXiv Atom 检索。query 为检索短语；失败仍走显式 fixture 降级。 */
 export async function searchPapers(query: string, opts: SearchPapersOptions = {}): Promise<PapersResult> {
   const q = query.trim().replace(/\s+/g, " ");
   if (!q) throw new Error("searchPapers: query 不能为空");
   const traceId = opts.traceId ?? nextId("tr");
   if (isOffline(opts.offline)) return replayFixture(q, "offline_flag", traceId, opts.emit);
-
-  const fetcher = opts.fetchImpl ?? (fetch as unknown as HttpFetcher);
+  const injectedFetcher = opts.fetchImpl !== undefined;
+  const cacheKey = q.toLocaleLowerCase();
+  if (!injectedFetcher && ARXIV_SUCCESS_CACHE.has(cacheKey)) return { papers: [...ARXIV_SUCCESS_CACHE.get(cacheKey)!] };
+  const fetcher = opts.fetchImpl ?? ((url: string) => fetch(url, { signal: AbortSignal.timeout(15_000) }));
   const url = buildArxivUrl(q);
-  try {
-    const res = await fetcher(url);
-    if (!res.ok) return replayFixture(q, `arxiv_http_${res.status}`, traceId, opts.emit);
-    const xml = await res.text();
-    return { papers: parseArxivAtom(xml, q) };
-  } catch (err) {
-    return replayFixture(q, `arxiv_fetch_failed: ${errText(err)}`, traceId, opts.emit);
+  let lastTrigger = "arxiv_fetch_failed: no attempt";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!injectedFetcher) {
+      const waitForSlot = ARXIV_MIN_INTERVAL_MS - (Date.now() - lastArxivRequestAt);
+      await wait(waitForSlot);
+      lastArxivRequestAt = Date.now();
+    }
+    try {
+      const res = await fetcher(url);
+      if (res.ok) {
+        const papers = parseArxivAtom(await res.text(), q);
+        if (!injectedFetcher) ARXIV_SUCCESS_CACHE.set(cacheKey, papers);
+        return { papers };
+      }
+      lastTrigger = "arxiv_http_" + res.status;
+      if (res.status !== 429 && res.status < 500) break;
+      if (attempt < 2) await wait(res.status === 429 ? retryAfterMilliseconds(res.headers?.get("retry-after") ?? null, 1000 * (attempt + 1)) : 1000 * (attempt + 1));
+    } catch (err) {
+      lastTrigger = "arxiv_fetch_failed: " + errText(err);
+      if (attempt < 2) await wait(1000 * (attempt + 1));
+    }
   }
+  return replayFixture(q, lastTrigger, traceId, opts.emit);
 }
+
 
 export function buildArxivUrl(query: string): string {
   const encoded = encodeURIComponent(query.trim());

@@ -34,6 +34,8 @@ export interface RunIngestOnceOpts {
   trace_id?: string;
   /** 单轮抓取条目上限，透传给各源采集器（未实现的源忽略）。 */
   limit?: number;
+  /** 调度器单源运行时可传入已持久化的 CVE IDs，作为 OSV/cve.org 查询种子。 */
+  cve_ids?: string[];
 }
 
 export interface IngestRunResult {
@@ -78,6 +80,12 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
   const traceId = opts.trace_id ?? nextId("tr");
   const wanted = opts.sourceIds;
   const runners = wanted === undefined ? SOURCE_RUNNERS : SOURCE_RUNNERS.filter((r) => wanted.includes(r.id));
+  // KEV/NVD 先跑，随后把近期 CVE ID 有界传给 OSV/cve.org；冷启动不再把这两家当成“成功但无数据”。
+  const discoveredCves = new Map<string, string>((opts.cve_ids ?? []).map((id) => [id, ""]));
+  const candidateCveIds = (): string[] => [...discoveredCves.entries()]
+    .sort((a, b) => b[1].localeCompare(a[1]))
+    .slice(0, 10)
+    .map(([id]) => id);
 
   const fetched: RawDoc[] = [];
   const parsed: IntelItem[] = [];
@@ -93,11 +101,14 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
     const sourceEvents: FallbackEvent[] = [];
     const fetchStarted = nowIso();
     let raw: RawDoc | null;
+    let noDataReason: string | undefined;
     try {
       raw = await runner.run({
         offline: opts.offline,
         traceId,
         ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+        ...(discoveredCves.size > 0 ? { cveIds: candidateCveIds() } : {}),
+        onNoData: (reason) => { noDataReason = reason; },
         emit: (event) => { sourceEvents.push(event); },
       });
     } catch {
@@ -120,7 +131,7 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
         status: "success",
         started_at: fetchStarted,
         input_refs: [{ kind: "Source", id: runner.id }],
-        decision: { reason: "source returned no new document" },
+        decision: { reason: noDataReason ?? "source returned no new document" },
       });
       continue;
     }
@@ -178,6 +189,13 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
       throw new Error("解析失败；lineage 已记录 trace_id=" + traceId + " source_id=" + runner.id);
     }
     raw.parse_warnings = parsedResult.warnings;
+    for (const item of parsedResult.items) {
+      for (const cveId of item.cve_ids) {
+        const publishedAt = item.published_at ?? "";
+        const previous = discoveredCves.get(cveId);
+        if (previous === undefined || publishedAt > previous) discoveredCves.set(cveId, publishedAt);
+      }
+    }
     const rawEnv = await bus.publish("raw.docs", raw, { trace_id: traceId, causation_id: null });
     const rawPublish = await bus.recordLineage({
       trace_id: traceId,

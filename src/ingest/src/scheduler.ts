@@ -84,6 +84,32 @@ async function appendRunLog(file: string | null, record: RunRecord): Promise<voi
   await appendFile(file, JSON.stringify(record) + "\n", "utf8");
 }
 
+type CveSeedState = { byId: Map<string, string>; osvSeen: Set<string>; cveOrgSeen: Set<string> };
+
+async function loadCveSeeds(store: EventStore): Promise<CveSeedState> {
+  const state: CveSeedState = { byId: new Map(), osvSeen: new Set(), cveOrgSeen: new Set() };
+  for (let offset = 0; ; offset += 500) {
+    const page = await store.read<{ cve_ids?: string[]; published_at?: string | null; source_ids?: string[] }>("intel.items", offset, 500);
+    for (const event of page) rememberCveItems(state, [event.payload]);
+    if (page.length < 500) return state;
+  }
+}
+
+function rememberCveItems(state: CveSeedState, items: Array<{ cve_ids?: string[]; published_at?: string | null; source_ids?: string[] }>): void {
+  for (const item of items) {
+    for (const id of item.cve_ids ?? []) {
+      const publishedAt = item.published_at ?? "";
+      const previous = state.byId.get(id);
+      if (previous === undefined || publishedAt > previous) state.byId.set(id, publishedAt);
+    }
+  }
+}
+
+function nextCveSeeds(state: CveSeedState, sourceId: string): string[] {
+  const seen = sourceId === "osv" ? state.osvSeen : state.cveOrgSeen;
+  const limit = sourceId === "cve_org" ? 1 : 10;
+  return [...state.byId.entries()].filter(([id]) => !seen.has(id)).sort((a, b) => b[1].localeCompare(a[1])).slice(0, limit).map(([id]) => id);
+}
 /**
  * 主循环：每轮检查哪些源到点（lastRun + poll_interval_s <= now），到点的源逐个抓取。
  * 单源失败隔离：一个源抛错只记 ok=false，不影响其他源与后续轮次。
@@ -106,6 +132,8 @@ export async function runIngestScheduler(opts: SchedulerOpts = {}): Promise<Sche
 
   /** source_id → 上次执行完成的毫秒时间戳（null = 从未跑过 ⇒ 启动即执行一轮）。 */
   const lastRunAt = new Map<string, number | null>(entries.map((e) => [e.source_id, null]));
+  // 单源 scheduler 每个 runner 独立调用 pipeline；启动时从持久 intel.items 取 CVE 种子，避免 OSV/cve.org 永远空跑。
+  const cveSeedState = await loadCveSeeds(store);
   const records: RunRecord[] = [];
   const startedAt = nowIso();
   let cycles = 0;
@@ -113,7 +141,19 @@ export async function runIngestScheduler(opts: SchedulerOpts = {}): Promise<Sche
   const runSource = async (sourceId: string, atMs: number): Promise<void> => {
     let record: RunRecord;
     try {
-      const res = await runIngestOnce({ store, offline: opts.offline, sourceIds: [sourceId], ...(opts.limit !== undefined ? { limit: opts.limit } : {}) });
+      const cve_ids = sourceId === "osv" || sourceId === "cve_org" ? nextCveSeeds(cveSeedState, sourceId) : undefined;
+      const res = await runIngestOnce({ store, offline: opts.offline, sourceIds: [sourceId], ...(opts.limit !== undefined ? { limit: opts.limit } : {}), ...(cve_ids?.length ? { cve_ids } : {}) });
+      rememberCveItems(cveSeedState, res.parsed);
+      if (cve_ids?.length) {
+        const hasFixtureFallback = res.fallbackEvents.some((event) => event.degraded_of === "fixture");
+        const hasPartialFailure = res.fallbackEvents.some((event) => event.degraded_of === "partial");
+        const sourceItems = res.parsed.filter((item) => item.source_ids.includes(sourceId));
+        const seen = sourceId === "osv" ? cveSeedState.osvSeen : cveSeedState.cveOrgSeen;
+        if (!hasFixtureFallback) {
+          const attempted = hasPartialFailure ? sourceItems.flatMap((item) => item.cve_ids) : cve_ids;
+          for (const id of attempted) seen.add(id); // 404/no match is attempted; fixture failure stays retryable
+        }
+      }
       record = {
         run_at: new Date(atMs).toISOString(),
         source_id: sourceId,

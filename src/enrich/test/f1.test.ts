@@ -128,6 +128,30 @@ test("searchPapers：OFFLINE_FIXTURES=true 环境变量触发离线回放", asyn
   }
 });
 
+test("searchPapers：429 尊重 Retry-After 并有限重试", async () => {
+  let calls = 0;
+  const fetcher: HttpFetcher = async () => {
+    calls++;
+    if (calls === 1) return { ok: false, status: 429, headers: { get: () => "0" }, text: async () => "", json: async () => ({}) };
+    return { ok: true, status: 200, text: async () => "<feed></feed>", json: async () => ({}) };
+  };
+  const result = await searchPapers("retry-after unique query", { fetchImpl: fetcher });
+  assert.equal(calls, 2);
+  assert.equal(result.degraded_to, undefined);
+});
+
+test("searchPapers：在线成功查询在进程内缓存，避免重复 arXiv 请求", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => { calls++; return new Response("<feed></feed>", { status: 200 }); }) as typeof fetch;
+  try {
+    const query = "cache unique arxiv query";
+    await searchPapers(query);
+    await searchPapers(query);
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = original; }
+});
+
 test("parseArxivAtom：超过 5 条截断；脏 entry（无标题/id）跳过", () => {
   const many = Array.from({ length: 6 }, (_, i) => [
     "  <entry>",

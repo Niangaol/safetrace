@@ -47,6 +47,10 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 > `web/scripts/smoke-data-source.mjs` 6/6 烟测）。main 最终采用更简单的二值开关（显式模式、无静默回退），
 > 该脚本**未移植**；若将来要恢复"自动回退"能力，需连同该脚本一起移植并重跑其 6 项断言。
 
+### 采集诊断页（2026-10-01 修复）
+
+`/ingest-diagnostics` 通过 `GET /api/v1/ingest/diagnostics` 只读 `var/safetrace.sqlite` 的最近 trace，与 `demo:serve` 的内存 fixture 列表分开。页面逐源标记 live / partial / fixture / no_new_data / failed，显示 DQ、富化覆盖、F1 fixture 降级和 fallback 原因；无 SQLite 时明确提示。静态 `VITE_DEMO_MODE=true` 会显示该页不可读取本机 SQLite 的说明。状态对应历史 trace，代码修复不会回写旧数据。
+
 ---
 
 ## 3. 已知限制（**必须同步进报告「已知限制」，不要在汇报里说成已完成**）
@@ -59,6 +63,9 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 4. **F2 资产定位是 Mock**：20 条合成演示资产，不接真实清单/扫描（合规红线：不扫未授权目标）。
 5. **注入防护未落地**：答案 `injection_guard.screened=false` 如实显示；A-04/E-04 已排期最迟 D9–D11（10/6–10/8）重启。
 6. **72h 连续运行证据未产生**：调度器/看板代码已合入，端到端实测待 XueXuhang 补跑。
+7. **E-02 最新 SQLite trace 是修复前历史**：其 OSV/cve.org 为 no_new_data，代码现已传入 CVE IDs，但历史事件不回写。真实端到端内存探测（不写 SQLite）已证明 KEV→OSV/cve.org 各抓取并解析 1 条，且两条都与 KEV 对应 CVE 归并；正式比较表仍待补。
+8. **富化未完成且 fallback 不等于成功**：最新持久 trace 富化结果 1098/3727（29.5%），其中 1074 条 arXiv 论文为 fixture 降级。未富化项可用 `SAFETRACE_ENRICH_OFFLINE=false npm run enrich:pending -- --limit=20` 分批跑；已产生 fixture 结果不会自动覆盖。
+9. **事件库仍 append-only**：SQLite seq 现已原子唯一，但重复 ingest 仍可产生重复业务事件。诊断页面按 trace 展示并给出 unique intel_id 数；不要跨 runs 将 event 数量当作唯一漏洞数。
 
 ---
 
@@ -79,11 +86,12 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 
 | 序 | 事项 | 依据 |
 | ---|---|---|
-| 1 | **P-07 浏览器手动验收**：演示页三场景（Log4Shell 带引用问答 / CVE-2099-4321 拒答 / "嗯"澄清）+ 录屏截图 | 本文件 §1、`docs/P07-DEMO-PLAN.md` §2 |
-| 2 | **D6（10/3）契约冻结三线 sign-off**：C-01~C-06 代码侧早已完成，卡在签字 | `docs/TASKS.md` §4 |
-| 3 | **A-04 / E-04 安全加固**：DQ1 隔离落库、注入检测、Q4 入口闸门（禁砍，最迟 D9–D11） | `docs/TASKS.md` §5 |
-| 4 | compose 最小验证（Qdrant + Postgres + demo 全栈）——D16 彩排前 | 台账 E-05 降级口径 |
-| 5 | D 系列文档口径同步（README/PROJECT-INTRO 与代码不符的 12 处） | 台账 §7 |
+| 1 | **E-02 持久化验收与富化收尾**：真实 pipeline 已用 MemoryEventStore 验证 OSV/cve.org 都取到 CVE 并归并；正式 SQLite/fixture 对比尚缺。避免再向 `var/safetrace.sqlite` 盲目全量重跑，优先用 disposable `SQLITE_PATH=tmp/...`；未富化项用 `npm run enrich:pending -- --limit=20` | `docs/TASKS.md` E-02、`docs/E-02-REAL-RUN-2026-10-01.md` |
+| 2 | **P-07 其余浏览器手动验收**：Log4Shell 带引用问答 / CVE-2099-4321 拒答 / “嗯”澄清 + 截图录屏；采集诊断页本轮已用 Tabbit 目视验证，但不能代替整套 P-07 验收 | 本文件 §1、`docs/P07-DEMO-PLAN.md` §2 |
+| 3 | **D6（10/3）契约冻结三线 sign-off**：C-01~C-06 代码侧早已完成，卡在签字 | `docs/TASKS.md` §4 |
+| 4 | **A-04 / E-04 安全加固**：DQ1 隔离落库、注入检测、Q4 入口闸门（禁砍，最迟 D9–D11） | `docs/TASKS.md` §5 |
+| 5 | compose 最小验证（Qdrant + Postgres + demo 全栈）——D16 彩排前 | 台账 E-05 降级口径 |
+| 6 | D 系列文档口径同步（README/PROJECT-INTRO 与代码不符的 12 处） | 台账 §7 |
 
 ---
 
@@ -106,4 +114,4 @@ npm run smoke                    → 全段 PASS
 src/qa/test/local-demo-server.test.ts → 82 行断言随全量测试通过
 ```
 
-**仍待办**：浏览器手动验收（§5 第 1 项）未做，完成前不得将 P-07 表述为"已验收"。
+**仍待办**：采集诊断页已用 Tabbit 目视验证；P-07 整体浏览器验收仍未完成（大屏、情报列表和三种问答场景 + 录屏尚欠），完成前不得将 P-07 表述为"已验收"。
