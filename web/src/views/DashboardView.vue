@@ -214,7 +214,7 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
         { label: '采集延迟 P50', value: fmtLatency(metrics?.latency.p50_seconds ?? null), icon: 'clock' },
         { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : null, icon: 'zap', variant: 'ok' },
         { label: '知识库切片', value: metrics?.knowledge.chunks ?? null, icon: 'box' },
-        { label: '模型调用费用', value: '—', hint: '本链路未调用 LLM', icon: 'yen' },
+        { label: '模型调用费用', value: '—', hint: 'StepFun 费用暂未计量', icon: 'yen' },
         { label: '在跑任务', value: status?.queue_depth ?? null, icon: 'refresh' },
       ]"
     />

@@ -21,6 +21,8 @@ export interface OpenAiCompatConfig {
   trustBoundary?: TrustBoundary;
 }
 
+export type OpenAiCompatChatParams = ChatParams & { reasoning_effort?: "low" | "medium" | "high" };
+
 export class OpenAiCompatError extends Error {
   readonly status?: number;
   constructor(message: string, status?: number) {
@@ -85,13 +87,14 @@ async function postJson(url: string, body: unknown, cfg: OpenAiCompatConfig): Pr
 export async function compatChat(
   cfg: OpenAiCompatConfig,
   messages: ChatMessage[],
-  params: ChatParams = {},
+  params: OpenAiCompatChatParams = {},
 ): Promise<ProviderResult> {
   const json = await postJson(cfg.baseUrl.replace(/\/$/, "") + "/chat/completions", {
     model: cfg.modelId,
     messages,
     temperature: params.temperature ?? 0.2,
     max_tokens: params.max_tokens,
+    ...(params.reasoning_effort ? { reasoning_effort: params.reasoning_effort } : {}),
   }, cfg);
   const choice = json?.choices?.[0]?.message?.content ?? "";
   if (!choice) throw new OpenAiCompatError("provider 返回空 choices");

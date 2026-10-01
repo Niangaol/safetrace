@@ -10,8 +10,8 @@ import type { Answer, EventBus, InjectionFlag, InjectionGuard, RetrievalResponse
 import type { QueryPlan } from "./q1-intent.js";
 
 /**
- * 注入接口：未来 MG1 接 LLM 时实现该接口替换默认模板合成器。
- * 接线发生在编排层/冒烟（见 openapi.yaml /v1/chat/complete），本包不 import gateway。
+ * 注入接口：由上层编排连接 StepFun 等模型；原模板继续负责证据门禁并作为模型失败时的兜底。
+ * 本包不 import gateway，以保持 Q4 可独立测试与离线运行。
  */
 export interface AnswerSynthesizer {
   synthesize(question: string, plan: QueryPlan, evidence: RetrievalResponse): Promise<Answer> | Answer;
@@ -19,6 +19,8 @@ export interface AnswerSynthesizer {
 
 export interface SynthesizeOptions {
   synth?: AnswerSynthesizer;
+  /** Optional lineage identity for an injected generator (e.g. StepFun or template fallback). */
+  synthesizer?: { provider: string; model_id: string; model_version?: string };
   /** 编排层应显式传入；缺省时 session_id 为空串、turn_id 回落 evidence.trace_id */
   session_id?: string;
   turn_id?: string;
@@ -297,11 +299,11 @@ export async function synthesizeAnswer(
       parent_lineage_ids: opts.parent_lineage_ids ?? [],
       causation_id: opts.causation_id ?? null,
       stage: "qa.q4_answer",
-      operation_version: opts.synth ? "answer-synthesizer.injected.v1" : "q4-template.v1",
+      operation_version: opts.synth ? "answer-synthesizer." + (opts.synthesizer?.provider ?? "injected") + ".v1" : "q4-template.v1",
       status: "failed",
       started_at: startedAt,
       input_refs: inputRefs,
-      execution: { component_version: opts.synth ? "injected" : "q4-template.v1" },
+      execution: opts.synthesizer ? { component_version: "answer-synthesizer", provider: opts.synthesizer.provider, model_id: opts.synthesizer.model_id, ...(opts.synthesizer.model_version ? { model_version: opts.synthesizer.model_version } : {}) } : { component_version: opts.synth ? "injected" : "q4-template.v1" },
       error: "answer synthesis failed; source text omitted",
     });
     throw error;
@@ -311,19 +313,22 @@ export async function synthesizeAnswer(
     parent_lineage_ids: opts.parent_lineage_ids ?? [],
     causation_id: opts.causation_id ?? null,
     stage: "qa.q4_answer",
-    operation_version: opts.synth ? "answer-synthesizer.injected.v1" : "q4-template.v1",
-    status: "success",
+    operation_version: opts.synth ? "answer-synthesizer." + (opts.synthesizer?.provider ?? "injected") + ".v1" : "q4-template.v1",
+    status: opts.synthesizer?.provider === "template" || answer.degraded_to ? "degraded" : "success",
     started_at: startedAt,
     input_refs: inputRefs,
     output_refs: [
       { kind: "Answer", id: answer.turn_id, sha256: sha256Json(answer) },
       ...answer.citations.map((citation) => ({ kind: "Citation", id: citation.chunk_id, url: citation.url })),
     ],
-    execution: { component_version: opts.synth ? "injected" : "q4-template.v1" },
+    execution: opts.synthesizer ? { component_version: "answer-synthesizer", provider: opts.synthesizer.provider, model_id: opts.synthesizer.model_id, ...(opts.synthesizer.model_version ? { model_version: opts.synthesizer.model_version } : {}) } : { component_version: opts.synth ? "injected" : "q4-template.v1" },
     decision: {
-      reason: answer.abstained
-        ? (answer.stale_warning ? "abstained: evidence gate; stale" : "abstained: evidence gate")
-        : (answer.stale_warning ? "answered; stale" : "answered"),
+      ...(opts.synthesizer?.provider === "template" ? { fallback_to: "template" } : answer.degraded_to ? { fallback_to: answer.degraded_to } : {}),
+      reason: opts.synthesizer?.provider === "template"
+        ? "StepFun unavailable; deterministic Q4 template fallback"
+        : answer.abstained
+          ? (answer.stale_warning ? "abstained: evidence gate; stale" : "abstained: evidence gate")
+          : (answer.stale_warning ? "answered; stale" : "answered"),
     },
   });
   return answer;

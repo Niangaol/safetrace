@@ -33,6 +33,50 @@ test("local stack profile switches embedder to bge-m3 with trust_boundary local"
   assert.equal(local.providers.tokendance?.api_key_env, "TOKENDANCE_API_KEY");
 });
 
+test("StepPlan model profile uses the local OpenAI-compatible endpoint", () => {
+  const profile = loadModelsConfig("config/models.tokendance.yml");
+  assert.equal(profile.providers.stepplan?.base_url_default, "https://api.stepfun.com/step_plan/v1");
+  assert.equal(profile.providers.stepplan?.api_key_env, "STEP_PLAN_API_KEY");
+  assert.equal(profile.roles.answerer.provider, "stepplan");
+  assert.equal(profile.roles.answerer.model_id, "step-3.7-flash");
+  assert.equal(profile.roles.answerer.capability_flags.reasoning_effort, "low");
+  assert.deepEqual(profile.roles.answerer.fallback_chain, ["cache"]);
+});
+
+test("StepPlan: OpenAI-compatible chat uses configured role and records model lineage", async () => {
+  const original = globalThis.fetch;
+  const previousKey = process.env.STEP_PLAN_API_KEY;
+  const previousBase = process.env.STEPPLAN_BASE_URL;
+  process.env.STEP_PLAN_API_KEY = "test-only-not-a-real-secret";
+  process.env.STEPPLAN_BASE_URL = "https://api.stepfun.com/step_plan/v1";
+  const store = new MemoryEventStore();
+  const bus = new EventBus({ store });
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), "https://api.stepfun.com/step_plan/v1/chat/completions");
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer test-only-not-a-real-secret");
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.model, "step-3.7-flash");
+    assert.equal(body.reasoning_effort, "low");
+    return new Response(JSON.stringify({ model: body.model, choices: [{ message: { content: "由给定证据生成的测试结论。" } }], usage: { prompt_tokens: 12, completion_tokens: 9 } }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const gateway = new ModelGateway({ configPath: "config/models.tokendance.yml", bus });
+    const reply = await gateway.chat("answerer", [{ role: "user", content: "public vulnerability question" }], { temperature: 0.2, max_tokens: 100 }, "tr_stepfun_profile", "public");
+    assert.equal(reply.provider, "stepplan");
+    assert.equal(reply.model_id, "step-3.7-flash");
+    assert.equal(reply.text, "由给定证据生成的测试结论。");
+    assert.equal(reply.degraded_to, "");
+    const lineage = await bus.readLineage("tr_stepfun_profile");
+    assert.ok(lineage.some((row) => row.stage === "mg1.chat" && row.execution?.provider === "stepplan" && row.execution.model_id === "step-3.7-flash"));
+    assert.ok(!JSON.stringify(lineage).includes("test-only-not-a-real-secret"));
+    assert.ok(!JSON.stringify(lineage).includes("public vulnerability question"));
+  } finally {
+    globalThis.fetch = original;
+    if (previousKey === undefined) delete process.env.STEP_PLAN_API_KEY; else process.env.STEP_PLAN_API_KEY = previousKey;
+    if (previousBase === undefined) delete process.env.STEPPLAN_BASE_URL; else process.env.STEPPLAN_BASE_URL = previousBase;
+  }
+});
+
 test("MG1 real-profile protocol and lineage tested with injected response, not a cloud call", async () => {
   const original = globalThis.fetch;
   const previousKey = process.env.TOKENDANCE_API_KEY;

@@ -12,6 +12,13 @@ providers:
     base_url_default: https://tokendance.space/gateway/v1
     api_key_env: TOKENDANCE_API_KEY
 
+  stepplan:
+    type: openai_compat
+    trust_boundary: cloud
+    base_url_env: STEPPLAN_BASE_URL
+    base_url_default: https://api.stepfun.com/step_plan/v1
+    api_key_env: STEP_PLAN_API_KEY
+
   # ---- 本地 llama-server（无 Docker，scripts/local/up.ps1 一键起）----
   # trust_boundary: local → A-03 隔离闸门放行：本地是私有数据合法目的地，不过出网扫描
   local_embed:
@@ -69,15 +76,19 @@ roles:
     capability_flags: { tools: false }
 
   answerer:
-    provider: cache
-    model_id: cache-answerer
-    model_version: v0
-    max_rpm: 600
-    max_tpm: 2000000
-    max_concurrency: 4
-    timeout_ms: 30000
-    fallback_chain: [cache, template]
-    # 真实模型接入时改为：provider: deepseek, model_id: deepseek-chat
+    provider: stepplan
+    data_domain: public
+    model_id: step-3.7-flash
+    model_version: unversioned-api
+    max_rpm: 60
+    max_tpm: 200000
+    max_concurrency: 1
+    timeout_ms: 90000
+    # StepPlan 的推理输出可能消耗较长时间，允许最多 90 秒；Q4 超时仍回退模板。
+    # MG1 cache 是内部安全通道；外层 Q4 在检测到 StepPlan 降级时会回退原模板，
+    # 不把 cacheChat 的占位文本当作 LLM 答案返回。
+    fallback_chain: [cache]
+    capability_flags: { tools: false, reasoning_effort: low }
 
   # 本地 bge-m3（llama-server :8081）：实测 1024 维，与 Tokendance qwen3.7-text-embedding
   # 同维度，故 safetrace_sources 集合向量元数据可直接复用，无需重建。

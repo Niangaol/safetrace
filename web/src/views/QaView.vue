@@ -13,7 +13,7 @@ const STAGE_LABEL: Record<string, string> = {
   plan: '拆解问题',
   rewrite: '改写检索式',
   retrieve: '混合检索',
-  generate: '规则合成答案',
+  generate: 'StepPlan / 模板生成',
   check: '自检',
 }
 
@@ -23,6 +23,12 @@ const SUGGESTIONS = [
   'CVE-2099-4321 影响哪些版本？',
   '嗯',
 ]
+
+function answerModeLabel(mode: string): string {
+  if (mode === "stepfun") return "StepPlan LLM"
+  if (mode === "template_fallback") return "StepPlan 失败 → 原模板兜底"
+  return "原规则模板"
+}
 
 async function submit(q?: string) {
   const text = (q ?? question.value).trim()
@@ -52,11 +58,11 @@ watch(() => qa.citations.length, scrollToBottom)
 
 <template>
   <h1 class="page-title">情报问答</h1>
-  <p class="page-subtitle">Q1 意图识别 → Q2（独立 fixture 证据索引）→ Q4 规则合成；显示实际检索引用，索引外 CVE 会拒答。</p>
+  <p class="page-subtitle">Q1 意图识别 → Q2（fixture 证据索引）→ Q4：本机配置 StepPlan 时用 LLM 生成结论；未配置、失败或证据不足时使用原规则模板/拒答。引用始终由 Q2/Q4 固定，不由模型编造。</p>
 
   <div v-if="qa.metrics" class="muted" style="margin-bottom: 12px; font-size: 12px; display: flex; align-items: center; gap: 12px">
     <span>离线采集 fixture：{{ qa.metrics.collect.vulns }} 条情报 / {{ qa.metrics.knowledge.chunks }} 个检索块</span>
-    <span>问答使用 Q1→Q2→Q4 规则与本地检索；不调用 LLM，不产生模型费用。</span>
+    <span>本地 fixture 证据 {{ qa.answerMode ? "· 当前模式：" + answerModeLabel(qa.answerMode) : "" }}；StepPlan 云端模式会发送问题与检索证据，请勿输入敏感内容。</span>
   </div>
 
   <div class="panel" style="min-height: 400px; display: flex; flex-direction: column">
@@ -101,7 +107,9 @@ watch(() => qa.citations.length, scrollToBottom)
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; flex-shrink: 0">
           <path d="M12 9v4 M12 17h.01 M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
         </svg>
-        本次答案由本地规则模板根据检索证据生成；输入为 fixture，不调用外部模型。
+        <span v-if="qa.answerMode === 'template_fallback'">StepPlan 不可用，已回退原 Q4 模板；{{ qa.fallbackReason }}。当前检索证据来自 fixture。</span>
+        <span v-else-if="qa.answerMode === 'stepfun'">本次结论由 StepPlan LLM 生成；引用由 Q4 保留，检索证据仍来自 fixture，不代表实时情报。</span>
+        <span v-else>本次使用原 Q4 规则模板；输入与检索证据为 fixture。</span>
       </div>
 
       <!-- 错误 -->

@@ -133,8 +133,8 @@ export interface MetricsOverview {
   knowledge: { chunks: number }
   agents: { runs: number; failed: number }
   cost: {
-    total_cny: number
-    daily_budget_cny: number
+    total_cny: number | null
+    daily_budget_cny: number | null
     degraded: boolean
     breakdown: Record<string, number>
   }

@@ -9,14 +9,14 @@
 
 | 资产 | 内容 | 状态 |
 |---|---|---|
-| `scripts/local-demo-server.ts` | 本机 API（127.0.0.1:8000，`PORT` 可覆盖）：启动时真跑 离线采集→去重→DQ1→富化；每次问答真跑 Q1→Q2→Q4 模板链路 | ✅ 255 行 |
+| `scripts/local-demo-server.ts` | 本机 API（127.0.0.1:8000）：启动时离线采集→去重→DQ1→富化；问答跑 Q1→Q2→Q4，StepPlan 生成结论，失败回退原模板 | ✅ |
 | 端点 | `/api/v1/health`、`/metrics/overview`、`/collect/status`、`/vulns`（分页/筛选/排序）、`/vulns/:id`、`/vulns/:id/evidence`、`POST /api/v1/qa/chat`（SSE）、`GET /api/v1/ingest/diagnostics`（只读 SQLite） | ✅ |
 | 前端 | `web/src/api.ts` 开关改为 `VITE_DEMO_MODE` 环境变量（默认真后端，预置模式才用 mock）；大屏/列表/详情/问答/采集诊断页已接。诊断页独立读取持久化 SQLite，不把 demo 的内存 fixture 当真实采集 | ✅ 基本接好 |
-| 测试 | `src/qa/test/local-demo-server.test.ts`（82 行，随机端口可测） | ✅ |
+| 测试 | `src/qa/test/local-demo-server.test.ts`（随机端口可测，含 diagnostics 无库警告） | ✅ |
 | 文档 | `docs/LOCAL-DEMO.md`（运行手册 + 手测清单，含拒答/澄清用例） | ✅ |
 | 诚实标识 | demo 数据接口带 `data_mode=fixture`、`degraded_to=fixture`；未实测的时效/费用显示 null/“—”；富化维度带 `mock:true`。采集诊断 API 独立返回 SQLite 可用性与最近 trace，不伪装为 demo fixture | ✅ 符合红线 3/5 |
 
-分支自曝限制（`docs/LOCAL-DEMO.md` 写明，演示时照念）：Q2 目前只检索 fixture 证据索引，**尚未接入本次采集结果**；不是联网采集、无 LLM、无真实资产。
+分支自曝限制（`docs/LOCAL-DEMO.md` 写明，演示时照念）：Q2 目前只检索 fixture 证据索引，**尚未接入本次采集结果**；不是实时采集、无真实资产。StepPlan 只生成答案结论，引用由 Q4 保留；模型失败时回退模板。
 
 ## 1. KKK 要做的事（按顺序）
 
@@ -42,15 +42,14 @@ git rebase upstream/main
 
 分支 `docs/LOCAL-DEMO.md` 写的启动命令是 `npm run demo:serve`，但那次提交的 `package.json` **没有加这个脚本**（只加了 allowScripts 一行），命令会报 missing script。二选一：
 
-- 在 `package.json` 的 scripts 里补 `"demo:serve": "tsx scripts/local-demo-server.ts"`（推荐，跟手册一致）；或
-- 把手册命令改成 `npx tsx scripts/local-demo-server.ts`。
+- main 已改为 `node --env-file-if-exists=.env.local --import tsx scripts/local-demo-server.ts`，启动时读取本地 StepPlan 密钥；没有 `.env.local` 时仍安全落到模板。
 
 ### 第 3 步：对齐 SSE 事件字段（前后端各看一眼）
 
 后端已实现的事件流（`scripts/local-demo-server.ts`）：
 
 ```
-stage(plan/retrieve/generate) → citation{id,title,url,score}* → token{text} → done{abstained,confidence,degraded,degraded_to,data_mode,trace_id,cost_cny} / error{message}
+stage(plan/retrieve/generate,answer_mode) → citation{id,title,url,score}* → token{text} → done{abstained,confidence,degraded,degraded_to,data_mode,trace_id,cost_cny,answer_mode,answer_model_id,answer_fallback,fallback_reason} / error{message}
 ```
 
 前端客户端在 `web/src/api.ts` 的 `streamChat`，事件参考在 `web/src/mock.ts`。逐字段核对（尤其 citation 与 done），不一致改前端映射层，不动后端语义。
@@ -74,10 +73,10 @@ npm run smoke
 ## 2. 验收标准（做到即算基础 demo 完成）
 
 1. 本机两个窗口：后端（8000）+ `npm run dev --prefix web`（5173），浏览器完整问答可复现、可录屏。
-2. 答案来自真 Q1→Q2→Q4（模板合成），引用可点开、chunk_id 可回溯；“CVE-2099-4321 影响哪些版本？”显式拒答、“嗯”走澄清路径。
-3. `npm run check` + `npm run smoke` 全绿；`local-demo-server.test.ts` 保留并通过。
+2. 问答经过 Q1→Q2→Q4；本机配置启用 StepPlan 时生成结论，失败回退模板；引用可点开、chunk_id 可回溯。“CVE-2099-4321 影响哪些版本？”显式拒答，“嗯”走澄清路径。
+3. `npm run check` + `npm run smoke` 全绿；local-demo-server API 测试保留并通过。
 4. 真实模式零 mock 混入；`VITE_DEMO_MODE=true` 才是预置模式，且页面有“预置数据”标识。
-5. 答案明示“确定性模板，非模型生成”（红线 3/5）；费用/时效未实测处显示“—”，不编数字。
+5. 页面标明本次是 StepPlan 生成、原模板回答或模型失败后模板兜底；检索证据和 citations 仍来自 Q2/Q4。费用未接计量处显示“—”，不编数字。
 
 ## 3. 边界：demo 阶段不做的事（后续慢慢改）
 
@@ -85,9 +84,9 @@ npm run smoke
 |---|---|
 | A-04 注入防护、E-04 隔离落库 | 已顺延；**禁砍，最迟 D9–D11（10/6–10/8）重启**，否则撞 D13；三处问题清单见 TEAM-PLAN §六 |
 | A-05 时间过滤（published_after） | demo 后做 |
-| 云端模型接入 | 无 key；真模型合成后续经 MG1 注入 AnswerSynthesizer，口径不变 |
+| 云端模型默认策略 | StepPlan 已经由 MG1 接入 Q4；本机 `.env.local` 选择 Tokendance profile 中的 StepPlan answerer；其他环境默认 `models.yml` 仍用模板。StepPlan 故障回退原 Q4 模板 |
 | compose / Docker | D4 拍板弃用，全本地跑（TEAM-PLAN §六） |
 | 大屏/列表接真实监测数据 | 等 Xue 的 72h 真跑数据出来再接 |
 | 改 contracts/、新增事件主题 | 不动权威契约；新需求走契约评审 |
 
-演示“已知限制”口径（报告/答辩照念）：fixture 输入；模板合成、无 LLM；Q2 未接本次采集结果（若未做第 4 步）；无注入防护（答案 `injection_guard.screened=false` 如实显示）。
+演示“已知限制”口径（报告/答辩照念）：采集与 Q2 证据仍是 fixture；Q4 使用 StepPlan 时会把问题和公开证据发往云端，失败时回退模板；费用未接计量；Q2 未接本次采集结果（若未做第 4 步）；无注入防护（答案 `injection_guard.screened=false` 如实显示），不要输入敏感信息。

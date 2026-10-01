@@ -6,8 +6,14 @@ import { createLocalDemoServer, loadDataset } from "../../../scripts/local-demo-
 
 let server: Server;
 let base: string;
+let previousModelsConfig: string | undefined;
+let previousStepPlanKey: string | undefined;
 
 before(async () => {
+  previousModelsConfig = process.env.MODELS_CONFIG_PATH;
+  previousStepPlanKey = process.env.STEP_PLAN_API_KEY;
+  process.env.MODELS_CONFIG_PATH = "config/models.yml";
+  delete process.env.STEP_PLAN_API_KEY;
   const dataset = await loadDataset();
   const absentDb = "tmp/absent-ingest-diagnostics-" + process.pid + ".sqlite";
   server = createLocalDemoServer(dataset, { diagnosticsDbPath: absentDb });
@@ -17,16 +23,28 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (previousModelsConfig === undefined) delete process.env.MODELS_CONFIG_PATH; else process.env.MODELS_CONFIG_PATH = previousModelsConfig;
+  if (previousStepPlanKey === undefined) delete process.env.STEP_PLAN_API_KEY; else process.env.STEP_PLAN_API_KEY = previousStepPlanKey;
 });
 
 test("本地演示 API：健康状态标明 fixture 和实际索引计数", async () => {
   const response = await fetch(base + "/api/v1/health");
   assert.equal(response.status, 200);
-  const payload = await response.json() as { status: string; data_mode: string; intel_count: number; chunk_count: number };
+  const payload = await response.json() as { status: string; data_mode: string; intel_count: number; chunk_count: number; qa_mode: string; qa_model: string };
   assert.equal(payload.status, "ok");
   assert.equal(payload.data_mode, "fixture");
+  assert.equal(payload.qa_mode, "template");
+  assert.equal(payload.qa_model, "q4-template");
   assert.ok(payload.intel_count > 0);
   assert.ok(payload.chunk_count > 0);
+});
+
+test("本地演示 API：费用未计量时返回 null 而不是伪造 0", async () => {
+  const response = await fetch(base + "/api/v1/metrics/overview");
+  const payload = await response.json() as { cost: { total_cny: number | null; daily_budget_cny: number | null; degraded: boolean } };
+  assert.equal(payload.cost.total_cny, null);
+  assert.equal(payload.cost.daily_budget_cny, null);
+  assert.equal(payload.cost.degraded, true);
 });
 
 test("本地演示 API：漏洞列表、详情由离线采集与富化流水线提供", async () => {
@@ -61,6 +79,7 @@ test("本地演示 API：问答执行 Q1→Q2→Q4 并流出证据引用", async
   assert.match(text, /"event":"citation"/);
   assert.match(text, /CVE-2021-44228/);
   assert.match(text, /"data_mode":"fixture"/);
+  assert.match(text, /"answer_mode":"template"/);
 });
 
 test("本地演示 API：索引外 CVE 明确拒答且无引用", async () => {

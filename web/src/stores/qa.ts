@@ -10,6 +10,9 @@ export const useQaStore = defineStore('qa', () => {
   const stage = ref('')
   const thinking = ref(false)
   const degraded = ref(false)
+  const answerMode = ref<'stepfun' | 'template' | 'template_fallback' | ''>('')
+  const answerModelId = ref('')
+  const fallbackReason = ref('')
   const error = ref('')
   const history = ref<{ question: string; answer: string }[]>([])
   const lastCost = ref<number | null>(null)
@@ -21,6 +24,9 @@ export const useQaStore = defineStore('qa', () => {
     stage.value = ''
     thinking.value = true
     degraded.value = false
+    answerMode.value = ''
+    answerModelId.value = ''
+    fallbackReason.value = ''
     error.value = ''
     lastCost.value = null
   }
@@ -35,6 +41,7 @@ export const useQaStore = defineStore('qa', () => {
         switch (event.event) {
           case 'stage':
             stage.value = event.stage
+            if (['stepfun', 'template', 'template_fallback'].includes(event.answer_mode)) answerMode.value = event.answer_mode
             break
           case 'citation':
             citations.value = [...citations.value, event as unknown as Citation]
@@ -45,6 +52,9 @@ export const useQaStore = defineStore('qa', () => {
           case 'done':
             thinking.value = false
             degraded.value = Boolean(event.degraded)
+            answerMode.value = ['stepfun', 'template', 'template_fallback'].includes(event.answer_mode) ? event.answer_mode : 'template'
+            answerModelId.value = event.answer_model_id ?? ''
+            fallbackReason.value = event.fallback_reason ?? ''
             lastCost.value = event.cost_cny ?? null
             history.value = [...history.value, { question: asked, answer: answer.value }]
             break
@@ -74,5 +84,5 @@ export const useQaStore = defineStore('qa', () => {
     metrics.value = await getJson<MetricsOverview>('/metrics/overview')
   }
 
-  return { answer, citations, stage, thinking, degraded, error, history, lastCost, metrics, ask, stop, loadMetrics, reset }
+  return { answer, citations, stage, thinking, degraded, answerMode, answerModelId, fallbackReason, error, history, lastCost, metrics, ask, stop, loadMetrics, reset }
 })

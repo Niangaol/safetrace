@@ -231,7 +231,11 @@ export class ModelGateway {
     const def = this.cfg.providers[providerName];
     if (!def) throw new Error("未知 provider: " + providerName);
     const cfg = resolveConfig(def, modelId, rt.profile.timeout_ms);
-    const out = await compatChat(cfg, messages, params);
+    const reasoningEffort = rt.profile.capability_flags.reasoning_effort;
+    const providerParams = reasoningEffort === "low" || reasoningEffort === "medium" || reasoningEffort === "high"
+      ? { ...params, reasoning_effort: reasoningEffort as "low" | "medium" | "high" }
+      : params;
+    const out = await compatChat(cfg, messages, providerParams);
     return { ...out, model_id: modelId, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
   }
 
