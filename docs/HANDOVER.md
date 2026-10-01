@@ -40,7 +40,7 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 诚实三条（与 README 五条红线对应）：
 
 1. **没有"自动回退"分支**——后端不在就报错，不把"连不上"伪装成"数据正常"。业务错误（401/422/5xx）同样如实呈现。
-2. **模式必须可见**——两种模式都有全站横幅（`App.vue`）：静态演示模式明示"不请求后端"；本地模式明示采集/检索证据为 fixture、不代表实时态势。若启用 StepPlan，Q4 会把问题与公开检索证据发送到 StepFun 云端，页面明确提示不要输入敏感信息。`TopNav` 右侧状态灯同步显示当前模式。
+2. **模式必须可见**——两种模式都有全站横幅（`App.vue`）：静态演示模式明示“不请求后端”；本地模式明示采集/检索证据为 fixture、不代表实时态势。启用 StepPlan 后，Q1/Q2 仅在低置信/低召回时发送问题与查询词，Q4 会发送公开 fixture 证据；采集原文不出云，页面提示不要输入敏感信息。
 3. **不许为了让界面好看而伪造数据**——大屏"采集趋势"由 `genTrendData()` 按情报列表真实 `published_at` 聚合（无随机数、无写死日期）；没有真实数据时不编造。
 
 > 备注：KKK 在 fork 上的 `aab1488` 曾实现三态开关（`VITE_USE_MOCK` + 自动回退 + `DataSourceBanner.vue` +
@@ -58,7 +58,7 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 1. **演示输入全部是 fixture**：`npm run demo:serve` 启动时真跑 离线采集→去重→DQ1→富化、每次问答真跑 Q1→Q2→Q4，
    但输入是仓库 fixtures，**不是联网采集、不是实时情报**。全接口带 `data_mode=fixture`，未实测的时效/费用显示 null / "—"。
 2. **问答索引独立于采集结果**：Q2 检索 fixture 证据索引，尚未接入本次采集产物（"列表里有、问答答不了"的错位已知）。
-3. **StepPlan LLM 已接入 Q4（可切回模板）**：本机 `.env.local` 选择 `config/models.tokendance.yml` 的 StepPlan `step-3.7-flash` answerer；密钥不进 Git。证据门禁拒答时不调用模型；请求失败/输出异常会登记 user-visible fallback 并回到原 Q4 模板。仓库默认 `config/models.yml` 仍是 cache/template。Q2 仍检索 fixture 索引，StepPlan 会把当前问题与公开检索证据发往云端；费用尚未计量，不可输入敏感数据。
+3. **StepPlan 已按需接入 Q1/Q2/Q4**：本机 `.env.local` 选择 `config/models.tokendance.yml`；Q1 只对低置信意图补判/澄清，Q2 只在空/弱召回时改写查询，Q4 负责结论。每层都校验输出，失败回规则或原 Q4 模板并登记 user-visible fallback；引用始终由检索结果提供。仓库默认 `config/models.yml` 仍离线。Q2 仍检索 fixture；采集/富化原文不发送云端，A-04 注入筛查未完成前保持如此；费用尚未计量。 A-02 `/v1/decide` 仍需调用方注入 handler；`DecisionRequest.state` 可含任意/私有字段，未定义 public opt-in 前不把决策状态送云。
 4. **F2 资产定位是 Mock**：20 条合成演示资产，不接真实清单/扫描（合规红线：不扫未授权目标）。
 5. **注入防护未落地**：答案 `injection_guard.screened=false` 如实显示；A-04/E-04 已排期最迟 D9–D11（10/6–10/8）重启。
 6. **72h 连续运行证据未产生**：调度器/看板代码已合入，端到端实测待 XueXuhang 补跑。

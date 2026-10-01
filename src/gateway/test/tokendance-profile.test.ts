@@ -41,6 +41,10 @@ test("StepPlan model profile uses the local OpenAI-compatible endpoint", () => {
   assert.equal(profile.roles.answerer.model_id, "step-3.7-flash");
   assert.equal(profile.roles.answerer.capability_flags.reasoning_effort, "low");
   assert.deepEqual(profile.roles.answerer.fallback_chain, ["cache"]);
+  assert.equal(profile.roles.planner.provider, "stepplan");
+  assert.equal(profile.roles.planner.model_id, "step-3.7-flash");
+  assert.equal(profile.roles.planner.capability_flags.reasoning_effort, "low");
+  assert.deepEqual(profile.roles.planner.fallback_chain, ["cache"]);
 });
 
 test("StepPlan: OpenAI-compatible chat uses configured role and records model lineage", async () => {

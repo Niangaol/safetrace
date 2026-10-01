@@ -33,8 +33,9 @@ export interface QueryPlan {
   rewrite_text: string;
   needs_clarify: boolean;
   clarify_question?: string;
-  /** 0-1，榜首得分与区分度的朴素度量（非校准概率） */
+  /** 0-1 启发式分值（非校准概率）；由规则或经校验的 StepPlan 辅助分类产生。 */
   confidence: number;
+  classifier_source?: "rules" | "stepplan";
 }
 
 /** 关键词 → 权重表。权重按领域先验设定：术语（攻击链/论文）重于泛化词。 */
@@ -59,6 +60,10 @@ const STRATEGY_BY_INTENT: Record<IntentKind, QueryStrategy> = {
   concept: "multi_hop",
   paper_related: "multi_hop",
 };
+
+export function strategyForIntent(intent: IntentKind): QueryStrategy {
+  return STRATEGY_BY_INTENT[intent];
+}
 
 /** 产品词典：[规范名, 别名...]；别名命中即归一到规范名。 */
 const PRODUCT_DICT: ReadonlyArray<readonly [string, ...string[]]> = [
@@ -195,5 +200,6 @@ export function classifyIntent(turn: QueryTurn): QueryPlan {
     needs_clarify,
     ...(clarify_question ? { clarify_question } : {}),
     confidence,
+    classifier_source: "rules",
   };
 }

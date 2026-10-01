@@ -1,13 +1,14 @@
 /**
- * 本机可操作演示 API：采集与索引输入为仓库 fixture；Q4 在 StepPlan 已配置时调用外部模型，失败回退原模板。
- * 只监听 127.0.0.1；没有真实资产或联网采集，fixture 状态始终显式。
+ * 本机可操作演示 API：采集与索引输入为仓库 fixture；Q1 低置信、Q2 低召回时按需用 StepPlan，Q4 用 StepPlan 生成结论。
+ * 每层模型失败都保留原规则/检索/模板；只监听 127.0.0.1，不做真实资产或联网采集。
  */
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { readIngestDiagnostics } from "./ingest-diagnostics.js";
-import { EventBus, MemoryEventStore, nextId } from "@safetrace/shared";
+import { EventBus, MemoryEventStore, nextId, sha256, sha256Json } from "@safetrace/shared";
 import { ModelGateway } from "@safetrace/gateway";
 import { synthesizeAnswerWithStepFun } from "../src/qa/src/stepfun-answerer.js";
+import { refineQ1WithStepFun, rewriteQ2WithStepFun, shouldRewriteQ2WithStepFun } from "../src/qa/src/stepfun-planner.js";
 import type { EnrichmentResult, IntelItem, QueryTurn, RawDoc } from "@safetrace/shared";
 import { runIngestOnce } from "@safetrace/ingest";
 import { runEnrichment } from "@safetrace/enrich";
@@ -172,11 +173,15 @@ export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPat
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const path = url.pathname;
       if (req.method === "GET" && path === "/api/v1/health") {
-        const answerer = data.gateway?.roles().find((role) => role.role === "answerer");
+        const roles = data.gateway?.roles() ?? [];
+        const answerer = roles.find((role) => role.role === "answerer");
+        const planner = roles.find((role) => role.role === "planner");
         const stepfunReady = answerer?.provider === "stepplan" && Boolean(process.env.STEP_PLAN_API_KEY);
+        const plannerReady = planner?.provider === "stepplan" && Boolean(process.env.STEP_PLAN_API_KEY);
         sendJson(res, 200, { status: "ok", data_mode: MODE, degraded_to: MODE,
           source_count: data.fetched.length, intel_count: data.intel.length, chunk_count: data.chunkCount,
           qa_mode: stepfunReady ? "stepfun" : "template", qa_model: stepfunReady ? answerer.model_id : "q4-template",
+          qa_planner_mode: plannerReady ? "stepfun_on_demand" : "rules_only",
           ...(data.model_config_error ? { qa_config_warning: data.model_config_error } : {}) });
         return;
       }
@@ -229,22 +234,61 @@ export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPat
         const trace = nextId("tr");
         try {
           const turn: QueryTurn = { text: question, session_id: nextId("sess"), turn_id: nextId("turn") };
-          const plan = classifyIntent(turn);
-          sendSse(res, { event: "stage", stage: "plan", intent: plan.intents[0] ?? null });
-          const retrieval = await data.index.search(buildRetrievalRequest(question, plan, trace));
+          const rulePlan = classifyIntent(turn);
+          const q1RuleLineage = await data.bus.recordLineage({
+            trace_id: trace, stage: "qa.q1_intent", operation_version: "q1-intent.rules.v1", status: "success",
+            input_refs: [{ kind: "Query", id: turn.turn_id, sha256: sha256(question) }],
+            output_refs: [{ kind: "QueryPlan", id: turn.turn_id, sha256: sha256Json(rulePlan) }],
+            execution: { component_version: "q1-intent.rules.v1" },
+            decision: { reason: rulePlan.needs_clarify ? "rule requested clarification" : "rule classified intent" },
+          });
+          const plannerRole = data.gateway?.roles().find((role) => role.role === "planner");
+          const plannerOptions = {
+            provider: plannerRole?.provider ?? "cache", modelId: plannerRole?.model_id ?? "cache-planner",
+            apiKeyConfigured: Boolean(process.env.STEP_PLAN_API_KEY), bus: data.bus, traceId: trace,
+            parent_lineage_ids: q1RuleLineage ? [q1RuleLineage.lineage_id] : [],
+            ...(data.gateway ? { client: data.gateway } : {}),
+          };
+          sendSse(res, { event: "stage", stage: "plan", intent: rulePlan.intents[0] ?? null });
+          const q1Result = await refineQ1WithStepFun(question, rulePlan, plannerOptions);
+          const plan = q1Result.plan;
+          const llmLayers: string[] = [];
+          const layerFallbacks: string[] = [];
+          if (q1Result.attempted) llmLayers.push("q1_intent");
+          if (q1Result.fallback_reason) layerFallbacks.push("Q1: " + q1Result.fallback_reason);
+          sendSse(res, { event: "stage", stage: "plan", intent: plan.intents[0] ?? null,
+            needs_clarify: plan.needs_clarify, classifier_source: plan.classifier_source ?? "rules" });
+          const retrievalRequest = buildRetrievalRequest(question, plan, trace);
+          const q1LineageRows = await data.bus.readLineage(trace, 0, 1000);
+          let retrieval = await data.index.search(retrievalRequest, { parent_lineage_ids: q1LineageRows.map((row) => row.lineage_id) });
+          sendSse(res, { event: "stage", stage: "retrieve", hit: retrieval.chunks.length });
+          const q2CouldRewrite = plannerRole?.provider === "stepplan" && shouldRewriteQ2WithStepFun(plan, retrieval);
+          if (q2CouldRewrite) sendSse(res, { event: "stage", stage: "rewrite", llm_layer: "q2_query_rewrite" });
+          const q2LineageRows = await data.bus.readLineage(trace, 0, 1000);
+          const q2Result = await rewriteQ2WithStepFun(question, plan, retrieval, {
+            ...plannerOptions, parent_lineage_ids: q2LineageRows.map((row) => row.lineage_id),
+          }, async (queryText, parentLineageIds) => data.index.search(
+            { ...retrievalRequest, query_text: queryText }, { parent_lineage_ids: parentLineageIds },
+          ));
+          retrieval = q2Result.retrieval;
+          if (q2Result.attempted) llmLayers.push("q2_query_rewrite");
+          if (q2Result.fallback_reason) layerFallbacks.push("Q2: " + q2Result.fallback_reason);
+          sendSse(res, { event: "stage", stage: "retrieve", hit: retrieval.chunks.length,
+            query_rewritten: q2Result.used_llm });
           const retrievalLineage = await data.bus.readLineage(trace, 0, 1000);
           const retrievalLineageIds = retrievalLineage.map((row) => row.lineage_id);
-          sendSse(res, { event: "stage", stage: "retrieve", hit: retrieval.chunks.length });
           const answerer = data.gateway?.roles().find((role) => role.role === "answerer");
           const answerProvider = answerer?.provider ?? "cache";
           const answerModelId = answerer?.model_id ?? "q4-template-v1";
           const stepfunReady = answerProvider === "stepplan" && Boolean(process.env.STEP_PLAN_API_KEY);
-          sendSse(res, { event: "stage", stage: "generate", answer_mode: stepfunReady ? "stepfun" : "template" });
+          sendSse(res, { event: "stage", stage: "generate", answer_mode: answerProvider !== "stepplan" ? "template" : stepfunReady ? "stepfun" : "template_fallback" });
           const generated = await synthesizeAnswerWithStepFun(question, plan, retrieval, {
             session_id: turn.session_id, turn_id: turn.turn_id, bus: data.bus, parent_lineage_ids: retrievalLineageIds,
             provider: answerProvider, modelId: answerModelId, apiKeyConfigured: Boolean(process.env.STEP_PLAN_API_KEY),
             ...(data.gateway ? { client: data.gateway } : {}),
           });
+          if (answerProvider === "stepplan" && generated.answer_mode !== "template") llmLayers.push("q4_answer");
+          if (generated.fallback_reason) layerFallbacks.push("Q4: " + generated.fallback_reason);
           const answer = generated.answer;
           for (const cite of answer.citations) {
             const chunk = retrieval.chunks.find((v) => v.chunk_id === cite.chunk_id);
@@ -256,7 +300,8 @@ export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPat
           sendSse(res, { event: "done", abstained: answer.abstained, confidence: answer.confidence,
             degraded: true, degraded_to: MODE, data_mode: MODE, trace_id: trace, cost_cny: null,
             answer_mode: generated.answer_mode, answer_model_id: generated.model_id ?? null,
-            answer_fallback: generated.answer_mode === "template_fallback", fallback_reason: generated.fallback_reason ?? null });
+            answer_fallback: generated.answer_mode === "template_fallback", fallback_reason: generated.fallback_reason ?? null,
+            llm_layers: llmLayers, layer_fallbacks: layerFallbacks });
         } catch (error) {
           sendSse(res, { event: "error", message: error instanceof Error ? error.message : String(error) });
         }
@@ -278,10 +323,14 @@ async function start(): Promise<void> {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
-  const answerer = data.gateway?.roles().find((role) => role.role === "answerer");
+  const roles = data.gateway?.roles() ?? [];
+  const answerer = roles.find((role) => role.role === "answerer");
+  const planner = roles.find((role) => role.role === "planner");
   const stepfunReady = answerer?.provider === "stepplan" && Boolean(process.env.STEP_PLAN_API_KEY);
-  const qaMode = stepfunReady ? "StepFun " + answerer.model_id + "（失败回退 Q4 模板）" : "Q4 规则模板";
-  console.log("SafeTrace 本地链路已启动：http://127.0.0.1:" + port + "（采集/证据=fixture；Q&A=" + qaMode + "；StepFun 仅接收公开情报问题与检索证据，不接实时采集）");
+  const plannerReady = planner?.provider === "stepplan" && Boolean(process.env.STEP_PLAN_API_KEY);
+  const qaMode = (plannerReady ? "Q1/Q2 StepPlan 按需调用" : "Q1/Q2 规则") + "；" +
+    (stepfunReady ? "Q4 StepFun " + answerer.model_id + "（失败回退原模板）" : "Q4 原模板");
+  console.log("SafeTrace 本地链路已启动：http://127.0.0.1:" + port + "（采集/证据=fixture；" + qaMode + "；公开 Q&A/查询词才可出云，采集原文不接模型）");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

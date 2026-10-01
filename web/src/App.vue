@@ -19,7 +19,7 @@ onMounted(() => {
       <strong>静态演示模式</strong>｜所有页面和问答均来自前端预置样例，不请求后端。
     </div>
     <div v-else class="demo-banner" role="status">
-      <strong>本地模式（fixture）</strong>｜采集与检索证据来自仓库 fixture，不代表实时态势；Q4 按配置调用 StepPlan，未配置或失败时回退原模板。StepPlan 会接收问题与公开检索证据，请勿输入敏感数据。
+      <strong>本地模式（fixture）</strong>｜采集与检索证据来自仓库 fixture，不代表实时态势；Q1 低置信、Q2 低召回时可按需调用 StepPlan，Q4 生成答案；各层失败均回规则/模板。StepPlan 会接收问题/查询改写，Q4 还会发送公开检索证据，请勿输入敏感数据；采集原文不发云。
     </div>
     <RouterView />
   </main>

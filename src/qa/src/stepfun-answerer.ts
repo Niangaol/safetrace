@@ -9,7 +9,7 @@ export interface StepFunChatReply { text: string; provider: string; model_id: st
 
 export interface StepFunChatClient {
   chat(
-    role: "answerer",
+    role: "answerer" | "planner",
     messages: ChatMessage[],
     params: { temperature?: number; max_tokens?: number },
     traceId: string,

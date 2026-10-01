@@ -17,6 +17,12 @@ const STAGE_LABEL: Record<string, string> = {
   check: '自检',
 }
 
+const LLM_LAYER_LABEL: Record<string, string> = {
+  q1_intent: "Q1 意图补判/澄清",
+  q2_query_rewrite: "Q2 查询改写",
+  q4_answer: "Q4 结论生成",
+}
+
 const SUGGESTIONS = [
   'Log4Shell 影响哪些版本？怎么修复？',
   'CVE-2021-44228 有哪些证据来源？',
@@ -58,11 +64,13 @@ watch(() => qa.citations.length, scrollToBottom)
 
 <template>
   <h1 class="page-title">情报问答</h1>
-  <p class="page-subtitle">Q1 意图识别 → Q2（fixture 证据索引）→ Q4：本机配置 StepPlan 时用 LLM 生成结论；未配置、失败或证据不足时使用原规则模板/拒答。引用始终由 Q2/Q4 固定，不由模型编造。</p>
+  <p class="page-subtitle">Q1 规则优先、低置信时 StepPlan 补判；Q2 仍由本地检索提供证据、低召回时 StepPlan 可改写查询；Q4 用 StepPlan 生成结论。各层失败保留规则/原模板，引用始终来自 Q2。</p>
 
   <div v-if="qa.metrics" class="muted" style="margin-bottom: 12px; font-size: 12px; display: flex; align-items: center; gap: 12px">
     <span>离线采集 fixture：{{ qa.metrics.collect.vulns }} 条情报 / {{ qa.metrics.knowledge.chunks }} 个检索块</span>
-    <span>本地 fixture 证据 {{ qa.answerMode ? "· 当前模式：" + answerModeLabel(qa.answerMode) : "" }}；StepPlan 云端模式会发送问题与检索证据，请勿输入敏感内容。</span>
+    <span>本地 fixture 证据 {{ qa.answerMode ? "· Q4：" + answerModeLabel(qa.answerMode) : "" }}；StepPlan 云端模式会发送问题/查询改写请求，请勿输入敏感内容。</span>
+    <span v-if="qa.llmLayers.length">本轮模型层：{{ qa.llmLayers.map((layer) => LLM_LAYER_LABEL[layer] ?? layer).join("、") }}</span>
+    <span v-if="qa.layerFallbacks.length">层内兜底：{{ qa.layerFallbacks.join("；") }}</span>
   </div>
 
   <div class="panel" style="min-height: 400px; display: flex; flex-direction: column">

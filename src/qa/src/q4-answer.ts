@@ -91,7 +91,8 @@ function coversRequestedCve(plan: QueryPlan, evidence: RetrievalResponse): boole
 }
 
 function intentLabel(plan: QueryPlan): string {
-  return plan.intents.length > 0 ? plan.intents.join("+") : "未识别（意图不明确）";
+  const label = plan.intents.length > 0 ? plan.intents.join("+") : "未识别（意图不明确）";
+  return plan.classifier_source === "stepplan" ? label + "（StepPlan 辅助 Q1）" : label + "（规则）";
 }
 
 /**

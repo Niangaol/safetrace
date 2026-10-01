@@ -64,16 +64,18 @@ providers:
 default_fallback_chain: [deepseek, vllm, cache, template]
 
 roles:
+  # Q1 低置信 / Q2 低召回时才调用；请求只含问题与查询计划，不发送来源原文。
   planner:
-    provider: cache
-    model_id: cache-planner
-    model_version: v0
-    max_rpm: 600
-    max_tpm: 2000000
-    max_concurrency: 4
-    timeout_ms: 30000
-    fallback_chain: [cache, template]
-    capability_flags: { tools: false }
+    provider: stepplan
+    data_domain: public
+    model_id: step-3.7-flash
+    model_version: unversioned-api
+    max_rpm: 60
+    max_tpm: 200000
+    max_concurrency: 1
+    timeout_ms: 90000
+    fallback_chain: [cache]
+    capability_flags: { tools: false, reasoning_effort: low }
 
   answerer:
     provider: stepplan

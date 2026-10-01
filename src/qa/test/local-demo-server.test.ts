@@ -30,11 +30,12 @@ after(async () => {
 test("本地演示 API：健康状态标明 fixture 和实际索引计数", async () => {
   const response = await fetch(base + "/api/v1/health");
   assert.equal(response.status, 200);
-  const payload = await response.json() as { status: string; data_mode: string; intel_count: number; chunk_count: number; qa_mode: string; qa_model: string };
+  const payload = await response.json() as { status: string; data_mode: string; intel_count: number; chunk_count: number; qa_mode: string; qa_model: string; qa_planner_mode: string };
   assert.equal(payload.status, "ok");
   assert.equal(payload.data_mode, "fixture");
   assert.equal(payload.qa_mode, "template");
   assert.equal(payload.qa_model, "q4-template");
+  assert.equal(payload.qa_planner_mode, "rules_only");
   assert.ok(payload.intel_count > 0);
   assert.ok(payload.chunk_count > 0);
 });
@@ -80,6 +81,8 @@ test("本地演示 API：问答执行 Q1→Q2→Q4 并流出证据引用", async
   assert.match(text, /CVE-2021-44228/);
   assert.match(text, /"data_mode":"fixture"/);
   assert.match(text, /"answer_mode":"template"/);
+  assert.ok(text.includes("\"llm_layers\":[]"));
+  assert.ok(text.includes("\"layer_fallbacks\":[]"));
 });
 
 test("本地演示 API：索引外 CVE 明确拒答且无引用", async () => {

@@ -9,14 +9,14 @@
 
 | 资产 | 内容 | 状态 |
 |---|---|---|
-| `scripts/local-demo-server.ts` | 本机 API（127.0.0.1:8000）：启动时离线采集→去重→DQ1→富化；问答跑 Q1→Q2→Q4，StepPlan 生成结论，失败回退原模板 | ✅ |
+| `scripts/local-demo-server.ts` | 本机 API（127.0.0.1:8000）：采集/索引仍为 fixture；Q1 低置信、Q2 低召回时按需使用 StepPlan，Q4 用 StepPlan 生成结论；每层失败保留规则/模板 | ✅ |
 | 端点 | `/api/v1/health`、`/metrics/overview`、`/collect/status`、`/vulns`（分页/筛选/排序）、`/vulns/:id`、`/vulns/:id/evidence`、`POST /api/v1/qa/chat`（SSE）、`GET /api/v1/ingest/diagnostics`（只读 SQLite） | ✅ |
 | 前端 | `web/src/api.ts` 开关改为 `VITE_DEMO_MODE` 环境变量（默认真后端，预置模式才用 mock）；大屏/列表/详情/问答/采集诊断页已接。诊断页独立读取持久化 SQLite，不把 demo 的内存 fixture 当真实采集 | ✅ 基本接好 |
 | 测试 | `src/qa/test/local-demo-server.test.ts`（随机端口可测，含 diagnostics 无库警告） | ✅ |
 | 文档 | `docs/LOCAL-DEMO.md`（运行手册 + 手测清单，含拒答/澄清用例） | ✅ |
 | 诚实标识 | demo 数据接口带 `data_mode=fixture`、`degraded_to=fixture`；未实测的时效/费用显示 null/“—”；富化维度带 `mock:true`。采集诊断 API 独立返回 SQLite 可用性与最近 trace，不伪装为 demo fixture | ✅ 符合红线 3/5 |
 
-分支自曝限制（`docs/LOCAL-DEMO.md` 写明，演示时照念）：Q2 目前只检索 fixture 证据索引，**尚未接入本次采集结果**；不是实时采集、无真实资产。StepPlan 只生成答案结论，引用由 Q4 保留；模型失败时回退模板。
+分支自曝限制（`docs/LOCAL-DEMO.md` 写明，演示时照念）：Q2 目前只检索 fixture 证据索引，**尚未接入本次采集结果**；不是实时采集、无真实资产。StepPlan 可做 Q1 意图补判、Q2 查询改写及 Q4 结论生成，但 citations 始终由检索结果提供；采集原文不出云，模型失败保留规则/模板。
 
 ## 1. KKK 要做的事（按顺序）
 
@@ -73,10 +73,10 @@ npm run smoke
 ## 2. 验收标准（做到即算基础 demo 完成）
 
 1. 本机两个窗口：后端（8000）+ `npm run dev --prefix web`（5173），浏览器完整问答可复现、可录屏。
-2. 问答经过 Q1→Q2→Q4；本机配置启用 StepPlan 时生成结论，失败回退模板；引用可点开、chunk_id 可回溯。“CVE-2099-4321 影响哪些版本？”显式拒答，“嗯”走澄清路径。
+2. 问答经过 Q1→Q2→Q4；Q1 低置信或 Q2 低召回时 StepPlan 按需辅助，Q4 用 StepPlan 生成结论；任何模型层失败都保留规则/模板；引用可点开、chunk_id 可回溯。“CVE-2099-4321 影响哪些版本？”显式拒答，“嗯”走澄清路径。
 3. `npm run check` + `npm run smoke` 全绿；local-demo-server API 测试保留并通过。
 4. 真实模式零 mock 混入；`VITE_DEMO_MODE=true` 才是预置模式，且页面有“预置数据”标识。
-5. 页面标明本次是 StepPlan 生成、原模板回答或模型失败后模板兜底；检索证据和 citations 仍来自 Q2/Q4。费用未接计量处显示“—”，不编数字。
+5. 页面标明本次调用了哪些 StepPlan 层、Q4 是模型还是模板，以及各层 fallback；检索证据与 citations 始终来自 Q2。费用未接计量处显示“—”，不编数字。
 
 ## 3. 边界：demo 阶段不做的事（后续慢慢改）
 
@@ -84,9 +84,9 @@ npm run smoke
 |---|---|
 | A-04 注入防护、E-04 隔离落库 | 已顺延；**禁砍，最迟 D9–D11（10/6–10/8）重启**，否则撞 D13；三处问题清单见 TEAM-PLAN §六 |
 | A-05 时间过滤（published_after） | demo 后做 |
-| 云端模型默认策略 | StepPlan 已经由 MG1 接入 Q4；本机 `.env.local` 选择 Tokendance profile 中的 StepPlan answerer；其他环境默认 `models.yml` 仍用模板。StepPlan 故障回退原 Q4 模板 |
+| 云端模型默认策略 | 本机 `.env.local` 选择 Tokendance profile 中的 StepPlan planner/answerer：Q1/Q2 按需调用、Q4 生成；其他环境默认 `models.yml` 仍用 cache/template。StepPlan 故障回退每层原规则/模板 |
 | compose / Docker | D4 拍板弃用，全本地跑（TEAM-PLAN §六） |
 | 大屏/列表接真实监测数据 | 等 Xue 的 72h 真跑数据出来再接 |
 | 改 contracts/、新增事件主题 | 不动权威契约；新需求走契约评审 |
 
-演示“已知限制”口径（报告/答辩照念）：采集与 Q2 证据仍是 fixture；Q4 使用 StepPlan 时会把问题和公开证据发往云端，失败时回退模板；费用未接计量；Q2 未接本次采集结果（若未做第 4 步）；无注入防护（答案 `injection_guard.screened=false` 如实显示），不要输入敏感信息。
+演示“已知限制”口径（报告/答辩照念）：采集与 Q2 证据仍是 fixture；Q1/Q2 按需会发送问题/查询词，Q4 会发送问题与公开证据到云端；费用未接计量；Q2 未接本次采集结果；采集解析/富化原文不送 StepFun，直到 A-04 注入筛查完成；不要输入敏感信息。
