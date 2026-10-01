@@ -278,25 +278,7 @@ const headlineStats = computed(() =>
 )
 
 /** 运行参数条：这些是"本次是怎么提交的"，属于上下文，不该和结论指标抢主位 */
-const runParams = computed(() =>
-  qa.meta
-    ? [
-        {
-          k: '数据域',
-          v: qa.domain === 'private' ? '私有域' : '公开域',
-          tone: qa.domain === 'private' ? 'warn' : '',
-          hint: qa.domain === 'private' ? '仅检索本地边界/内部数据' : '检索全部公开情报源',
-        },
-        {
-          k: '降级',
-          v: qa.meta.degraded ? '是' : '否',
-          tone: qa.meta.degraded ? 'warn' : 'ok',
-          hint: qa.meta.degraded ? qa.degradedReason || '详见下方限制说明' : '未降级',
-        },
-        { k: '会话', v: qa.meta.sessionId ?? '—', mono: true },
-      ]
-    : [],
-)
+// 运行参数已在"本次运行"底部面板展示，这里只为页头预留（暂不直接渲染，避免重复）
 
 /**
  * 限制与状态说明块是否需要出现。
