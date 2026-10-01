@@ -250,7 +250,7 @@ python -m eval.collect_latency         # 22 条时效，秒级
 | 事项 | 安排 |
 |---|---|
 | 施工指南 | `docs/P07-DEMO-PLAN.md`（唯一施工口径：起点分支、步骤、验收、边界） |
-| 起点 | 本地分支 `feat/qa-local-live-demo`（b30c9a5）：本机 API + 前端真接线 + 82 行测试 + 手册，已具备 Q1→Q2→Q4 真链路 |
+| 起点 | 分支 `feat/qa-local-live-demo`（b30c9a5，**2026-10-01 已推送到 origin**，KKK 从 upstream 拉取即可）：本机 API + 前端真接线 + 82 行测试 + 手册，已具备 Q1→Q2→Q4 真链路 |
 | KKK 步骤 | rebase 到 main → 修 `demo:serve` 脚本断点 → 对齐 SSE 字段 →（可选）Q2 接采集结果 → 门禁全绿直推 main |
 | 并行（李念） | review KKK 提交；**D6（10/3）三线 sign-off 会照开**——会议不随开发顺延 |
 | 并行（XueXuhang） | 72h 挂机尽早启动（固定库/日志/起点时间），demo 期间不受影响 |

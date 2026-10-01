@@ -5,7 +5,7 @@
 
 ## 0. 好消息：大半已经写好了
 
-本地分支 `feat/qa-local-live-demo`（b30c9a5，未推送）已包含一个能跑的基础 demo：
+远端分支 `feat/qa-local-live-demo`（b30c9a5，**2026-10-01 已推送到 origin**，`git fetch origin` 即可取得）已包含一个能跑的基础 demo：
 
 | 资产 | 内容 | 状态 |
 |---|---|---|
@@ -20,15 +20,20 @@
 
 ## 1. KKK 要做的事（按顺序）
 
-### 第 1 步：把分支搬到最新 main
+### 第 1 步：拉取分支并 rebase 到最新 main
 
 ```bash
-git switch main && git pull --rebase origin main
-git switch feat/qa-local-live-demo
-git rebase main
+# 方式一：本地已有该分支（李念机器）
+git fetch origin && git switch feat/qa-local-live-demo && git rebase origin/main
+
+# 方式二：KKK 在 fork 上（origin 指向 KKK9747human/safetrace，fork 里没有这个分支）
+git remote add upstream https://github.com/Niangaol/safetrace.git   # 已配过就跳过
+git fetch upstream
+git switch -c feat/qa-local-live-demo upstream/feat/qa-local-live-demo
+git rebase upstream/main
 ```
 
-- 分支基于 f03f808，落后 main 三个提交（41fa23a 删 langgraph、3bc6c99 文档、a171059 TEAM-PLAN）。代码冲突概率低；`docs/TASKS.md` 大概率冲突——**保留 main 的行，把分支那 4 行改动作为追加说明重新落**（台账历史行不改写）。
+- 分支基于 f03f808，落后 main **4 个提交**（41fa23a 删 langgraph、3bc6c99 文档、a171059 TEAM-PLAN、79eb97c 施工指南）。四个提交都是代码/文档侧改动，与本分支的 web/scripts 重合面小，预计只有 `docs/TASKS.md` 会冲突——**保留 main 的行，把分支那 4 行改动作为追加说明重新落**（台账历史行不改写）。
 - 冲突解不了（尤其 `contracts/`）→ 停手在三人群喊，不自己猜。
 
 ### 第 2 步：修一个已知断点
