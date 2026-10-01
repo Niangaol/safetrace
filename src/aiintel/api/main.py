@@ -11,10 +11,12 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from prometheus_client import make_asgi_app
 
 from aiintel.api.routers import collect, config, metrics, qa, vulns
 from aiintel.config import get_settings
+from aiintel.core.isolation import IsolationError, ScopeViolationError
 from aiintel.core.metrics import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -103,6 +105,51 @@ app.include_router(qa.router, prefix=API_PREFIX)
 app.include_router(metrics.router, prefix=API_PREFIX)
 app.include_router(config.router, prefix=API_PREFIX)
 app.mount("/metrics", make_asgi_app())
+
+
+# ---------------------------------------------------------------- 隔离错误的 HTTP 映射
+# 前端在 `docs/前后端交接.md` §4.2 明确要求：
+#   "若日后策略拒绝，请返回**可读的业务错误码/正文**（前端原样上屏），
+#    不要吞成通用 500。"
+#
+# 而此前全仓**没有**任何异常处理器：策略拒绝（C-05 private→cloud 硬拒、
+# A-03 出网载荷命中私域标记）会冒泡成 FastAPI 的通用 500，
+# 前端只能显示"服务器内部错误" —— 用户看不到"这是策略拒绝"这个关键信息，
+# 甚至会误以为是系统故障。
+#
+# 统一映射为 **422**（语义：请求本身合法，但被业务策略拒绝），
+# 错误形状与 `vulns.py` 既有的 `{"error": {"code", "message"}}` 一致。
+@app.exception_handler(IsolationError)
+async def _isolation_error_handler(_request: Any, exc: IsolationError) -> JSONResponse:
+    """把隔离/策略拒绝转成可读业务错误（前端会原样上屏）。
+
+    ⚠️ 两条不能破的约束：
+    1. **不回显命中内容**：`ScopeViolationError` 只带「标记 + 路径」，
+       消息里绝不出现被扫到的正文（与 `isolation.py` 的脱敏口径一致）；
+    2. **状态码用 422 而非 500**：这是**策略拒绝**不是系统故障，
+       前端据此区分"配置/合规问题"与"服务坏了"。
+    """
+
+    is_scope = isinstance(exc, ScopeViolationError)
+    code = "EGRESS_SCOPE_VIOLATION" if is_scope else "ISOLATION_POLICY_REJECTED"
+    detail: dict[str, Any] = {
+        "code": code,
+        "message": str(exc) or "请求被数据域隔离策略拒绝",
+        "hint": (
+            "该请求的载荷命中私域标记，已按 A-03 出网守卫硬拒，未发出任何网络请求。"
+            if is_scope
+            else "private 数据域不允许经 cloud/cache 边界出网（C-05）。"
+            "请改用本地通道，或把数据域标为 public。"
+        ),
+    }
+    if is_scope and getattr(exc, "violations", None):
+        # 只给标记与路径，不含命中内容
+        detail["violations"] = [
+            {"marker": v.marker, "path": v.path}
+            for v in exc.violations  # type: ignore[attr-defined]
+        ]
+    logger.warning("隔离策略拒绝 code=%s: %s", code, detail["message"])
+    return JSONResponse(status_code=422, content={"error": detail})
 
 
 @app.get("/health", tags=["system"])
