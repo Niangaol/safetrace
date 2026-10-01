@@ -70,6 +70,16 @@ test("LLM 低置信度弃权 → 下坠人工层；decided_by=llm_fallback", asy
   assert.equal(ruleStep.status, "abstained", "规则弃权必须显式记录");
 });
 
+test("LLM DecisionResolution 使用可信上游校准概率而不读取模型 score", async () => {
+  const res = await runDecisionLadder(req(), {
+    rule: async () => null,
+    llm: async () => ({ decision: { choice: "impact_range" }, calibrated_prob: 0.78 }),
+  });
+  assert.equal(res.reply.decided_by, "llm_fallback");
+  assert.equal(res.reply.decision.score, undefined);
+  assert.equal(res.reply.calibrated_prob, 0.78);
+});
+
 test("LLM 弃权（返回 null）→ 继续下坠到人工层，decided_by 如实记 human", async () => {
   const store = new MemoryEventStore();
   const bus = new EventBus({ store });
@@ -110,4 +120,32 @@ test("decision.replies 全量入总线：每次阶梯结束恰好一条", async 
   const replies = await store.read("decision.replies");
   assert.equal(replies.length, 2);
   assert.deepEqual(replies.map((r) => (r.payload as DecisionReply).decision_id).sort(), ["d1", "d2"]);
+});
+test("LLM 决策越出 typed options 时失败下坠到人工", async () => {
+  const store = new MemoryEventStore();
+  const bus = new EventBus({ store });
+  const res = await runDecisionLadder(req(), {
+    bus,
+    rule: async () => null,
+    llm: async () => ({ choice: "invented_choice", score: 0.9 }),
+    human: async () => ({ choice: "remediation", score: 0.8 }),
+  });
+  assert.equal(res.reply.decided_by, "human");
+  assert.equal(res.reply.decision.choice, "remediation");
+  assert.equal(res.escalation_trace.find((a) => a.layer === "llm")?.status, "failed");
+  const falls = await store.read<FallbackEvent>("fallback.events");
+  assert.ok(falls.some((e) => e.payload.degraded_of === "ladder:llm"));
+});
+
+test("LLM score 越界不能被 finish clamp 掩盖", async () => {
+  const store = new MemoryEventStore();
+  const bus = new EventBus({ store });
+  const res = await runDecisionLadder(req(), {
+    bus,
+    rule: async () => null,
+    llm: async () => ({ choice: "impact_range", score: 1.2 }),
+  });
+  assert.equal(res.reply.decided_by, "human");
+  assert.equal(res.reply.decision.abstain, true);
+  assert.equal(res.escalation_trace.find((a) => a.layer === "llm")?.status, "failed");
 });

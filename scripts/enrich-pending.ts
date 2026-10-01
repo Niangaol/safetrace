@@ -1,6 +1,8 @@
-import { EventBus, nextId, SqliteEventStore } from "@safetrace/shared";
+import { degrade, EventBus, nextId, sha256Json, SqliteEventStore } from "@safetrace/shared";
 import type { EnrichmentResult, IntelItem, QualityVerdict } from "@safetrace/shared";
-import { runEnrichment } from "@safetrace/enrich";
+import { createStepFunPaperReviewer, runEnrichment } from "@safetrace/enrich";
+import type { PaperReviewPort } from "@safetrace/enrich";
+import { ModelGateway } from "@safetrace/gateway";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolve } from "node:path";
 
@@ -41,12 +43,34 @@ async function main(): Promise<void> {
     const pending = [...latestIntel.values()].filter((item) => accepted.has(item.intel_id) && !completed.has(item.intel_id));
     const batch = pending.slice(0, limit);
     const traceId = nextId("tr_enrich_batch");
+    const llmOptIn = process.env.SAFETRACE_ENRICH_LLM_ENABLED === "true";
+    let paperReviewer: PaperReviewPort | undefined;
+    if (llmOptIn) {
+      if (offline) {
+        await bus.recordLineage({ trace_id: traceId, stage: "enrich.llm_optin", operation_version: "enrich-llm-optin.v1", status: "rejected", decision: { reason: "StepPlan F1 advisory requested in fixture/offline mode; no model request made" } });
+        await degrade({ layer: "L3", trigger: "F1 StepPlan advisory requested while enrichment is offline", degradedOf: "rule-ranked-papers", traceId, label: "离线富化不调用 StepPlan；保留规则结果", recoveryHint: "需在线检索时设置 SAFETRACE_ENRICH_OFFLINE=false，并单独开启 SAFETRACE_ENRICH_LLM_ENABLED=true。", emit: async (event) => { await bus.publish("fallback.events", event, { trace_id: traceId }); } });
+      } else {
+        const gateway = new ModelGateway({ bus });
+        const planner = gateway.roles().find((role) => role.role === "planner");
+        const keyConfigured = Boolean(process.env.STEP_PLAN_API_KEY);
+        if (planner?.provider === "stepplan" && keyConfigured) {
+          paperReviewer = createStepFunPaperReviewer({ provider: planner.provider, modelId: planner.model_id, apiKeyConfigured: true, client: gateway });
+          await bus.recordLineage({ trace_id: traceId, stage: "enrich.llm_optin", operation_version: "enrich-llm-optin.v1", status: "success", input_refs: [{ kind: "ModelRole", id: "planner", sha256: sha256Json({ provider: planner.provider, model_id: planner.model_id }) }], decision: { reason: "F1 model is advisory-only; live, ambiguous public arXiv metadata required" } });
+        } else {
+          await bus.recordLineage({ trace_id: traceId, stage: "enrich.llm_optin", operation_version: "enrich-llm-optin.v1", status: "rejected", decision: { reason: "StepPlan F1 advisory requested but planner/key is not configured" } });
+          await degrade({ layer: "L3", trigger: "F1 StepPlan advisory requested but StepPlan planner/key is unavailable", degradedOf: "rule-ranked-papers", traceId, label: "StepPlan 论文建议不可用；沿用规则富化", recoveryHint: "选择 StepPlan planner profile 并配置本机 STEP_PLAN_API_KEY。", emit: async (event) => { await bus.publish("fallback.events", event, { trace_id: traceId }); } });
+        }
+      }
+    }
     const delayMs = offline ? 0 : Math.max(3000, Number(process.env.SAFETRACE_ENRICH_DELAY_MS ?? "3000"));
-    console.log(JSON.stringify({ mode: offline ? "fixture/offline" : "live", db_path: dbPath, unique_intel_ids: latestIntel.size, accepted_ids: accepted.size, already_enriched: completed.size, pending: pending.length, batch_size: batch.length, delay_ms_between_live_items: delayMs, trace_id: traceId }));
+    console.log(JSON.stringify({ mode: offline ? "fixture/offline" : "live", db_path: dbPath, unique_intel_ids: latestIntel.size, accepted_ids: accepted.size, already_enriched: completed.size, pending: pending.length, batch_size: batch.length, delay_ms_between_live_items: delayMs, stepplan_f1_advisory_active: Boolean(paperReviewer), trace_id: traceId }));
     for (let index = 0; index < batch.length; index++) {
       if (index > 0 && delayMs > 0) await sleep(delayMs);
       const item = batch[index]!;
-      await runEnrichment([item], { offline, bus, traceId });
+      await runEnrichment([item], {
+        offline, bus, traceId, ...(paperReviewer ? { paperReviewer } : {}),
+        onPaperReview: (intelId, outcome) => console.log(JSON.stringify({ type: "f1_stepfun_advisory", intel_id: intelId, status: outcome.status, ...(outcome.status === "suggested" ? { paper_ids: outcome.paper_ids, model_confidence: outcome.confidence } : { reason: outcome.reason }), applied: false })),
+      });
       if ((index + 1) % 5 === 0 || index + 1 === batch.length) console.log("enriched", index + 1, "/", batch.length, item.intel_id);
     }
     console.log(JSON.stringify({ completed_this_batch: batch.length, pending_after_batch: Math.max(0, pending.length - batch.length), mode: offline ? "fixture/offline" : "live", trace_id: traceId }));

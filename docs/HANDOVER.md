@@ -40,7 +40,7 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 诚实三条（与 README 五条红线对应）：
 
 1. **没有"自动回退"分支**——后端不在就报错，不把"连不上"伪装成"数据正常"。业务错误（401/422/5xx）同样如实呈现。
-2. **模式必须可见**——两种模式都有全站横幅（`App.vue`）：静态演示模式明示“不请求后端”；本地模式明示采集/检索证据为 fixture、不代表实时态势。启用 StepPlan 后，Q1/Q2 仅在低置信/低召回时发送问题与查询词，Q4 会发送公开 fixture 证据；采集原文不出云，页面提示不要输入敏感信息。
+2. **模式必须可见**——两种模式都有全站横幅（`App.vue`）：静态演示模式明示“不请求后端”；本地 demo 明示采集/检索证据来自 fixture、不代表实时态势。Q1/Q2 只在门槛满足时发送问题/查询词，Q4 发送公开 fixture 证据。单独运行受控页面采集时，只有显式入库/LLM opt-in、精确 HTTPS host 和本地 heuristic/hash attestation 都通过后，原文才可能发送到 StepPlan；启发式并非完整防护。不要输入敏感信息。
 3. **不许为了让界面好看而伪造数据**——大屏"采集趋势"由 `genTrendData()` 按情报列表真实 `published_at` 聚合（无随机数、无写死日期）；没有真实数据时不编造。
 
 > 备注：KKK 在 fork 上的 `aab1488` 曾实现三态开关（`VITE_USE_MOCK` + 自动回退 + `DataSourceBanner.vue` +
@@ -58,12 +58,12 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 1. **演示输入全部是 fixture**：`npm run demo:serve` 启动时真跑 离线采集→去重→DQ1→富化、每次问答真跑 Q1→Q2→Q4，
    但输入是仓库 fixtures，**不是联网采集、不是实时情报**。全接口带 `data_mode=fixture`，未实测的时效/费用显示 null / "—"。
 2. **问答索引独立于采集结果**：Q2 检索 fixture 证据索引，尚未接入本次采集产物（"列表里有、问答答不了"的错位已知）。
-3. **StepPlan 已按需接入 Q1/Q2/Q4**：本机 `.env.local` 选择 `config/models.tokendance.yml`；Q1 只对低置信意图补判/澄清，Q2 只在空/弱召回时改写查询，Q4 负责结论。每层都校验输出，失败回规则或原 Q4 模板并登记 user-visible fallback；引用始终由检索结果提供。仓库默认 `config/models.yml` 仍离线。Q2 仍检索 fixture；采集/富化原文不发送云端，A-04 注入筛查未完成前保持如此；费用尚未计量。 A-02 `/v1/decide` 仍需调用方注入 handler；`DecisionRequest.state` 可含任意/私有字段，未定义 public opt-in 前不把决策状态送云。
+3. **StepPlan 接入范围已扩到适用层**：Q1/Q2/Q4 仍按需调用并回退原规则/模板；新增 A-02 `npm run qa:decision:serve`（仅监听 `127.0.0.1:8317`）；默认先用精确匹配 `public_facts.rule_candidate` 的本地规则结果，只有规则弃权且显式 public opt-in、allowlist 事实、单选题和上游校准概率表齐备才触发 StepPlan，最终 `calibrated_prob` 来自上游而非模型自评。决策角色 profiles 默认 private；当前 QA UI 尚无 `calibrated_option_probabilities` 的业务生产者，只有调用方按该子 schema 显式提供概率/候选时才会给出决策，否则转人工/挂起。受控网页抽取可在 `PAGE_INGEST_ENABLED=true`、`SAFETRACE_INGEST_LLM_ENABLED=true`、精确 host/元数据和 StepPlan key 均具备时，规则失败后尝试模型；页面须经本地 A-04 heuristic/hash attestation，候选仍经引用校验与 DQ1。F1 另有 opt-in 的标题/规则词项二次建议，只记 lineage/CLI，不改变论文分数/顺序或 F4/F6。A-04 是有界启发式、不是完整防护保证；不要发送未知/敏感内容。默认 `config/models.yml` 仍离线；Q2 仍检索 fixture；费用尚未计量。本轮新增的 A-02/采集/F1 路径仅用 mock 测试，未做真实云端调用。
 4. **F2 资产定位是 Mock**：20 条合成演示资产，不接真实清单/扫描（合规红线：不扫未授权目标）。
-5. **注入防护未落地**：答案 `injection_guard.screened=false` 如实显示；A-04/E-04 已排期最迟 D9–D11（10/6–10/8）重启。
+5. **A-04 仅部分落地，完整安全闭环仍未完成**：新增共享本地启发式筛查并接到 Q1/Q2/Q4、A-02 public projection、受控网页抽取与 F1 reviewer；网页模型调用需显式 opt-in、exact-host、24k cap、hash-bound attestation，F1 只送论文标题/规则词项且建议不写入评分。检测器只覆盖已知模式，不能保证发现所有 prompt injection；`QualityVerdict.injection_score/injection_flags` 仍未由 DQ1 填充，混淆/多阶段攻击与全链路恶意样本验收仍待做。不要报告 A-04/E-04 已完成。
 6. **72h 连续运行证据未产生**：调度器/看板代码已合入，端到端实测待 XueXuhang 补跑。
 7. **E-02 最新 SQLite trace 是修复前历史**：其 OSV/cve.org 为 no_new_data，代码现已传入 CVE IDs，但历史事件不回写。真实端到端内存探测（不写 SQLite）已证明 KEV→OSV/cve.org 各抓取并解析 1 条，且两条都与 KEV 对应 CVE 归并；正式比较表仍待补。
-8. **富化未完成且 fallback 不等于成功**：最新持久 trace 富化结果 1098/3727（29.5%），其中 1074 条 arXiv 论文为 fixture 降级。未富化项可用 `SAFETRACE_ENRICH_OFFLINE=false npm run enrich:pending -- --limit=20` 分批跑；已产生 fixture 结果不会自动覆盖。
+8. **富化未完成且 fallback 不等于成功**：最后记录的持久 trace 为 1098/3727（29.5%），其中 1074 条 arXiv 论文为 fixture 降级；本轮未重跑该 SQLite 数据库，数字仍是历史观测。PowerShell 在线补跑：`$env:SAFETRACE_ENRICH_OFFLINE="false"; npm run enrich:pending -- --limit=20`。额外设置 `SAFETRACE_ENRICH_LLM_ENABLED=true` 且 planner/key 为 StepPlan 时，F1 仅对 live 且规则排序含糊的候选生成建议；建议不改变已发布结果。已产生 fixture 结果不会自动覆盖。
 9. **事件库仍 append-only**：SQLite seq 现已原子唯一，但重复 ingest 仍可产生重复业务事件。诊断页面按 trace 展示并给出 unique intel_id 数；不要跨 runs 将 event 数量当作唯一漏洞数。
 
 ---

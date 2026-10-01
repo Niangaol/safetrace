@@ -12,6 +12,8 @@ test("real profile is explicitly selectable and default embedder remains cache",
   assert.equal(live.roles.embedder.capability_flags.dim, 1024);
   assert.equal(live.providers.tokendance?.api_key_env, "TOKENDANCE_API_KEY");
   assert.equal(live.roles.embedder.model_version, "unversioned-api");
+  assert.equal(live.roles.decision.data_domain, "private", "arbitrary decision.state must default private even in cloud profiles");
+  assert.equal(loadModelsConfig("config/models.yml").roles.decision.data_domain, "private");
 });
 
 test("local stack profile switches embedder to bge-m3 with trust_boundary local", () => {
@@ -31,6 +33,7 @@ test("local stack profile switches embedder to bge-m3 with trust_boundary local"
   assert.equal(local.providers.local_llm?.base_url_default, "http://127.0.0.1:8080/v1");
   // 云端 provider 定义仍在（切回时改 role 即可，不用重写文件）
   assert.equal(local.providers.tokendance?.api_key_env, "TOKENDANCE_API_KEY");
+  assert.equal(local.roles.decision.data_domain, "private", "decision.state is arbitrary and defaults private");
 });
 
 test("StepPlan model profile uses the local OpenAI-compatible endpoint", () => {
@@ -45,6 +48,7 @@ test("StepPlan model profile uses the local OpenAI-compatible endpoint", () => {
   assert.equal(profile.roles.planner.model_id, "step-3.7-flash");
   assert.equal(profile.roles.planner.capability_flags.reasoning_effort, "low");
   assert.deepEqual(profile.roles.planner.fallback_chain, ["cache"]);
+  assert.equal(profile.roles.decision.data_domain, "private", "arbitrary DecisionRequest.state must not inherit public by default");
 });
 
 test("StepPlan: OpenAI-compatible chat uses configured role and records model lineage", async () => {

@@ -9,7 +9,33 @@
 - **Q1 意图层**：规则先跑；只有需要澄清或启发式置信度低于 0.55、且问题不是极短输入时才调用。StepPlan 只能返回受限 intent/澄清 JSON；若规则已有候选，模型只能从候选中选择；若模型给自评置信度且低于阈值，就继续澄清。CVE/产品/版本槽位始终由规则抽取；输出不合格就保留原规则并显示降级。
 - **Q2 检索层**：只在无命中、分数低于阈值，或多跳/时间线/攻击链的证据少于两条时改写查询。发送问题、计划和命中统计，不发送检索原文；新增 CVE 会被拒绝。改写后的查询必须重新检索，且只有结果变好才替换原结果，否则保留原检索。
 - **Q4 答案层**：证据门禁通过后才调用；StepPlan 只生成结论，citation 与证据原文仍来自 Q2。证据不足先拒答，不调用模型。
-- **采集解析/富化**：仍走本地规则/API；A-04 注入筛查完成前，不把不可信来源原文发给 StepFun。
+- **受控采集解析**：默认规则优先。只有同时打开 `PAGE_INGEST_ENABLED=true` 和 `SAFETRACE_INGEST_LLM_ENABLED=true`，并提供来源元数据、精确 HTTPS host allowlist、StepPlan planner/key 时，规则不完整才会尝试模型。原文须经本地 A-04 启发式筛查、hash-bound attestation 和 24,000 字符限制；过期快照、筛查失败或模型输出未通过逐字引用校验都转人工，候选还必须进入原有 DQ1，模型不能直接发布。
+- **F1 富化**：默认离线/fixture 不调用模型。仅在显式 live 模式、`SAFETRACE_ENRICH_LLM_ENABLED=true`、StepPlan planner/key 齐备且 arXiv 结果规则排序不明确时，发送查询标题、论文标题/年份/规则词项（不发摘要全文或 URL）做二次建议。建议只记 lineage/CLI，不改变 PaperLink 顺序或分数、F4 CVSS/EPSS、F6 总分或发布契约。
+- **A-02 决策**：`npm run qa:decision:serve` 在 `127.0.0.1:8317` 挂载 `/v1/decide`。决策 role profiles 默认 private；handler 先尝试本地确定性 rule（仅当 typed option 与 `public_facts.rule_candidate` 精确匹配，且来自 rule 的上游选项分布对应概率 ≥0.65），再考虑 StepPlan。StepPlan 只可在调用方显式 public opt-in、单个 choice 问题、allowlist 公共事实和来自 rule/tool/policy 的完整校准概率分布齐备后参与选择；模型自评只用于拒答阈值，最终 `calibrated_prob` 来自上游分布。缺条件、规则/模型弃权或无效输出都显式落到人工/挂起。
+
+A-02 请求需由上游提供真实校准分布；下面的概率仅为 JSON 形状示例，不可照抄当作已校准事实：
+
+```json
+{
+  "decision_id": "dec_example",
+  "kind": "q1_route",
+  "trace_id": "tr_example",
+  "schema_version": "1.0",
+  "questions": [{ "q_id": "route", "type": "choice", "options": ["impact_range", "remediation"] }],
+  "state": {
+    "data_domain": "public",
+    "stepfun_opt_in": true,
+    "injection_screened": true,
+    "calibration_source": "rule",
+    "calibrated_option_probabilities": { "impact_range": 0.88, "remediation": 0.12 },
+    "public_facts": { "cve_ids": ["CVE-2021-44228"], "severity": "critical" }
+  }
+}
+```
+
+本地 handler 会检查请求形状和 public-facts allowlist；传给 StepPlan 的载荷不包含原始 `state`、`calibrated_option_probabilities`、问题 ID 或未允许字段。示例故意省略 `rule_candidate` 以演示 StepPlan 分支；正常请求若 `public_facts.rule_candidate` 与 typed option 一致且 rule 概率 ≥0.65，会先由本地规则短路，不调模型。缺少上游校准分布时不会发请求，并沿阶梯挂起/转人工；handler 只做数值/总和校验，不能替上游证明概率已统计校准。
+
+**安全边界说明**：A-04 当前是有界本地启发式检测器，能挡住已知注入标记，不是完整的 prompt-injection 防护保证；不要把未知/敏感资料发送到云端。DQ1、去重、契约校验、F4 与 F6 仍由确定性逻辑负责。以上新模型路径有 mock 测试；除此前记录的 Q4 验证外，本轮不代表真实云端调用已完成。
 
 ## 启动
 

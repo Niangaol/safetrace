@@ -137,7 +137,7 @@ test("Q4：degraded_to 透传 + 用户可见降级提示", async () => {
 test("Q4：注入式合成器可替换默认模板（MG1 接线点）", async () => {
   const question = "Log4Shell 影响哪些版本？";
   const plan = classifyIntent(turn(question));
-  const evidence = makeEvidence(scored([makeChunk("chunk_a")]));
+  const evidence = makeEvidence(scored([makeChunk("chunk_a", { trust: "trusted" })]));
   const synth: AnswerSynthesizer = {
     synthesize: async () => ({
       session_id: "s_mg1",
@@ -152,6 +152,40 @@ test("Q4：注入式合成器可替换默认模板（MG1 接线点）", async ()
   const ans = await synthesizeAnswer(question, plan, evidence, { synth });
   assert.equal(ans.text_md, "MG1 stub answer");
   assert.equal(ans.confidence, 0.42);
+});
+
+test("Q4：直接注入的云合成器不能绕过 A-04 出云闸", async () => {
+  const question = "Log4Shell 影响哪些版本？";
+  const plan = classifyIntent(turn(question));
+  const evidence = makeEvidence(scored([makeChunk("chunk_safe", { trust: "trusted" })]));
+  const store = new (await import("@safetrace/shared")).MemoryEventStore();
+  const bus = new (await import("@safetrace/shared")).EventBus({ store });
+  let calls = 0;
+  const synth: AnswerSynthesizer = { synthesize: async () => { calls++; throw new Error("must not call"); } };
+  const answer = await synthesizeAnswer(question, plan, evidence, {
+    bus, synth, synthesizer: { provider: "stepplan", model_id: "step-3.7-flash" },
+    injectionGuard: { screened: false, note: "upstream screen unavailable" },
+  });
+  assert.equal(calls, 0);
+  assert.equal(answer.degraded_to, "template");
+  assert.match(answer.text_md, /没有发送到云端/);
+  const fallbacks = await store.read<{ user_visible: boolean }>("fallback.events");
+  assert.equal(fallbacks.length, 1);
+  assert.equal(fallbacks[0]?.payload.user_visible, true);
+});
+
+test("Q4：外部合成器不能绕过澄清/证据门禁", async () => {
+  const question = "嗯";
+  const plan = classifyIntent(turn(question));
+  const evidence = makeEvidence(scored([makeChunk("chunk_a", { trust: "trusted" })]));
+  let calls = 0;
+  const synth: AnswerSynthesizer = { synthesize: async () => { calls++; throw new Error("must not call"); } };
+  const answer = await synthesizeAnswer(question, plan, evidence, {
+    synth, synthesizer: { provider: "stepplan", model_id: "step-3.7-flash" },
+  });
+  assert.equal(calls, 0);
+  assert.equal(answer.abstained, true);
+  assert.ok(answer.text_md.includes(plan.clarify_question ?? "@@missing@@"));
 });
 
 test("Q4 端到端：Q1→Q2→Q4，Log4Shell 有答案 / CVE-2099 拒答", async () => {

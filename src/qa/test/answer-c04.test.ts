@@ -91,14 +91,14 @@ test("证据新鲜且时间齐全时不加 stale_warning", async () => {
   assert.ok(ans.injection_guard, "注入筛查状态必须始终显式出现");
 });
 
-test("未接入注入筛查时如实标注 screened=false 与不可信证据数", async () => {
+test("A-04 启发式筛查如实标注状态并保留不可信证据计数", async () => {
   const plan = classifyIntent({ session_id: "s", turn_id: "t", text: "Log4Shell 影响哪些版本？" });
   const web = chunk("c_web", { published_at: "2026-09-01T00:00:00.000Z", trust: "untrusted" });
   const ans = await synthesizeAnswer("Log4Shell 影响哪些版本？", plan, evidence([web]), { session_id: "s", turn_id: "t", now: NOW });
   assert.ok(ans.injection_guard, "注入筛查状态必须始终显式出现");
-  assert.equal(ans.injection_guard.screened, false, "不得宣称已筛查");
+  assert.equal(ans.injection_guard.screened, true, "本地 A-04 heuristic 已实际运行");
   assert.equal(ans.injection_guard.untrusted_evidence, 1);
-  assert.ok(ans.injection_guard.note.includes("未接入注入筛查"));
+  assert.ok(ans.injection_guard.note.includes("Heuristic screening is not a guarantee"));
   const screened = await synthesizeAnswer("Log4Shell 影响哪些版本？", plan, evidence([web]), { session_id: "s", turn_id: "t", now: NOW, injectionGuard: { screened: true, max_score: 0.9, flags: ["instruction_override"], note: "已筛查" } });
   assert.ok(screened.injection_guard);
   assert.equal(screened.injection_guard.screened, true);

@@ -18,6 +18,8 @@ import { EventBus, MemoryEventStore, validateInstance } from "@safetrace/shared"
 import type { DecisionReply, DecisionRequest, FallbackEvent } from "@safetrace/shared";
 import { createGatewayServer } from "@safetrace/gateway";
 import { runDecisionLadder } from "../src/ladder/decision-ladder.js";
+import { createStepPlanDecisionHandler } from "../src/ladder/stepfun-decision.js";
+import type { StepFunChatClient } from "../src/stepfun-answerer.js";
 
 const ROOT = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
 const REPLY_SCHEMA = JSON.parse(
@@ -112,6 +114,52 @@ test("全链未决 → 200 且 abstain 挂起，decided_by=human（不伪造 cho
     assert.equal(lineage.find((r) => r.stage === "decide.ladder")?.status, "review", "未决 lineage 必须标 review");
   } finally {
     await new Promise<void>((resolve) => created.server.close(() => resolve()));
+  }
+});
+
+test("/v1/decide 注入 StepPlan composition 只发送 public projection 并校验输入", async () => {
+  const localStore = new MemoryEventStore();
+  const localBus = new EventBus({ store: localStore });
+  let sent = "";
+  let calls = 0;
+  const client: StepFunChatClient = { chat: async (_role, messages, _params, _trace, domain) => {
+    calls++;
+    assert.equal(domain, "public");
+    sent = messages[1]?.content ?? "";
+    return { provider: "stepplan", model_id: "step-3.7-flash", degraded_to: "", text: JSON.stringify({ choice: "impact_range", confidence: 0.91, abstain: false }) };
+  } };
+  const handler = createStepPlanDecisionHandler({ provider: "stepplan", modelId: "step-3.7-flash", apiKeyConfigured: true, client, bus: localBus });
+  const app = createGatewayServer({ bus: localBus, decideHandler: handler });
+  await new Promise<void>((resolve) => app.server.listen(0, "127.0.0.1", resolve));
+  const localBase = "http://127.0.0.1:" + (app.server.address() as AddressInfo).port;
+  try {
+    const publicRequest: DecisionRequest = {
+      ...REQ,
+      decision_id: "dec_public_stepfun",
+      trace_id: "tr_public_stepfun",
+      state: {
+        data_domain: "public", stepfun_opt_in: true, injection_screened: true, calibration_source: "rule",
+        calibrated_option_probabilities: { impact_range: 0.88, remediation: 0.12 },
+        public_facts: { cve_ids: ["CVE-2021-44228"], severity: "critical" },
+        private_token: "PRIVATE_SENTINEL", raw_doc: "RAW_DOCUMENT_SENTINEL",
+      },
+    };
+    const valid = await fetch(localBase + "/v1/decide", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(publicRequest) });
+    assert.equal(valid.status, 200);
+    const reply = (await valid.json()) as DecisionReply;
+    assert.deepEqual(validateInstance(reply, REPLY_SCHEMA), []);
+    assert.equal(reply.decided_by, "llm_fallback");
+    assert.equal(reply.decision.choice, "impact_range");
+    assert.equal(reply.calibrated_prob, 0.88, "probability is read from the upstream rule calibration, not the model self-rating");
+    assert.doesNotMatch(sent, /PRIVATE_SENTINEL|RAW_DOCUMENT_SENTINEL|calibrated_option_probabilities/);
+    assert.ok(sent.includes("CVE-2021-44228"));
+    const invalid = await fetch(localBase + "/v1/decide", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...publicRequest, questions: [] }) });
+    assert.equal(invalid.status, 400);
+    const badQuestion = await fetch(localBase + "/v1/decide", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...publicRequest, questions: [{ ...publicRequest.questions[0]!, unexpected_field: "not in frozen request" }] }) });
+    assert.equal(badQuestion.status, 400, "question-level additionalProperties are rejected");
+    assert.equal(calls, 1, "invalid request must fail before StepPlan");
+  } finally {
+    await new Promise<void>((resolve) => app.server.close(() => resolve()));
   }
 });
 

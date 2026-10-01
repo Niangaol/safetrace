@@ -17,6 +17,7 @@ export interface LadderContext {
   decision_id: string;
   kind: DecisionRequest["kind"];
   state: Record<string, unknown>;
+  questions: DecisionRequest["questions"];
   trace_id: string;
 }
 
@@ -38,8 +39,10 @@ export interface LadderResult {
 export type ToolResolver = (ctx: LadderContext) => Promise<DecisionReply["decision"] | null>;
 /** 规则层：确定性规则决策（models.yml decision role = rule-fallback-v0）。 */
 export type RuleResolver = (ctx: LadderContext) => Promise<DecisionReply["decision"] | null>;
+/** 可显式携带由可信上游校准的概率；模型自评不直接冒充 calibrated_prob。 */
+export interface DecisionResolution { decision: DecisionReply["decision"]; calibrated_prob: number }
 /** LLM 层：返回 null 表示低置信度弃权（允许下坠到人工层）。 */
-export type LlmResolver = (ctx: LadderContext) => Promise<DecisionReply["decision"] | null>;
+export type LlmResolver = (ctx: LadderContext) => Promise<DecisionReply["decision"] | DecisionResolution | null>;
 /** 人工层：未接入人工队列时返回 null（明确挂起，不伪造决策）。 */
 export type HumanResolver = (ctx: LadderContext) => Promise<DecisionReply["decision"] | null>;
 
@@ -61,12 +64,38 @@ export function decidedByFor(layer: LadderLayer): DecisionReply["decided_by"] {
   return "rule_fallback";
 }
 
+function decisionValidationError(req: DecisionRequest, decision: DecisionReply["decision"]): string | undefined {
+  const record = decision as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !["choice", "score", "abstain"].includes(key))) return "decision contains unsupported fields";
+  if (record.abstain === true) {
+    return record.choice === undefined && record.score === undefined ? undefined : "abstain cannot include choice or score";
+  }
+  if (req.questions.length !== 1) return "single-decision reply requires exactly one typed question";
+  const question = req.questions[0]!;
+  if (record.abstain !== undefined && record.abstain !== false) return "abstain must be boolean";
+  if (question.type === "choice") {
+    if (typeof record.choice !== "string" || !question.options?.includes(record.choice)) return "choice must exactly match a typed option";
+    if (record.score !== undefined && (typeof record.score !== "number" || !Number.isFinite(record.score) || record.score < 0 || record.score > 1)) return "confidence score must be within 0..1";
+    return undefined;
+  }
+  if (question.type === "score") {
+    if (record.choice !== undefined || typeof record.score !== "number" || !Number.isFinite(record.score) || record.score < 0 || record.score > 1) return "score question requires a numeric score within 0..1";
+    return undefined;
+  }
+  return "noul question requires explicit abstention until free-text decision semantics are defined";
+}
+
+function isDecisionResolution(value: unknown): value is DecisionResolution {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "decision" in value;
+}
+
 /** 执行四层阶梯。任一层不可用时登记 FallbackEvent 并显式下坠（禁静默）。 */
 export async function runDecisionLadder(req: DecisionRequest, opts: LadderOptions = {}): Promise<LadderResult> {
   const ctx: LadderContext = {
     decision_id: req.decision_id,
     kind: req.kind,
     state: req.state,
+    questions: req.questions,
     trace_id: req.trace_id,
   };
   const trace: LadderAttempt[] = [];
@@ -77,13 +106,14 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
     return envelope?.event_id ?? null;
   };
 
-  const finish = async (layer: LadderLayer, decision: DecisionReply["decision"]): Promise<LadderResult> => {
+  const finish = async (layer: LadderLayer, resolved: DecisionResolution): Promise<LadderResult> => {
     const failures = trace.filter((a) => a.status !== "success");
+    const decision = resolved.decision;
     const reply: DecisionReply = {
       decision_id: req.decision_id,
       kind: req.kind,
       decision,
-      calibrated_prob: typeof decision.score === "number" ? Math.max(0, Math.min(1, decision.score)) : (decision.choice ? 1 : 0),
+      calibrated_prob: resolved.calibrated_prob ?? (typeof decision.score === "number" ? Math.max(0, Math.min(1, decision.score)) : (decision.choice ? 1 : 0)),
       // 契约 DecidedBy 无 tool 通道：工具层与规则层都如实记 rule_fallback；
       // llm 层记 llm_fallback；人工层在 v1.1 契约中已有 human 通道，不得冒充规则层。
       decided_by: decidedByFor(layer),
@@ -106,7 +136,7 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
     return { reply, escalation_trace: trace, escalated: failures.length > 0 };
   };
 
-  const attemptLayer = async (layer: LadderLayer, resolver: ToolResolver | RuleResolver | LlmResolver | HumanResolver | undefined): Promise<DecisionReply["decision"] | null> => {
+  const attemptLayer = async (layer: LadderLayer, resolver: ToolResolver | RuleResolver | LlmResolver | HumanResolver | undefined): Promise<DecisionResolution | null> => {
     const t0 = Date.now();
     if (!resolver) {
       trace.push({ layer, status: "unavailable", reason: layer + " 层未接入", latency_ms: Date.now() - t0 });
@@ -114,14 +144,25 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
       return null;
     }
     try {
-      const decision = await resolver(ctx);
-      if (decision === null) {
+      const raw = await resolver(ctx);
+      if (raw === null) {
         trace.push({ layer, status: "abstained", reason: layer + " 层低置信度弃权", latency_ms: Date.now() - t0 });
         await degradeFallback(layer, layer + " 层低置信度弃权（显式下坠）", ctx, opts);
         return null;
       }
-      trace.push({ layer, status: "success", reason: "ok", latency_ms: Date.now() - t0 });
-      return decision;
+      const resolution: DecisionResolution = isDecisionResolution(raw)
+        ? raw
+        : { decision: raw as DecisionReply["decision"], calibrated_prob: typeof raw.score === "number" ? raw.score : (raw.choice ? 1 : 0) };
+      if (!Number.isFinite(resolution.calibrated_prob) || resolution.calibrated_prob < 0 || resolution.calibrated_prob > 1) throw new Error("calibrated_prob must be within 0..1");
+      const invalid = decisionValidationError(req, resolution.decision);
+      if (invalid) throw new Error("结构化决策输出未通过验证：" + invalid);
+      if (resolution.decision.abstain === true) {
+        trace.push({ layer, status: "abstained", reason: layer + " 层显式 abstain", latency_ms: Date.now() - t0 });
+        await degradeFallback(layer, layer + " 层显式 abstain（显式下坠）", ctx, opts);
+        return null;
+      }
+      trace.push({ layer, status: "success", reason: "validated decision", latency_ms: Date.now() - t0 });
+      return resolution;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       trace.push({ layer, status: "failed", reason: layer + " 层执行失败", latency_ms: Date.now() - t0 });

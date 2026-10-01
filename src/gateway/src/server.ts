@@ -13,6 +13,7 @@ import type { ChatMessage, ChatParams } from "./types.js";
 
 export interface ServerOptions {
   port?: number;
+  host?: string;
   gateway?: ModelGateway;
   bus?: EventBusType;
   /** A-02：/v1/decide 决策阶梯处理器（问答线编排层注入）。 */
@@ -81,13 +82,15 @@ export function createGatewayServer(opts: ServerOptions = {}) {
       sendJson(res, 404, { error: "not_found", path: url.pathname });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const status = msg.includes("未配置") ? 400 : 503;
+      const statusCode = err instanceof Error ? (err as Error & { statusCode?: unknown }).statusCode : undefined;
+      const status = statusCode === 400 || msg.includes("未配置") ? 400 : 503;
       sendJson(res, status, { error: msg, degraded_to: "request_failed" });
     }
   });
 
   if (store) server.once("close", () => store.close());
-  return { server, port, listen: () => new Promise<void>((resolve) => server.listen(port, resolve)) };
+  const host = opts.host ?? "127.0.0.1";
+  return { server, port, host, listen: () => new Promise<void>((resolve) => server.listen(port, host, resolve)) };
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {

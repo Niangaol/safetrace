@@ -6,3 +6,4 @@ export * from "./lineage.js";
 export * from "./degrade.js";
 export * from "./schema.js";
 export * from "./time.js";
+export * from "./injection-screen.js";

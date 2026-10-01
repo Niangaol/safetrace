@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { EventBus, MemoryEventStore, sha256Json, SqliteEventStore } from "@safetrace/shared";
+import { EventBus, MemoryEventStore, sha256, sha256Json, SqliteEventStore } from "@safetrace/shared";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ControlledFetchError, UnsafePageUrlError, fetchPageWithFallback, htmlToText } from "../src/firecrawl.js";
 import { extractAdvisoryWithFallback } from "../src/extraction-fallback.js";
+import type { ExtractionSafetyAttestation, LlmExtractionInput } from "../src/extraction-fallback.js";
 import type { PageFetchResult, PageSnapshot } from "../src/firecrawl.js";
 
 function fetchPageNoRobots(url: string, options: Parameters<typeof fetchPageWithFallback>[1]) {
@@ -14,6 +15,10 @@ const allowed = ["vendor.example"];
 function response(body: string, status = 200, headers: Record<string, string> = { "content-type": "text/html" }): Response {
   return new Response(body, { status, headers });
 }
+function gateResult(input: LlmExtractionInput, allowed = true): ExtractionSafetyAttestation {
+  return { allowed, screened: true, source_url_sha256: sha256(input.source_url), source_text_sha256: sha256(input.text), outbound_payload_sha256: sha256Json({ title: input.title, text: input.text }), detector_version: "a04-heuristic-v1", flags: [] };
+}
+
 function page(text: string, title = ""): PageFetchResult {
   const url = "https://vendor.example/advisory/1";
   return {
@@ -238,7 +243,7 @@ test("LLM fallback：gate 拒绝时不调用模型", async () => {
   let calls = 0;
   const source = page("CVE-2024-98765 was reported. The vendor advisory describes remote code execution in product X.");
   const result = await extractAdvisoryWithFallback(source, {
-    safety_gate: async () => false,
+    safety_gate: async (input) => gateResult(input, false),
     llm: async () => { calls += 1; return {}; },
   });
   assert.equal(result.status, "needs_human_review");
@@ -255,11 +260,11 @@ test("LLM fallback：输出必须是原文可验证证据，否则进入人工�
     confidence: 0.93,
     evidence_quotes: ["The vendor advisory describes remote code execution in product X."],
   });
-  const accepted = await extractAdvisoryWithFallback(source, { safety_gate: async () => true, llm });
+  const accepted = await extractAdvisoryWithFallback(source, { safety_gate: async (input) => gateResult(input), llm });
   assert.equal(accepted.status, "candidate");
   if (accepted.status === "candidate") assert.equal(accepted.extracted_by, "llm");
   const fabricated = await extractAdvisoryWithFallback(source, {
-    safety_gate: async () => true,
+    safety_gate: async (input) => gateResult(input),
     llm: async () => ({ title: "Made up title", summary: "Made up fact", cve_ids: ["CVE-2024-98765"], confidence: 0.99, evidence_quotes: ["Made up fact"] }),
   });
   assert.equal(fabricated.status, "needs_human_review");
@@ -346,7 +351,7 @@ test("extraction lineage：通过 gate 的 LLM 输出记录 provider/hash 并经
   const result = await extractAdvisoryWithFallback(source, {
     bus,
     trace_id: "tr_extract_llm",
-    safety_gate: async () => true,
+    safety_gate: async (input) => gateResult(input),
     llm_execution: { provider: "test", model_id: "mock-extractor", model_version: "v1", prompt_sha256: "d".repeat(64) },
     llm: async () => ({ title: "remote code execution in product X", summary, cve_ids: ["CVE-2024-98765"], confidence: 0.93, evidence_quotes: [summary] }),
   });

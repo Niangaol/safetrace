@@ -16,7 +16,7 @@
 | 文档 | `docs/LOCAL-DEMO.md`（运行手册 + 手测清单，含拒答/澄清用例） | ✅ |
 | 诚实标识 | demo 数据接口带 `data_mode=fixture`、`degraded_to=fixture`；未实测的时效/费用显示 null/“—”；富化维度带 `mock:true`。采集诊断 API 独立返回 SQLite 可用性与最近 trace，不伪装为 demo fixture | ✅ 符合红线 3/5 |
 
-分支自曝限制（`docs/LOCAL-DEMO.md` 写明，演示时照念）：Q2 目前只检索 fixture 证据索引，**尚未接入本次采集结果**；不是实时采集、无真实资产。StepPlan 可做 Q1 意图补判、Q2 查询改写及 Q4 结论生成，但 citations 始终由检索结果提供；采集原文不出云，模型失败保留规则/模板。
+分支自曝限制（`docs/LOCAL-DEMO.md` 写明，演示时照念）：Q2 仍只检索 fixture 证据索引，**尚未接入本次采集结果**；demo 不是实时采集、无真实资产。StepPlan 可按门槛辅助 Q1/Q2/Q4。普通 demo 仍用 fixtures；单独受控网页采集只有在显式 opt-in、exact-host 和本地启发式/hash attestation 通过时才可能把页面文本发送到云端（启发式不保证检出所有注入）；F1 建议只发送标题/规则词项且不影响产物。citation 仍来自检索结果，模型失败保留规则/模板。
 
 ## 1. KKK 要做的事（按顺序）
 
@@ -82,11 +82,11 @@ npm run smoke
 
 | 不做 | 去向 |
 |---|---|
-| A-04 注入防护、E-04 隔离落库 | 已顺延；**禁砍，最迟 D9–D11（10/6–10/8）重启**，否则撞 D13；三处问题清单见 TEAM-PLAN §六 |
+| A-04 完整注入防护、E-04 隔离落库 | 已顺延；目前已有 A-04 heuristic v1 作为部分出站门禁（非完整保证），DQ1 injection_score/flags 与全链攻击验收仍缺；**禁砍，最迟 D9–D11（10/6–10/8）继续补齐**，三处历史问题见 TEAM-PLAN §六 |
 | A-05 时间过滤（published_after） | demo 后做 |
 | 云端模型默认策略 | 本机 `.env.local` 选择 Tokendance profile 中的 StepPlan planner/answerer：Q1/Q2 按需调用、Q4 生成；其他环境默认 `models.yml` 仍用 cache/template。StepPlan 故障回退每层原规则/模板 |
 | compose / Docker | D4 拍板弃用，全本地跑（TEAM-PLAN §六） |
 | 大屏/列表接真实监测数据 | 等 Xue 的 72h 真跑数据出来再接 |
 | 改 contracts/、新增事件主题 | 不动权威契约；新需求走契约评审 |
 
-演示“已知限制”口径（报告/答辩照念）：采集与 Q2 证据仍是 fixture；Q1/Q2 按需会发送问题/查询词，Q4 会发送问题与公开证据到云端；费用未接计量；Q2 未接本次采集结果；采集解析/富化原文不送 StepFun，直到 A-04 注入筛查完成；不要输入敏感信息。
+演示“已知限制”口径（报告/答辩照念）：demo 的采集与 Q2 证据仍是 fixture；Q1/Q2 按需会发送问题/查询词，Q4 会发送公开 fixture 证据到云端；费用未接计量，Q2 未接本次采集结果。独立的受控网页采集只有在显式入库/LLM opt-in、exact-host 和本地 A-04 启发式/hash attestation 都通过后才可能发送有限页面文本；这是部分防护，不是安全保证。F1 只发公开标题/规则词项并仅生成未应用建议；不要输入敏感信息。

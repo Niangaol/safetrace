@@ -1,4 +1,4 @@
-import { degrade } from "@safetrace/shared";
+import { degrade, screenPromptInjection } from "@safetrace/shared";
 import type { Answer, EventBus, RetrievalResponse } from "@safetrace/shared";
 import type { QueryPlan } from "./q1-intent.js";
 import { synthesizeAnswer } from "./q4-answer.js";
@@ -115,16 +115,30 @@ export async function synthesizeAnswerWithStepFun(
   evidence: RetrievalResponse,
   options: StepFunAnswerOptions,
 ): Promise<StepFunAnswerResult> {
-  const plainOptions = templateOnlyOptions(options);
+  const scan = screenPromptInjection([question, ...evidence.chunks.map((chunk) => chunk.text)]);
+  const suppliedGuard = options.injectionGuard;
+  const injectionGuard = {
+    screened: scan.screened && (suppliedGuard?.screened ?? true),
+    max_score: Math.max(scan.max_score, suppliedGuard?.max_score ?? 0),
+    flags: [...new Set([...scan.flags, ...(suppliedGuard?.flags ?? [])])].sort(),
+    note: [scan.note, suppliedGuard?.note].filter(Boolean).join(" "),
+  };
+  const guardedOptions: StepFunAnswerOptions = { ...options, injectionGuard };
+  const plainOptions = templateOnlyOptions(guardedOptions);
   const template = await synthesizeAnswer(question, plan, evidence, plainOptions);
   if (template.abstained) {
-    return { answer: await synthesizeAnswer(question, plan, evidence, options), answer_mode: "template" };
+    return { answer: await synthesizeAnswer(question, plan, evidence, guardedOptions), answer_mode: "template" };
   }
   if (options.provider !== "stepplan") {
-    return { answer: await synthesizeAnswer(question, plan, evidence, options), answer_mode: "template" };
+    return { answer: await synthesizeAnswer(question, plan, evidence, guardedOptions), answer_mode: "template" };
   }
   if (!options.apiKeyConfigured || !options.client) {
-    return templateFallback(question, plan, evidence, options, template, "STEP_PLAN_API_KEY 未配置或 StepPlan Gateway 未就绪", options.parent_lineage_ids ?? []);
+    return templateFallback(question, plan, evidence, guardedOptions, template, "STEP_PLAN_API_KEY 未配置或 StepPlan Gateway 未就绪", options.parent_lineage_ids ?? []);
+  }
+  const guard = template.injection_guard;
+  const unknownTrust = evidence.chunks.some((chunk) => chunk.trust !== "trusted");
+  if (!scan.screened || !scan.allowed || !guard || !guard.screened || guard.untrusted_evidence > 0 || (guard.flags?.length ?? 0) > 0 || unknownTrust) {
+    return templateFallback(question, plan, evidence, guardedOptions, template, "A-04 注入筛查未通过或证据信任级未确认；已阻止发送来源文本到 StepFun", options.parent_lineage_ids ?? []);
   }
 
   const priorIds = new Set(options.bus ? (await options.bus.readLineage(evidence.trace_id, 0, 1000)).map((row) => row.lineage_id) : []);
@@ -157,7 +171,7 @@ export async function synthesizeAnswerWithStepFun(
     const merged = mergeConclusion(template, conclusion);
     const parents = [...(options.parent_lineage_ids ?? []), ...await readNewGatewayLineage(options.bus, evidence.trace_id, priorIds)];
     const answer = await synthesizeAnswer(question, plan, evidence, {
-      ...options,
+      ...guardedOptions,
       parent_lineage_ids: parents,
       synthesizer: { provider: "stepplan", model_id: reply.model_id, model_version: "unversioned-api" },
       synth: { synthesize: () => merged },
@@ -165,6 +179,6 @@ export async function synthesizeAnswerWithStepFun(
     return { answer, answer_mode: "stepfun", model_id: reply.model_id };
   } catch {
     const parents = [...(options.parent_lineage_ids ?? []), ...await readNewGatewayLineage(options.bus, evidence.trace_id, priorIds)];
-    return templateFallback(question, plan, evidence, options, template, fallbackReason, parents);
+    return templateFallback(question, plan, evidence, guardedOptions, template, fallbackReason, parents);
   }
 }

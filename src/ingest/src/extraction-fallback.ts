@@ -1,5 +1,5 @@
-import { nextId, nowIso, sha256Json } from "@safetrace/shared";
-import type { EventBus, LineageArtifactRef } from "@safetrace/shared";
+import { nextId, nowIso, sha256, sha256Json } from "@safetrace/shared";
+import type { EventBus, InjectionFlag, LineageArtifactRef } from "@safetrace/shared";
 import type { PageFetchResult } from "./firecrawl.js";
 
 export interface AdvisoryCandidate {
@@ -10,9 +10,20 @@ export interface AdvisoryCandidate {
   confidence: number;
   evidence_quotes: string[];
 }
-export interface LlmExtractionInput { source_url: string; title: string; text: string }
-export type LlmExtractionPort = (input: LlmExtractionInput) => Promise<unknown>;
-export type UntrustedTextGate = (input: LlmExtractionInput) => Promise<boolean>;
+export interface LlmExtractionInput { source_url: string; title: string; text: string; stale?: boolean }
+export interface ExtractionSafetyAttestation {
+  allowed: boolean;
+  screened: boolean;
+  source_url_sha256: string;
+  source_text_sha256: string;
+  outbound_payload_sha256: string;
+  detector_version: string;
+  flags: InjectionFlag[];
+}
+export interface ApprovedLlmExtractionInput extends LlmExtractionInput { safety_attestation: ExtractionSafetyAttestation }
+export type LlmExtractionPort = (input: ApprovedLlmExtractionInput) => Promise<unknown>;
+export type UntrustedTextGate = (input: LlmExtractionInput) => Promise<ExtractionSafetyAttestation>;
+export const EXTRACTION_A04_DETECTOR_VERSION = "a04-heuristic-v1";
 export type ExtractionResult =
   | { status: "candidate"; extracted_by: "rules" | "llm"; candidate: AdvisoryCandidate; next_step: "DQ1"; trace_id: string; lineage_ids: string[] }
   | { status: "needs_human_review"; reason: string; rule_candidate?: AdvisoryCandidate; review_id?: string; trace_id: string; lineage_ids: string[] };
@@ -37,7 +48,7 @@ function rulesCandidate(page: PageFetchResult): AdvisoryCandidate | undefined {
   const quote = evidenceSentences(page.text).find((line) => cveIds.some((id) => line.toUpperCase().includes(id)) && line.length >= 20);
   if (!title || cveIds.length === 0 || !quote) return undefined;
   return {
-    source_url: safeSourceUrl(page.source_url),
+    source_url: safeSourceUrl(page.final_url),
     title,
     summary: quote,
     cve_ids: cveIds,
@@ -48,8 +59,22 @@ function rulesCandidate(page: PageFetchResult): AdvisoryCandidate | undefined {
 function objectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function validSafetyAttestation(value: unknown, input: LlmExtractionInput): value is ExtractionSafetyAttestation {
+  if (!objectRecord(value)) return false;
+  const attestation = value as Partial<ExtractionSafetyAttestation>;
+  return input.stale !== true
+    && attestation.allowed === true
+    && attestation.screened === true
+    && attestation.detector_version === EXTRACTION_A04_DETECTOR_VERSION
+    && Array.isArray(attestation.flags)
+    && attestation.flags.length === 0
+    && attestation.source_url_sha256 === sha256(input.source_url)
+    && attestation.source_text_sha256 === sha256(input.text)
+    && attestation.outbound_payload_sha256 === sha256Json({ title: input.title, text: input.text });
+}
+
 function validateLlmDraft(value: unknown, page: PageFetchResult, minimumConfidence: number): AdvisoryCandidate | undefined {
-  if (!objectRecord(value)) return undefined;
+  if (!objectRecord(value) || Object.keys(value).some((key) => !["title", "summary", "confidence", "cve_ids", "evidence_quotes"].includes(key))) return undefined;
   const title = value.title;
   const summary = value.summary;
   const confidence = value.confidence;
@@ -66,7 +91,7 @@ function validateLlmDraft(value: unknown, page: PageFetchResult, minimumConfiden
   if (!Array.isArray(rawQuotes) || rawQuotes.length === 0 || rawQuotes.length > 5 || rawQuotes.some((quote) => typeof quote !== "string" || quote.trim().length === 0 || !page.text.includes(quote))) return undefined;
   const evidenceQuotes = rawQuotes as string[];
   if (!evidenceQuotes.includes(summary)) return undefined;
-  return { source_url: safeSourceUrl(page.source_url), title, summary, cve_ids: cveIds, confidence, evidence_quotes: evidenceQuotes };
+  return { source_url: safeSourceUrl(page.final_url), title, summary, cve_ids: cveIds, confidence, evidence_quotes: evidenceQuotes };
 }
 
 /**
@@ -168,32 +193,38 @@ export async function extractAdvisoryWithFallback(
   );
   if (deterministic) return { status: "candidate", extracted_by: "rules", candidate: deterministic, next_step: "DQ1", trace_id: traceId, lineage_ids: [...lineageIds] };
 
-  const input: LlmExtractionInput = { source_url: safeSourceUrl(page.source_url), title: page.title, text: page.text };
+  const input: LlmExtractionInput = { source_url: safeSourceUrl(page.final_url), title: page.title, text: page.text, stale: page.stale };
   if (!options.safety_gate || !options.llm) {
     return review("规则解析不完整；A-03/A-04 安全门或 MG1 LLM adapter 未接入");
   }
-  let approved = false;
+  let attestation: ExtractionSafetyAttestation;
   const gateStarted = nowIso();
   try {
-    approved = await options.safety_gate(input);
+    attestation = await options.safety_gate(input);
   } catch {
     await record("extract.safety_gate", "a03-a04-gate.v1", "failed", [pageRef], [], { started_at: gateStarted, error: "safety gate failed closed" });
     return review("安全门发生错误；按 fail-closed 转人工复核");
   }
+  const attested = validSafetyAttestation(attestation, input);
+  const safeAttestationHash = sha256Json(attested ? {
+    allowed: attestation.allowed, screened: attestation.screened, source_url_sha256: attestation.source_url_sha256,
+    source_text_sha256: attestation.source_text_sha256, outbound_payload_sha256: attestation.outbound_payload_sha256,
+    detector_version: attestation.detector_version, flags: attestation.flags,
+  } : { allowed: false, screened: false, detector_version: "invalid-attestation" });
   await record(
     "extract.safety_gate",
     "a03-a04-gate.v1",
-    approved ? "success" : "rejected",
+    attested ? "success" : "rejected",
     [pageRef],
-    [{ kind: "SafetyGateDecision", id: pageUrl, sha256: sha256Json({ approved }), url: pageUrl }],
-    { started_at: gateStarted, execution: { component_version: "a03-a04-gate.v1" }, decision: { reason: approved ? "approved" : "untrusted page denied", review_required: !approved } },
+    [{ kind: "SafetyGateDecision", id: pageUrl, sha256: safeAttestationHash, url: pageUrl }],
+    { started_at: gateStarted, execution: { component_version: attested ? attestation.detector_version : "invalid-attestation" }, decision: { reason: attested ? "hash-bound A-04 heuristic screen approved the exact public payload" : "A-03/A-04 attestation missing, denied or mismatched", review_required: !attested } },
   );
-  if (!approved) return review("A-03/A-04 安全门拒绝将不可信页面送入 LLM");
-
+  if (!attested) return review("A-03/A-04 安全门未通过 hash-bound attestation；转人工复核");
+  const approvedInput: ApprovedLlmExtractionInput = { ...input, safety_attestation: attestation };
   const llmStarted = nowIso();
   let draft: unknown;
   try {
-    draft = await options.llm(input);
+    draft = await options.llm(approvedInput);
   } catch {
     await record("extract.llm", "mg1-extraction.v1", "failed", [pageRef], [], { started_at: llmStarted, execution: options.llm_execution ?? { component_version: "mg1-extraction.v1" }, error: "LLM request failed; raw output not retained" });
     return review("LLM 请求失败；按 fail-closed 转人工复核");

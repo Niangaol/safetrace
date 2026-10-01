@@ -1,7 +1,9 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { EventBus, nextId, sha256, SqliteEventStore } from "@safetrace/shared";
+import { EventBus, degrade, nextId, sha256, sha256Json, SqliteEventStore } from "@safetrace/shared";
+import { ModelGateway } from "@safetrace/gateway";
 import { runControlledPage } from "../src/ingest/src/controlled-page.js";
+import { createStepPlanExtractionPorts } from "../src/ingest/src/stepfun-extraction.js";
 
 async function main(): Promise<void> {
   const url = process.argv[2];
@@ -61,6 +63,24 @@ async function main(): Promise<void> {
         throw new Error("PAGE_INGEST_METADATA missing/unreadable/invalid; no network request made");
       }
     }
+    const stepPlanIngestEnabled = process.env.SAFETRACE_INGEST_LLM_ENABLED === "true";
+    let extractionPorts: ReturnType<typeof createStepPlanExtractionPorts> | undefined;
+    if (stepPlanIngestEnabled) {
+      if (!ingestEnabled) {
+        await degrade({ layer: "L1", trigger: "StepPlan extraction opt-in requested while PAGE_INGEST_ENABLED is false", degradedOf: "rules", traceId, label: "未启用入库；StepPlan 解析未运行", recoveryHint: "只有经过元数据校验的 PAGE_INGEST_ENABLED=true 才能尝试模型。", emit: async (event) => { await bus.publish("fallback.events", event, { trace_id: traceId }); } });
+      } else {
+        const gateway = new ModelGateway({ bus });
+        const planner = gateway.roles().find((role) => role.role === "planner");
+        const keyConfigured = Boolean(process.env.STEP_PLAN_API_KEY);
+        if (planner?.provider === "stepplan" && keyConfigured) {
+          extractionPorts = createStepPlanExtractionPorts({ provider: planner.provider, modelId: planner.model_id, apiKeyConfigured: true, client: gateway, allowedHosts, traceId });
+          await bus.recordLineage({ trace_id: traceId, stage: "crawler.llm_opt_in", operation_version: "stepplan-extraction-optin.v1", status: "success", input_refs: [{ kind: "ModelRole", id: "planner", sha256: sha256Json({ provider: planner.provider, model_id: planner.model_id }) }], decision: { reason: "explicit opt-in; per-page A-04 screen and exact host allowlist remain mandatory" } });
+        } else {
+          await degrade({ layer: "L1", trigger: "StepPlan extraction requested but planner/key is not configured", degradedOf: "rules", traceId, label: "StepPlan 解析不可用；继续规则解析/人工复核", recoveryHint: "选择 StepPlan planner profile 并配置本机 STEP_PLAN_API_KEY。", emit: async (event) => { await bus.publish("fallback.events", event, { trace_id: traceId }); } });
+        }
+      }
+    }
+
     const run = await runControlledPage(url, {
       enabled: true,
       respect_robots: true,
@@ -73,6 +93,7 @@ async function main(): Promise<void> {
       ingest_enabled: ingestEnabled,
       metadata,
       parent_lineage_ids: metadataParents,
+      ...(extractionPorts ?? {}),
     });
     const { page: result, extraction, admission, evidence } = run;
     console.log(JSON.stringify({

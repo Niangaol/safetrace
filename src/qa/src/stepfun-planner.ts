@@ -1,4 +1,4 @@
-import { degrade, sha256, sha256Json } from "@safetrace/shared";
+import { degrade, screenPromptInjection, sha256, sha256Json } from "@safetrace/shared";
 import type { EventBus, RetrievalResponse } from "@safetrace/shared";
 import type { IntentKind, QueryPlan } from "./q1-intent.js";
 import { strategyForIntent } from "./q1-intent.js";
@@ -45,6 +45,14 @@ function safeClarifier(value: unknown, question: string): string | null {
   const allowedCves = new Set((question.match(CVE_RE) ?? []).map((id) => id.toUpperCase()));
   if ((text.match(CVE_RE) ?? []).some((id) => !allowedCves.has(id.toUpperCase()))) return null;
   return text;
+}
+
+function cloudQuerySafetyReason(texts: string[]): string | null {
+  if (texts.some((text) => /(?:https?|file):\/\//i.test(text))) return "问题/查询包含 URL，未发送到 StepPlan";
+  const screen = screenPromptInjection(texts);
+  if (!screen.screened) return "A-04 注入筛查未完成，未发送到 StepPlan";
+  if (!screen.allowed) return "A-04 注入筛查命中 " + screen.flags.join(",") + "，保留规则/检索";
+  return null;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
@@ -149,6 +157,11 @@ export async function refineQ1WithStepFun(
     { kind: "Query", id: options.traceId, sha256: sha256(question) },
     { kind: "QueryPlan", id: options.traceId, sha256: sha256Json(plan) },
   ];
+  const screenReason = cloudQuerySafetyReason([trimmed, plan.rewrite_text, JSON.stringify(plan.slots)]);
+  if (screenReason) {
+    await emitRuleFallback(options, "q1", screenReason, inputRefs);
+    return { plan, attempted: true, used_llm: false, fallback_reason: screenReason };
+  }
   if (!options.apiKeyConfigured || !options.client) {
     const reason = "STEP_PLAN_API_KEY 或 planner client 未配置";
     await emitRuleFallback(options, "q1", reason, inputRefs);
@@ -234,6 +247,11 @@ export async function rewriteQ2WithStepFun(
     { kind: "QueryPlan", id: options.traceId, sha256: sha256Json(plan) },
     { kind: "RetrievalResponse", id: original.query_id, sha256: sha256Json(original) },
   ];
+  const screenReason = cloudQuerySafetyReason([question.trim(), plan.rewrite_text, JSON.stringify({ intents: plan.intents, slots: plan.slots })]);
+  if (screenReason) {
+    await emitRuleFallback(options, "q2", screenReason, inputRefs);
+    return { retrieval: original, attempted: true, used_llm: false, fallback_reason: screenReason };
+  }
   if (!options.apiKeyConfigured || !options.client) {
     const reason = "STEP_PLAN_API_KEY 或 planner client 未配置";
     await emitRuleFallback(options, "q2", reason, inputRefs);

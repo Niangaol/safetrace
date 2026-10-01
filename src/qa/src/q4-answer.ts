@@ -5,7 +5,7 @@
  *   → abstained=true，文案显式说明证据不足，禁止编造；
  * - degraded_to 从 RetrievalResponse 原样透传，并在答案尾部给用户可见提示。
  */
-import { nowIso, parseLoose, sha256, sha256Json } from "@safetrace/shared";
+import { degrade, nowIso, parseLoose, screenPromptInjection, sha256, sha256Json } from "@safetrace/shared";
 import type { Answer, EventBus, InjectionFlag, InjectionGuard, RetrievalResponse, StaleWarning } from "@safetrace/shared";
 import type { QueryPlan } from "./q1-intent.js";
 
@@ -32,7 +32,7 @@ export interface SynthesizeOptions {
   stale_after_days?: number;
   /** 评估基准时间（测试注入用）；缺省当前时间。 */
   now?: Date;
-  /** C-04：外部注入筛查结果；缺省 = 未筛查（显式如实，不假装干净）。 */
+  /** 上游筛查结果与本地 A-04 heuristic 合并；screened=false 会禁止外部 synthesizer 出云。 */
   injectionGuard?: Omit<InjectionGuard, "untrusted_evidence">;
 }
 
@@ -118,19 +118,19 @@ function assessStaleness(evidence: RetrievalResponse, now: Date, thresholdDays: 
   return { threshold_days: thresholdDays, oldest_published_at: new Date(oldest).toISOString(), unknown_published_at: unknown, note: "⚠️ 证据时效提示：" + parts.join("；") + "。结论请结合最新通告核对。" };
 }
 
-/**
- * C-04：注入筛查状态。A-04 未落地前 screened=false 必须显式出现在响应对象上，
- * 禁止调用方把"没有筛查"读成"已筛查干净"。
- */
-function assessInjectionGuard(evidence: RetrievalResponse, opts: SynthesizeOptions): InjectionGuard {
-  const untrusted = evidence.chunks.filter(c => c.trust === "untrusted").length;
-  if (opts.injectionGuard) {
-    return { ...opts.injectionGuard, untrusted_evidence: untrusted };
-  }
-  const note = untrusted > 0
-    ? "本轮未接入注入筛查（A-04 未落地）；引用证据含 " + untrusted + " 条 untrusted 外部文本，不可信内容按数据处理。"
-    : "本轮未接入注入筛查（A-04 未落地）；引用证据均为 trusted 结构化来源。";
-  return { screened: false, untrusted_evidence: untrusted, note };
+/** C-04/A-04 部分筛查状态：screened 表示本地启发式扫描已运行，不保证能识别所有注入；未运行时必须显式为 false。 */
+function assessInjectionGuard(question: string, evidence: RetrievalResponse, opts: SynthesizeOptions): InjectionGuard {
+  const untrusted = evidence.chunks.filter((chunk) => chunk.trust === "untrusted").length;
+  const scan = screenPromptInjection([question, ...evidence.chunks.map((chunk) => chunk.text)]);
+  const supplied = opts.injectionGuard;
+  const flags = [...new Set([...scan.flags, ...(supplied?.flags ?? [])])].sort();
+  return {
+    screened: scan.screened && (supplied?.screened ?? true),
+    max_score: Math.max(scan.max_score, supplied?.max_score ?? 0),
+    flags,
+    untrusted_evidence: untrusted,
+    note: [scan.note, supplied?.note].filter(Boolean).join(" "),
+  };
 }
 
 function degradedNote(evidence: RetrievalResponse): string | null {
@@ -153,6 +153,8 @@ function buildAbstain(
   lines.push("## 证据");
   if (evidence.chunks.length === 0) {
     lines.push("（无可用证据块）");
+  } else if ((ctx.injection.flags?.length ?? 0) > 0) {
+    lines.push("（本地注入筛查命中风险标记；为避免传播恶意指令，本次不展示可疑原文，请人工复核。）");
   } else {
     lines.push("以下证据未达作答标准，仅列出备查，不作为答案依据：");
     evidence.chunks.forEach((c, i) => {
@@ -180,6 +182,8 @@ function buildAbstain(
   if (note) lines.push(note);
   const staleNote = ctx.stale?.note;
   if (staleNote) lines.push(staleNote);
+  if (!ctx.injection.screened) lines.push("⚠️ 本轮未完成提示注入筛查；当前为本地模板路径，不把证据发送到模型。");
+  if (evidence.chunks.some((chunk) => chunk.trust !== "trusted")) lines.push("⚠️ 检索证据包含 unknown/untrusted trust；不会交给云端模型。");
   return {
     ...base,
     text_md: lines.join("\n\n"),
@@ -237,6 +241,8 @@ function buildAnswer(
   if (note) lines.push(note);
   const staleNote = ctx.stale?.note;
   if (staleNote) lines.push(staleNote);
+  if (!ctx.injection.screened) lines.push("⚠️ 本轮未完成提示注入筛查；当前为本地模板路径，不把证据发送到模型。");
+  if (evidence.chunks.some((chunk) => chunk.trust !== "trusted")) lines.push("⚠️ 检索证据包含 unknown/untrusted trust；不会交给云端模型。");
   return {
     ...base,
     text_md: lines.join("\n\n"),
@@ -247,6 +253,12 @@ function buildAnswer(
     ...(ctx.stale ? { stale_warning: ctx.stale } : {}),
     injection_guard: ctx.injection,
   };
+}
+
+function addQ4Notice(answer: Answer, note: string, degradedTo?: string): Answer {
+  const header = "## 结论\n";
+  const text = answer.text_md.startsWith(header) ? answer.text_md.replace(header, header + note + "\n\n") : note + "\n\n" + answer.text_md;
+  return { ...answer, text_md: text, ...(degradedTo ? { degraded_to: degradedTo } : {}) };
 }
 
 /**
@@ -266,34 +278,60 @@ export async function synthesizeAnswer(
     ...evidence.chunks.map((chunk) => ({ kind: "EvidenceChunk", id: chunk.chunk_id, sha256: sha256Json(chunk), url: chunk.provenance.url })),
   ];
   let answer: Answer;
+  let usedSynth = false;
+  let blockedSynth = false;
+  let effectiveSynthesizer = opts.synthesizer;
+  let fallbackEventId: string | null = null;
   try {
-    if (opts.synth) {
-      answer = await opts.synth.synthesize(question, plan, evidence);
-    } else {
-      const base: BaseAnswer = {
-        session_id: opts.session_id ?? "",
-        turn_id: opts.turn_id ?? evidence.trace_id,
-        ...(evidence.degraded_to ? { degraded_to: evidence.degraded_to } : {}),
-      };
-      const topScore = evidence.chunks.reduce((m, c) => Math.max(m, retrievalScore(c)), 0);
-      const qs = evidence.chunks.map((c) => c.quality_score).filter((q): q is number => typeof q === "number");
-      const ctx: Ctx = {
-        topScore,
-        avgQuality: qs.length > 0 ? qs.reduce((sum, q) => sum + q, 0) / qs.length : 0,
-        stale: assessStaleness(evidence, opts.now ?? new Date(), opts.stale_after_days ?? DEFAULT_STALE_THRESHOLD_DAYS),
-        injection: assessInjectionGuard(evidence, opts),
-      };
-      const reasons: string[] = [];
-      if (evidence.chunks.length === 0) reasons.push("检索没有返回任何证据块");
-      if (evidence.chunks.length > 0 && topScore < ABSTAIN_RETRIEVAL_SCORE_FLOOR) {
-        reasons.push("最高召回分 " + topScore.toFixed(2) + " 低于阈值 " + ABSTAIN_RETRIEVAL_SCORE_FLOOR.toFixed(2));
-      }
-      if (plan.needs_clarify) reasons.push("问题意图不明确（Q1 低置信度，需澄清）");
-      if (!coversRequestedCve(plan, evidence)) reasons.push("证据未覆盖问题指定的 CVE：" + plan.slots.cve_ids.join("、"));
-      answer = reasons.length > 0
-        ? buildAbstain(question, plan, evidence, reasons, ctx, base)
-        : buildAnswer(question, plan, evidence, ctx, base);
+    const base: BaseAnswer = {
+      session_id: opts.session_id ?? "",
+      turn_id: opts.turn_id ?? evidence.trace_id,
+      ...(evidence.degraded_to ? { degraded_to: evidence.degraded_to } : {}),
+    };
+    const topScore = evidence.chunks.reduce((m, c) => Math.max(m, retrievalScore(c)), 0);
+    const qs = evidence.chunks.map((c) => c.quality_score).filter((q): q is number => typeof q === "number");
+    const ctx: Ctx = {
+      topScore,
+      avgQuality: qs.length > 0 ? qs.reduce((sum, q) => sum + q, 0) / qs.length : 0,
+      stale: assessStaleness(evidence, opts.now ?? new Date(), opts.stale_after_days ?? DEFAULT_STALE_THRESHOLD_DAYS),
+      injection: assessInjectionGuard(question, evidence, opts),
+    };
+    const reasons: string[] = [];
+    if (evidence.chunks.length === 0) reasons.push("检索没有返回任何证据块");
+    if (evidence.chunks.length > 0 && topScore < ABSTAIN_RETRIEVAL_SCORE_FLOOR) {
+      reasons.push("最高召回分 " + topScore.toFixed(2) + " 低于阈值 " + ABSTAIN_RETRIEVAL_SCORE_FLOOR.toFixed(2));
     }
+    if (plan.needs_clarify) reasons.push("问题意图不明确（Q1 低置信度，需澄清）");
+    if (!coversRequestedCve(plan, evidence)) reasons.push("证据未覆盖问题指定的 CVE：" + plan.slots.cve_ids.join("、"));
+    if ((ctx.injection.flags?.length ?? 0) > 0) reasons.push("注入筛查命中风险标记；本次拒答并不展示可疑原文");
+    const externalSynth = Boolean(opts.synth) && opts.synthesizer?.provider !== "template";
+    const trustConfirmed = evidence.chunks.every((chunk) => chunk.trust === "trusted");
+    const screenPassed = ctx.injection.screened && ctx.injection.untrusted_evidence === 0 && (ctx.injection.flags?.length ?? 0) === 0 && trustConfirmed;
+    if (externalSynth && !screenPassed) {
+      blockedSynth = true;
+      effectiveSynthesizer = { provider: "template", model_id: "q4-template-v1" };
+      const why = !ctx.injection.screened ? "A-04 screen missing/failed" : (ctx.injection.flags?.length ?? 0) > 0 ? "A-04 risk signals found" : "evidence trust is unknown/untrusted";
+      await degrade({
+        layer: "L3", trigger: "Q4 external synthesizer blocked by A-04/trust gate: " + why, degradedOf: "template", traceId: evidence.trace_id,
+        label: "Q4 出云安全门未通过；已阻止模型并保留本地路径", recoveryHint: "检查本地提示注入筛查和每条 EvidenceChunk trust；unknown/untrusted 来源需要人工复核。",
+        emit: async (event) => {
+          if (!opts.bus) return;
+          const envelope = await opts.bus.publish("fallback.events", event, { trace_id: evidence.trace_id });
+          fallbackEventId = envelope.event_id;
+        },
+      });
+    }
+    if (reasons.length > 0) {
+      if (externalSynth) effectiveSynthesizer = { provider: "template", model_id: "q4-template-v1" };
+      answer = buildAbstain(question, plan, evidence, reasons, ctx, base);
+    } else if (opts.synth && !blockedSynth) {
+      usedSynth = true;
+      const generated = await opts.synth.synthesize(question, plan, evidence);
+      answer = { ...generated, injection_guard: ctx.injection };
+    } else {
+      answer = buildAnswer(question, plan, evidence, ctx, base);
+    }
+    if (blockedSynth) answer = addQ4Notice(answer, "⚠️ A-04/来源信任门未通过；证据没有发送到云端，当前使用本地规则路径。", "template");
   } catch (error) {
     await opts.bus?.recordLineage({
       trace_id: evidence.trace_id,
@@ -312,24 +350,28 @@ export async function synthesizeAnswer(
   await opts.bus?.recordLineage({
     trace_id: evidence.trace_id,
     parent_lineage_ids: opts.parent_lineage_ids ?? [],
-    causation_id: opts.causation_id ?? null,
+    causation_id: fallbackEventId ?? opts.causation_id ?? null,
     stage: "qa.q4_answer",
-    operation_version: opts.synth ? "answer-synthesizer." + (opts.synthesizer?.provider ?? "injected") + ".v1" : "q4-template.v1",
-    status: opts.synthesizer?.provider === "template" || answer.degraded_to ? "degraded" : "success",
+    operation_version: usedSynth ? "answer-synthesizer." + (effectiveSynthesizer?.provider ?? "injected") + ".v1" : "q4-template.v1",
+    status: blockedSynth || effectiveSynthesizer?.provider === "template" || answer.degraded_to ? "degraded" : "success",
     started_at: startedAt,
     input_refs: inputRefs,
     output_refs: [
       { kind: "Answer", id: answer.turn_id, sha256: sha256Json(answer) },
       ...answer.citations.map((citation) => ({ kind: "Citation", id: citation.chunk_id, url: citation.url })),
     ],
-    execution: opts.synthesizer ? { component_version: "answer-synthesizer", provider: opts.synthesizer.provider, model_id: opts.synthesizer.model_id, ...(opts.synthesizer.model_version ? { model_version: opts.synthesizer.model_version } : {}) } : { component_version: opts.synth ? "injected" : "q4-template.v1" },
+    execution: usedSynth && effectiveSynthesizer
+      ? { component_version: "answer-synthesizer", provider: effectiveSynthesizer.provider, model_id: effectiveSynthesizer.model_id, ...(effectiveSynthesizer.model_version ? { model_version: effectiveSynthesizer.model_version } : {}) }
+      : { component_version: "q4-template.v1", ...(effectiveSynthesizer?.provider === "template" ? { provider: "template", model_id: effectiveSynthesizer.model_id } : {}) },
     decision: {
-      ...(opts.synthesizer?.provider === "template" ? { fallback_to: "template" } : answer.degraded_to ? { fallback_to: answer.degraded_to } : {}),
-      reason: opts.synthesizer?.provider === "template"
-        ? "StepFun unavailable; deterministic Q4 template fallback"
-        : answer.abstained
-          ? (answer.stale_warning ? "abstained: evidence gate; stale" : "abstained: evidence gate")
-          : (answer.stale_warning ? "answered; stale" : "answered"),
+      ...(blockedSynth || effectiveSynthesizer?.provider === "template" || answer.degraded_to ? { fallback_to: "template" } : {}),
+      reason: blockedSynth
+        ? "A-04/trust gate blocked external synthesis; local Q4 path retained"
+        : effectiveSynthesizer?.provider === "template"
+          ? "Template fallback used"
+          : answer.abstained
+            ? (answer.stale_warning ? "abstained: evidence gate; stale" : "abstained: evidence gate")
+            : (answer.stale_warning ? "answered; stale" : "answered"),
     },
   });
   return answer;

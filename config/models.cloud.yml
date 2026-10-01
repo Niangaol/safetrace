@@ -100,8 +100,9 @@ roles:
     timeout_ms: 20000
     fallback_chain: [cache]
 
-  decision:                 # D4：Y5分级/Q1路由/Q3充分性 的结构化判断
+  decision:                 # D4：Y5分级/Q1路由/Q3充分性 的结构化判断；state 默认 private，必须走显式 public projection
     provider: cache
+    data_domain: private
     model_id: rule-fallback-v0   # P0 为规则通道；Jev 通道留 decided_by 枚举位
     model_version: v0
     max_rpm: 1200

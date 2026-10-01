@@ -3,6 +3,7 @@ import type { EventBus } from "@safetrace/shared";
 import { assertAllowedUrl, fetchPageWithFallback } from "./firecrawl.js";
 import type { ControlledFetchOptions } from "./firecrawl.js";
 import { extractAdvisoryWithFallback } from "./extraction-fallback.js";
+import type { LlmExecutionMetadata, LlmExtractionPort, UntrustedTextGate } from "./extraction-fallback.js";
 import { ingestCollectedPage } from "./page-ingest.js";
 import { buildSourceEvidenceChunks } from "./evidence-chunks.js";
 import type { SourceEntry } from "./registry.js";
@@ -20,8 +21,8 @@ export function parsePageIngestMetadata(value: unknown, url: string): PageIngest
   return { source: { source_id: s.source_id, source_type: "vendor_advisory", url, status: "active", poll_interval_s: s.poll_interval_s, rate_per_min: s.rate_per_min, requires_api_key: s.requires_api_key }, published_at: value.published_at, source_reliability: value.source_reliability };
 }
 
-/** Rules-only production entry: no cloud LLM adapter is wired before A-03/A-04 sign-off. */
-export async function runControlledPage(url: string, opts: ControlledFetchOptions & { bus: EventBus; trace_id: string; ingest_enabled?: boolean; metadata?: unknown }) {
+/** Rules-first page entry. Optional LLM ports require a hash-bound public A-03/A-04 attestation; defaults remain rules→human. */
+export async function runControlledPage(url: string, opts: ControlledFetchOptions & { bus: EventBus; trace_id: string; ingest_enabled?: boolean; metadata?: unknown; safety_gate?: UntrustedTextGate; llm?: LlmExtractionPort; min_llm_confidence?: number; llm_execution?: LlmExecutionMetadata }) {
   let metadata: PageIngestMetadata | undefined;
   let parents = opts.parent_lineage_ids ?? [];
   if (opts.ingest_enabled === true) {
@@ -36,7 +37,13 @@ export async function runControlledPage(url: string, opts: ControlledFetchOption
     parents = [record.lineage_id];
   }
   const page = await fetchPageWithFallback(url, { ...opts, parent_lineage_ids: parents });
-  const extraction = await extractAdvisoryWithFallback(page, { bus: opts.bus, trace_id: opts.trace_id, parent_lineage_ids: page.lineage_ids });
+  const extraction = await extractAdvisoryWithFallback(page, {
+    bus: opts.bus, trace_id: opts.trace_id, parent_lineage_ids: page.lineage_ids,
+    ...(opts.ingest_enabled === true && opts.safety_gate ? { safety_gate: opts.safety_gate } : {}),
+    ...(opts.ingest_enabled === true && opts.llm ? { llm: opts.llm } : {}),
+    ...(opts.ingest_enabled === true && opts.min_llm_confidence !== undefined ? { min_llm_confidence: opts.min_llm_confidence } : {}),
+    ...(opts.ingest_enabled === true && opts.llm_execution ? { llm_execution: opts.llm_execution } : {}),
+  });
   if (!metadata) return { page, extraction };
   const admission = await ingestCollectedPage(page, extraction, { enabled: true, ...metadata, bus: opts.bus });
   if (admission.status !== "accepted") return { page, extraction, admission };
