@@ -19,7 +19,9 @@ lag = first_seen_at − published_at        （单位：秒，取整）
 
 - `published_at`：上游首次公开发布时间（由各 Y2 适配器归一化成 ISO-8601 带 Z）；
 - `first_seen_at`：**本系统**首次入库时间（`IntelItem` 契约字段，两者分离正是为了不让上游延迟污染自证）；
-- 同一 `intel_id` 被多轮重复上报时只算**最早**那次 `first_seen_at`，其余计入 `excluded.duplicate_intel_rows`。
+- **按漏洞去重**（`metric_version` 1.2.0 起）：分组键取该情报的首个 CVE 号 `cve_ids[0]`，没有 CVE 号才退回 `intel_id`；组内只算**最早**那次 `first_seen_at`，其余计入 `excluded.duplicate_intel_rows`。
+  这一步在 E-08 之后是必须的：补抓会让同一个 CVE 以 `intel_nvd_cve_…`、`intel_osv_…`、`intel_cveorg_…` 多条 intel 入库，
+  若仍按 `intel_id` 去重，同一条漏洞会被重复计入样本 ⇒ `n` 虚高、P50/P95 偏向"最慢的那个源"。
 
 ## 2. 双口径（关键，别只截图一个）
 
@@ -40,7 +42,7 @@ lag = first_seen_at − published_at        （单位：秒，取整）
 - 分位数：**最近秩法**（nearest-rank，`rank = ceil(q × n)`），`n=0` 时返回 `null`——**空集绝不返回 0**；
 - 精度：秒保留 1 位小数，比例保留 4 位（上游时间戳只到秒，再细的精度是假的）；
 - `sla_6h_ratio` = `lag ≤ 21600s` 的样本占比（阈值常量 `SLA_6H_SECONDS`）；
-- 分源统计：一条多源归并后的情报**同时计入它每个来源**的样本，所以各源 `n` 之和可能大于 `overall.n`
+- 分源统计：样本按漏洞去重后，**来源取组内并集**——一条被多个源见过的漏洞仍计入它每个来源，所以各源 `n` 之和可以大于 `overall.n`
   （这是归并口径，不是重复计数；报告里 `by_source_note` 已写明）。
 
 ## 4. 排除规则（红线：宁可少一条，不可错一条）
@@ -126,3 +128,36 @@ reference / excluded / monitor_start / metric_version / data_basis  ← 新增�
 2. `watermarks[].success === false` 分两种：`replaying_fixture`（回放中，黄）与 `skipped_this_run`（本轮未抓取，灰），
    **不要都渲染成红色"故障"**——OSV/cve.org 需要查询目标才发起请求，是设计而非事故；
 3. P50/P95 旁边必须带 `n` 和窗口（`report.window` + `report.monitor_start`），否则评委问"多少样本测的"会卡住。
+
+
+## 9. 交叉验证清单（E-08 / Y4）——两套实现的关系与本 PR 的边界
+
+`cve_org` 与 `osv` 是"按需查询"型连接器：没有目标就 `return null` ⇒ 无人值守轮询时 5 个 active 源只有 3 个真产出。
+这件事现在有**两套代码**，边界要说清楚，不然以后没人知道哪条是真相：
+
+**A. 队长的实现（`a46c9f0`，已在 main）**：`pipeline.runIngestOnce` 内维护 `discoveredCves`（本轮解析出的 items 累积）+
+调度器启动时从 `intel.items` 载入种子，按 `nextCveSeeds` 每轮喂给两个源（`cve_org` 1 条、`osv` 10 条），
+并用进程内 `osvSeen/cveOrgSeen` 推进；`onNoData(reason)` 把"为什么没数据"写进 lineage。
+这是**抓取节奏的真相来源**，本 PR 完全不碰它。
+
+**B. 本 PR 的增量（只加不改）**：
+1. `discovery.ts`：**持久化**覆盖判定——"该源查过哪些号"从它自己的 `raw.docs.external_id` 反推。
+   与 A 的差别是实的：A 的推进状态在进程内存里，**重启即归零**（Windows Update、手动重启都会）；
+   本模块每次从库里算，跨重启连续，且能回答"还差多少"。
+   两条口径钉在测试里：① 不用归并后的 `intel.source_ids` 判覆盖（一条 intel 含 `cve_org` 只证明它报了触发归并的那个号，
+   同条目里别的源带进来的姊妹号没被它验证过）；② fixture 回放的 `external_id` 不含 CVE 号 ⇒ 离线顶替不算已验证。
+2. `coverageGaps()` + 报告里的"交叉验证进度"行：`已知CVE / 已验证(占比) / 待补`，
+   **不复制 scheduler 的每轮上限常量**（只以文字指回 `scheduler.nextCveSeeds`），避免两处数字各说各话。
+3. 时效样本改为**按漏洞去重**（`metric_version` 1.2.0）：分组键 `cve_ids[0]`、退回 `intel_id`；来源取组内并集。
+   这是 A 上线之后**必须**跟上的修正——清单一旦喂起来，同一个 CVE 会以 `intel_nvd_cve_…`、`intel_osv_…`、
+   `intel_cveorg_…` 多条 intel 入库，再按 `intel_id` 去重就会把同一条漏洞重复计入样本，`n` 虚高、
+   P50/P95 偏向"最慢验证它的那个源"。
+4. 取数 CLI 的三处健壮性：期望节拍显式取 `min(poll_interval_s)`（不从日志间隔反推——反推曾在两次相隔 57 秒的
+   手动运行后把节拍当成 60s、覆盖率算成 0.28% 还标"可作证据"）；归并率分子分母同窗口（否则出现
+   `intel_items > raw_items` 被 clamp 成 0% 的不可能数）；读库撞 `SQLITE_BUSY` 时有限重试。
+
+**留给队长决定的三点（我没动他的文件）**：
+- 进程重启后 A 的 `seen` 归零 ⇒ 是否改成从 `raw.docs` 读初值（本 PR 已提供 `coverageGaps`/`planBackfill` 可直接接）；
+- `cve_org` 每轮 1 条 ⇒ 按 30 分钟节奏 72h 只能补 ~144 条，而当前已知 CVE 已 2000+；要不要提到 8 条/轮（registry `rate_per_min=60`，仍远低于限流）；
+- `cve_org`/`osv` 在**非 404** 失败（5xx、超时）时仍会 `degradeToFixture`，而 fixture 是另一条 CVE 的内容——
+  按号补抓场景下这是错映射，建议失败即 skip（404 他已经这么处理了）。
