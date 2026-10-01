@@ -70,6 +70,22 @@ export async function parseNvd(raw: RawDoc): Promise<ParseResult> {
   const payload = await readPayloadObject(raw, warnings);
   const vulnerabilities = Array.isArray(payload.vulnerabilities) ? payload.vulnerabilities : [];
   if (vulnerabilities.length === 0) warnings.push("payload.vulnerabilities 缺失或为空，未产出 IntelItem");
+  // 翻页/多窗口的覆盖情况必须进 warning：否则"只取了一部分"看起来像取完了（红线：截断要说出口）
+  if (payload.truncated === true) warnings.push("NVD 翻页触顶未取尽：" + str(payload.truncated_note) );
+  if (payload.partial === true) warnings.push("NVD 部分页抓取失败：" + str(payload.partial_note));
+  if (Number(payload.duplicate_entries_dropped) > 0) {
+    warnings.push("NVD lastMod 与 pubDate 窗口重叠，去重丢弃 " + String(payload.duplicate_entries_dropped) + " 条");
+  }
+  if (Array.isArray(payload.windows)) {
+    for (const w of payload.windows as Record<string, unknown>[]) {
+      const failed = Number(w.failed_pages) > 0 ? "，失败 " + String(w.failed_pages) + " 页" : "";
+      const empt = w.empty === true ? "，该窗口无结果" : "";
+      warnings.push(
+        "NVD 窗口 " + String(w.kind) + "：" + String(w.pages_fetched) + " 页 / 上游报 " + String(w.reported_total) +
+          " 条 / 本轮取 " + String(w.items_from_window) + " 条" + empt + failed,
+      );
+    }
+  }
   let refsWarned = false;
   let metricsWarned = false;
   const items: IntelItem[] = [];
