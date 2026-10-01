@@ -15,6 +15,7 @@ import path from "node:path";
 import { SqliteEventStore, parseLoose } from "@safetrace/shared";
 import { SOURCES, activeSources } from "../registry.js";
 import { computeFreshnessReport, formatFreshnessTable } from "../freshness.js";
+import { coverageGaps, type CoverageGap } from "../discovery.js";
 import { computeUptime, readRunLog, type UptimeStats } from "../uptime.js";
 import { defaultDbPath, defaultRunLogPath } from "../scheduler.js";
 
@@ -62,29 +63,57 @@ async function main(): Promise<number> {
   }
   const sourceRecords = records.filter((r) => r.kind !== "tick" && (sinceMs === null || Date.parse(r.run_at) >= sinceMs));
   const monitorStart = sourceRecords.length > 0 ? [...sourceRecords].sort((a, b) => a.run_at.localeCompare(b.run_at))[0]!.run_at : null;
-  const parsedTotal = sourceRecords.reduce((acc, r) => acc + (Number.isFinite(r.parsed) ? r.parsed : 0), 0);
+  // raw_items 与 intel_items 必须同一时间跨度：按报告窗口取，不按 --since 截（否则分母被截短，
+  // 会出现 intel_items > raw_items 这种不可能的归并率）。监控起点仍按 --since 认定。
+  const winStartMs = Date.parse(window.start);
+  const parsedTotal = records
+    .filter((r) => r.kind !== "tick" && Date.parse(r.run_at) >= winStartMs && Date.parse(r.run_at) <= now.getTime())
+    .reduce((acc, r) => acc + (Number.isFinite(r.parsed) ? r.parsed : 0), 0);
 
-  const store = new SqliteEventStore(dbPath);
+  // 挂机进程与本命令同时开同一个 SQLite 文件：node:sqlite 默认 busy timeout = 0，
+  // 对方写事务期间这边读会直接 SQLITE_BUSY ⇒ 报告随机失败。这里做有限重试，
+  // 不改 shared 的 store（改成 WAL/busy_timeout 属跨模块决策，留给队长拍板）。
+  const maxAttempts = 4;
   let report;
-  try {
-    report = await computeFreshnessReport(store, {
-      window,
-      sources: { registered: SOURCES.length, active: activeSources().length },
-      activeSourceIds: activeSources().map((s) => s.source_id),
-      monitorStart,
-      runTotals: { parsed: parsedTotal },
-    });
-  } finally {
-    store.close();
+  let gaps: CoverageGap[] = [];
+  for (let attempt = 1; ; attempt += 1) {
+    const store = new SqliteEventStore(dbPath);
+    try {
+      report = await computeFreshnessReport(store, {
+        window,
+        sources: { registered: SOURCES.length, active: activeSources().length },
+        activeSourceIds: activeSources().map((s) => s.source_id),
+        monitorStart,
+        runTotals: { parsed: parsedTotal },
+      });
+      // 交叉验证进度（持久口径，与调度器进程的内存推进互为对账）
+      gaps = await coverageGaps(store);
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (attempt >= maxAttempts) {
+        console.error("[freshness] 读事件库失败（已试 " + attempt + " 次）：" + msg);
+        console.error("  一般是挂机进程正在写库；等这轮结束再跑，或先停挂机再取数。");
+        return 1;
+      }
+      const waitMs = attempt * 1500;
+      console.log("[freshness] 库被占用（" + msg + "），" + waitMs + "ms 后重试 " + (attempt + 1) + "/" + maxAttempts);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    } finally {
+      store.close();
+    }
   }
 
   // 连续运行的窗口从监控起点算起（不是报告窗口）：
   // 否则刚上线时「7 天窗口里只有 1 轮」会被算成 0.3% 覆盖率，读起来像系统挂了。
+  // 期望节拍固定取 active 源里最小的 poll_interval_s（当前 1800s），**不从日志间隔反推**：
+  // 我实测过反推的坏味道——手动跑过两次、恰好相隔 57 秒，反推就把节拍当成 60s，
+  // 于是"覆盖率 0.28%"这种荒唐数字会被当成运行证据。节拍是配置值，不是观测值。
   const minPollS = activeSources().reduce((acc, s) => Math.min(acc, s.poll_interval_s), Number.POSITIVE_INFINITY);
   const uptime = records.length > 0
     ? computeUptime(records, {
         ...(monitorStart !== null ? { windowStart: monitorStart } : {}),
-        defaultHeartbeatS: Number.isFinite(minPollS) ? minPollS : 1800,
+        heartbeat_s: Number.isFinite(minPollS) ? minPollS : 1800,
       })
     : null;
 
@@ -94,7 +123,7 @@ async function main(): Promise<number> {
   await writeFile(
     out,
     JSON.stringify(
-      { ...report, uptime, run_log: { path: logPath, records: records.length, bad_lines }, event_db: dbPath },
+      { ...report, uptime, coverage_gaps: gaps, run_log: { path: logPath, records: records.length, bad_lines }, event_db: dbPath },
       null,
       2,
     ),
@@ -104,6 +133,13 @@ async function main(): Promise<number> {
   console.log(formatFreshnessTable(report));
   console.log("");
   console.log(uptime === null ? `[uptime] 运行日志为空（${logPath}）：先跑 node --import tsx src/ingest/src/cli/watch.ts 攒连续运行证据` : formatUptime(uptime));
+  if (gaps.length > 0) {
+    console.log("\n交叉验证进度（持久口径：按该源 raw.doc external_id 判定，进程重启不丢）：");
+    for (const g of gaps) {
+      const pct = g.known_cves > 0 ? ((g.verified_cves / g.known_cves) * 100).toFixed(1) + "%" : "—";
+      console.log(`  ${g.source_id.padEnd(9)} 已知CVE=${g.known_cves} 已验证=${g.verified_cves}（${pct}）待补=${g.pending_cves}｜${g.note}`);
+    }
+  }
   console.log("\n已写出：" + out);
   if (report.data_basis === "fixture_only") {
     console.log("注意：窗口内没有一条真实抓取样本，以上时效数字不可作为运行证据（红线 5：Mock 要说出口）。");

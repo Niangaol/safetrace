@@ -177,8 +177,10 @@ export function computeUptime(records: readonly RunRecord[], opts: UptimeOpts = 
       ? "心跳太稀疏（最小间隔大于 4×兜底节拍）⇒ 这是手动跑几轮，不是常驻挂机；覆盖率按兜底节拍 " +
         Math.round(heartbeatMs / 1000) + "s 计期望，数字仅供参考，不可作为 72h 证据"
       : observed < 3
-        ? "心跳不足 3 次，覆盖率无统计意义；先常驻运行 npm run ingest:watch 再取数"
-        : "心跳节拍由日志推断且样本≥3，覆盖率可作为运行证据";
+        ? "心跳不足 3 次，覆盖率无统计意义；先常驻运行 node --import tsx src/ingest/src/cli/watch.ts 再取数"
+        : heartbeat.source === "explicit"
+          ? `期望节拍由调用方给定（${Math.round(heartbeatMs / 1000)}s，取 active 源最小 poll_interval_s），覆盖率可作为运行证据`
+          : "心跳节拍由日志最小间隔推断且样本≥3，覆盖率可作为运行证据";
 
   return {
     window_start: new Date(windowStartMs).toISOString(),

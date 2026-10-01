@@ -5,7 +5,7 @@
  * 而 P-08 要求每个指标必须先定义「样本规模 / 时间窗 / 统计方法」，否则数字不可辩护。本模块写死四条口径：
  *
  *  1. 样本集：只取 `published_at` 落在统计窗口内（缺省最近 7 天）且非离线回放的情报行。
- *  2. 去重：一条情报只算一个样本（按 intel_id 去重，取最早 first_seen_at）；跨轮重复上报计入 duplicate_intel_rows。
+ *  2. 去重：**一条漏洞只算一个样本**。分组键优先取该 intel 的首个 CVE 号（`cve_ids[0]`），没有 CVE 号才退回 `intel_id`；\n *     取组内最早那次 `first_seen_at`。这一步在 E-08 之后是必须的——补抓会让同一个 CVE 同时以\n *     `intel_nvd_cve_...`、`intel_osv_...`、`intel_cveorg_...` 多条 intel 入库，若仍按 intel_id 去重，\n *     同一条漏洞会被重复计入样本，n 虚高、P50/P95 偏向"最慢的那个源"。被折叠的行计入 duplicate_intel_rows。
  *  3. 统计方法：P50/P95 用最近秩法（nearest-rank，向上取整）；≤6h 占比 = lag ≤ 21600s 的样本比例。
  *     上游时间戳只到秒，所以分位数保留 1 位小数，再细的精度是假的。
  *  4. 双口径（关键）：
@@ -23,7 +23,7 @@ import { lagSeconds, parseLoose } from "@safetrace/shared";
 import type { EventStore, IntelItem, RawDoc, FallbackEvent } from "@safetrace/shared";
 
 /** 指标口径版本：口径变更必须升版本，避免不同版本数字混在同一张表里。 */
-export const FRESHNESS_METRIC_VERSION = "1.1.0";
+export const FRESHNESS_METRIC_VERSION = "1.2.0";
 
 /** 决赛「时效 ≤6h 优秀档」阈值（秒）。 */
 export const SLA_6H_SECONDS = 6 * 3600;
@@ -110,15 +110,15 @@ export interface FreshnessReport {
     unparseable: number;
     /** lag < 0（first_seen 早于 published，多为上游补录或时钟偏差）。 */
     negative_lag: number;
-    /** 按 intel_id 去重折叠掉的重复上报行数。 */
+    /** 同一漏洞的多条 intel（跨轮重复上报、或 E-08 补抓带来的跨源副本）被折叠掉的行数。 */
     duplicate_intel_rows: number;
   };
   collect: {
     sources_registered: number;
     sources_active: number;
-    /** 原始条目数 = 运行日志里各轮 parsed 之和；无日志为 0。 */
+    /** 原始条目数 = 统计窗口内各轮 parsed 之和（与 intel_items 同跨度）；无日志为 0。 */
     raw_items: number;
-    /** 去重后的真实（非 fixture）情报条数。 */
+    /** 统计窗口内去重后的真实（非 fixture）情报条数。 */
     intel_items: number;
     /** 归并率 = 1 − intel_items / raw_items。 */
     merge_ratio: number;
@@ -156,6 +156,14 @@ interface Sample {
   lag_seconds: number;
 }
 
+/**
+ * 时效样本的分组键：优先用该 intel 的首个 CVE 号，没有 CVE 号才退回 intel_id。
+ * 这样 E-08 补抓造成的"同一 CVE、多条跨源 intel"只算一条样本（取最早那次 first_seen_at）。
+ */
+function dedupeKeyOf(item: IntelItem): string {
+  const first = Array.isArray(item.cve_ids) ? item.cve_ids[0] : undefined;
+  return typeof first === "string" && first !== "" ? first : item.intel_id;
+}
 /** raw_refs 全部指向 fixtures/ ⇒ 该行来自离线回放样本。 */
 function isFixtureRow(item: IntelItem): boolean {
   const refs = Array.isArray(item.raw_refs) ? item.raw_refs : [];
@@ -240,7 +248,7 @@ export async function computeFreshnessReport(store: EventStore, opts: ComputeFre
     negative_lag: 0,
     duplicate_intel_rows: 0,
   };
-  /** intel_id → 最早一次入库的那条。 */
+  /** 漏洞分组键（cve_ids[0] ?? intel_id）→ 最早一次入库的那条。 */
   const bestByIntel = new Map<string, Sample>();
 
   for (const env of intelEnvs) {
@@ -275,13 +283,16 @@ export async function computeFreshnessReport(store: EventStore, opts: ComputeFre
       first_seen_ms: seenMs,
       lag_seconds: lag,
     };
-    const prev = bestByIntel.get(item.intel_id);
+    const sampleKey = dedupeKeyOf(item);
+    const prev = bestByIntel.get(sampleKey);
     if (prev !== undefined) {
       excluded.duplicate_intel_rows += 1;
-      if (seenMs < prev.first_seen_ms) bestByIntel.set(item.intel_id, sample);
+      // 组内来源取并集：按漏洞去重不能让别的源丢掉归属（分源口径仍要能看到 cve_org/osv 也见过这条漏洞）
+      const mergedSources = [...new Set([...prev.source_ids, ...item.source_ids])];
+      bestByIntel.set(sampleKey, seenMs < prev.first_seen_ms ? { ...sample, source_ids: mergedSources } : { ...prev, source_ids: mergedSources });
       continue;
     }
-    bestByIntel.set(item.intel_id, sample);
+    bestByIntel.set(sampleKey, sample);
   }
 
   const referenceSamples = [...bestByIntel.values()];
@@ -293,9 +304,17 @@ export async function computeFreshnessReport(store: EventStore, opts: ComputeFre
 
   const strictBlock = blockOf(strictSamples);
   const referenceBlock = blockOf(referenceSamples);
+  /**
+   * 窗口内去重后的真实（非 fixture）情报条数。必须与 raw_items 用同一时间跨度：
+   * 早先一版这里数的是整库历史、分母却是窗口内的解析数，于是出现过
+   * `intel_items(2058) > raw_items(2049)` ⇒ 归并率被夹到 0% 这种不可能的数。
+   */
   const distinctIntelIds = new Set<string>();
   for (const env of intelEnvs) {
-    if (!isFixtureRow(env.payload)) distinctIntelIds.add(env.payload.intel_id);
+    if (isFixtureRow(env.payload)) continue;
+    const seenMs = parseLoose(env.payload.first_seen_at ?? "");
+    if (seenMs === null || seenMs < startMs || seenMs > endMs) continue;
+    distinctIntelIds.add(env.payload.intel_id);
   }
   const intelDistinct = distinctIntelIds.size;
   const parsedRows = opts.runTotals?.parsed ?? 0;
@@ -341,7 +360,7 @@ export async function computeFreshnessReport(store: EventStore, opts: ComputeFre
           last_published_at: null,
           items_last_run: 0,
           success: false,
-          error: "本轮未产出 raw.doc（该源需要查询目标或增量游标才发起抓取）",
+          error: "本轮未产出 raw.doc（按需查询源无发现清单输入，或清单为空）",
           replaying_fixture: false,
           skipped_this_run: true,
         };
@@ -366,13 +385,13 @@ export async function computeFreshnessReport(store: EventStore, opts: ComputeFre
   return {
     generated_at: endIso,
     metric_version: FRESHNESS_METRIC_VERSION,
-    lag_definition: "lag = first_seen_at − published_at（秒），按 intel_id 去重取最早 first_seen_at",
+    lag_definition: "lag = first_seen_at − published_at（秒）；按漏洞去重（cve_ids[0] 优先，退回 intel_id），取组内最早 first_seen_at",
     percentile_method: "nearest-rank（向上取整），空集返回 null",
     window: { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() },
     monitor_start: opts.monitorStart ?? null,
     sample_basis:
       monitorStartMs === null
-        ? "无运行日志 ⇒ 严格口径暂等同参考口径；跑起 npm run ingest:watch 后自动收窄"
+        ? "无运行日志 ⇒ 严格口径暂等同参考口径；跑起 node --import tsx src/ingest/src/cli/watch.ts 后自动收窄"
         : "严格口径只计 published_at ≥ 监控起点的条目；参考口径计窗口内全部真实条目",
     data_basis: dataBasis,
     overall: strictBlock.overall,
@@ -381,7 +400,7 @@ export async function computeFreshnessReport(store: EventStore, opts: ComputeFre
       ...referenceBlock,
       note: "含上线前发布、本次才首次见到的历史条目：lag 里混入上游发布/更新延迟，不可写成「监测延迟」",
     },
-    by_source_note: "一条多源归并的情报同时计入它每个来源的样本，因此各源 n 之和可能大于 overall.n（这是归并口径，不是重复计数错误）",
+    by_source_note: "样本按漏洞去重（cve_ids[0] 优先，退回 intel_id），但来源取组内并集：一条被多个源见过的漏洞仍计入它每个来源，因此各源 n 之和可以大于 overall.n（这是归并口径，不是重复计数错误）",
     excluded,
     collect: {
       sources_registered: opts.sources?.registered ?? 0,
@@ -389,7 +408,7 @@ export async function computeFreshnessReport(store: EventStore, opts: ComputeFre
       raw_items: parsedRows,
       intel_items: intelDistinct,
       merge_ratio: Math.round(mergeRatio * 10000) / 10000,
-      merge_ratio_note: "归并率 = 1 − 去重后情报条数 / 运行日志累计解析条目数；无运行日志时为 0（不用抓取批次数冒充分母）",
+      merge_ratio_note: "归并率 = 1 − 窗口内去重情报条数 / 窗口内累计解析条目数（两侧同跨度）；无运行日志时为 0，不用抓取批次数冒充分母",
     },
     watermarks,
     queue_depth: 0,

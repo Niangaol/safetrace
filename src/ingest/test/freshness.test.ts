@@ -295,3 +295,20 @@ test("freshness：水位覆盖 active 源全集——回放中的源不许亮绿
 test("SLA 常量：6h 阈值口径固定", () => {
   assert.equal(SLA_6H_SECONDS, 21600);
 });
+
+test("freshness（E-08 之后必修）：同一 CVE 的多条跨源 intel 只算一条样本", async () => {
+  const pub = new Date(NOW.getTime() - 4 * 3600 * 1000).toISOString();
+  const store = await storeWith([
+    // NVD 先见到（4h 前入库）
+    item({ intel_id: "intel_nvd_x", cve_ids: ["CVE-2026-7777"], source_ids: ["nvd_cve"], published_at: pub, first_seen_at: new Date(NOW.getTime() - 4 * 3600 * 1000).toISOString() }),
+    // cve_org / OSV 补抓后各产生一条同 CVE 的情报，intel_id 完全不同
+    item({ intel_id: "intel_cveorg_x", cve_ids: ["CVE-2026-7777"], source_ids: ["cve_org"], published_at: pub, first_seen_at: NOW.toISOString() }),
+    item({ intel_id: "intel_osv_x", cve_ids: ["CVE-2026-7777"], source_ids: ["osv"], published_at: pub, first_seen_at: NOW.toISOString() }),
+  ]);
+  const report = await computeFreshnessReport(store, { now: NOW });
+  assert.equal(report.overall.n, 1, "按漏洞去重，不是按 intel_id");
+  assert.equal(report.excluded.duplicate_intel_rows, 2);
+  assert.equal(report.overall.p50_seconds, 0, "取最早那次 first_seen（NVD 4h 前就见过 → lag 0 秒不对，应为 4h-4h=0）");
+  const rows = report.reference.by_source.find((x) => x.source_id === "cve_org");
+  assert.equal(rows?.n, 1, "分源口径仍把该条计入它的每个来源");
+});
