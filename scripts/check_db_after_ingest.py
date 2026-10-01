@@ -27,6 +27,71 @@ from aiintel.db.base import get_sessionmaker
 #: 证据链判据：raw_item 里有同 external_id 的才是真实采集来的
 FROM_RAW = "exists (select 1 from raw_item r where r.external_id = v.cve_id)"
 
+#: 富化覆盖的判据：`enrichment` 表里有该漏洞的行
+HAS_ENRICHMENT = "exists (select 1 from enrichment e where e.vuln_id = v.id)"
+#: 富化结论**进了检索空间**的判据（切片 owner_id 用 CVE 编号）
+ENRICHMENT_INDEXED = (
+    "exists (select 1 from chunk c where c.owner_type='enrichment' and c.owner_id = v.cve_id)"
+)
+
+
+def snapshot() -> dict[str, int]:
+    """**单一权威来源**：算出全仓会出现在文档里的所有数字。
+
+    为什么要有它：这些数字此前在 `docs/情况.md`、`docs/演示口径说明.md`、
+    `docs/交接说明.md` 里**各写了一遍**，于是必然漂移 —— 实测已经漂了
+    （同一份文档里富化覆盖同时写着 46 和 94）。
+
+    现在改为：**本函数是唯一计算处**，
+    - `scripts/gen_facts.py` 用它生成 `docs/FACTS.md`；
+    - `tests/test_docs_facts.py` 用它钉住文档里不许再手写这些数字。
+
+    只读，不改库。
+    """
+
+    with get_sessionmaker()() as s:
+
+        def one(sql: str) -> int:
+            return int(s.execute(text(sql)).scalar() or 0)
+
+        snap = {
+            "vuln": one("select count(*) from vuln"),
+            "raw_item": one("select count(*) from raw_item"),
+            "chunk": one("select count(*) from chunk"),
+            "enrichment_rows": one("select count(*) from enrichment"),
+            "vuln_source": one("select count(*) from vuln_source"),
+            "graph_edge": one("select count(*) from graph_edge"),
+            # 证据链判据
+            "vuln_from_raw": one(f"select count(*) from vuln v where {FROM_RAW}"),
+            "vuln_preset": one(f"select count(*) from vuln v where not {FROM_RAW}"),
+            # 富化覆盖
+            "vuln_enriched": one(f"select count(*) from vuln v where {HAS_ENRICHMENT}"),
+            "vuln_enriched_real": one(
+                f"select count(*) from vuln v where {FROM_RAW} and {HAS_ENRICHMENT}"
+            ),
+            "chunk_enrichment": one("select count(*) from chunk where owner_type='enrichment'"),
+            "enrichment_indexed": one(
+                f"select count(*) from vuln v where {HAS_ENRICHMENT} and {ENRICHMENT_INDEXED}"
+            ),
+            # 脏数据
+            "vuln_no_cve_id": one("select count(*) from vuln where cve_id is null or cve_id = ''"),
+            "vuln_no_severity": one(
+                "select count(*) from vuln where severity is null or severity = 'unknown'"
+            ),
+            "raw_no_external_id": one(
+                "select count(*) from raw_item where external_id is null or external_id = ''"
+            ),
+            # 编号可检索性（问某个 CVE 能否检到它自己）
+            "vuln_chunk_with_own_id": one(
+                "select count(*) from chunk c join vuln v on v.cve_id = c.owner_id "
+                "where c.owner_type='vuln' and c.content like '%' || v.cve_id || '%'"
+            ),
+        }
+        # 派生值（避免各处自行算错比例）
+        snap["vuln_enriched_pct_x10"] = round(snap["vuln_enriched"] / max(snap["vuln"], 1) * 1000)
+        snap["enrichment_index_gap"] = snap["vuln_enriched"] - snap["enrichment_indexed"]
+        return snap
+
 
 def main() -> int:
     s = get_sessionmaker()()
