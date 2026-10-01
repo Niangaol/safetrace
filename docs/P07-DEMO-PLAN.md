@@ -5,7 +5,7 @@
 
 ## 0. 好消息：大半已经写好了
 
-远端分支 `feat/qa-local-live-demo`（b30c9a5，**2026-10-01 已推送到 origin**，`git fetch origin` 即可取得）已包含一个能跑的基础 demo：
+分支 `feat/qa-local-live-demo`（b30c9a5）已 **rebase 合入 main**（commit `2aeec7c`，2026-10-01；`npm run check` + `npm run smoke` 全绿）。其内容是：
 
 | 资产 | 内容 | 状态 |
 |---|---|---|
@@ -20,7 +20,9 @@
 
 ## 1. KKK 要做的事（按顺序）
 
-### 第 1 步：拉取分支并 rebase 到最新 main
+> **2026-10-01 合入后状态**：第 1、2 步已完成（分支 rebase 合入 main `2aeec7c`，3 处冲突按“保留 main 侧 + 折叠分支侧”解决；`demo:serve` 脚本断点已随合入修复）。门禁已过。**剩余：第 3 步 SSE 字段核对 + 浏览器手动验收（P-07 验收核心，见 §2）**。
+
+### 第 1 步：拉取分支并 rebase 到最新 main ✅ 已完成（2026-10-01 由队长合入 main `2aeec7c`）
 
 ```bash
 # 方式一：本地已有该分支（李念机器）
@@ -36,7 +38,7 @@ git rebase upstream/main
 - 分支基于 f03f808，落后 main **4 个提交**（41fa23a 删 langgraph、3bc6c99 文档、a171059 TEAM-PLAN、79eb97c 施工指南）。四个提交都是代码/文档侧改动，与本分支的 web/scripts 重合面小，预计只有 `docs/TASKS.md` 会冲突——**保留 main 的行，把分支那 4 行改动作为追加说明重新落**（台账历史行不改写）。
 - 冲突解不了（尤其 `contracts/`）→ 停手在三人群喊，不自己猜。
 
-### 第 2 步：修一个已知断点
+### 第 2 步：修一个已知断点 ✅ 已完成（合入时保留分支侧 `demo:serve` 行，`package.json` 已补脚本，手册命令可直接用）
 
 分支 `docs/LOCAL-DEMO.md` 写的启动命令是 `npm run demo:serve`，但那次提交的 `package.json` **没有加这个脚本**（只加了 allowScripts 一行），命令会报 missing script。二选一：
 
@@ -57,7 +59,7 @@ stage(plan/retrieve/generate) → citation{id,title,url,score}* → token{text} 
 
 现在问答只搜 fixture 证据索引，会出现“列表里有、问答答不了”的错位。把启动时 ingest 产出的 IntelItem 构建成 EvidenceChunk 入同一索引（参照 `src/ingest/src/evidence-chunks.ts` 现成构建器）。时间不够就保持现状，手册已有如实说明。
 
-### 第 5 步：门禁与交付
+### 第 5 步：门禁与交付 ✅ 门禁已过（合入提交 `2aeec7c` 上 `npm run check` + `npm run smoke` 全绿）；剩余=浏览器验收证据
 
 ```bash
 npm ci && npm ci --prefix web   # 只需一次
