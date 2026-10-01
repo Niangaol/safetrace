@@ -39,14 +39,14 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 
 | 阶段 | 任务数 | 待办 | 进行中 | 已完成 | 阻塞 |
 |---|---|---|---|---|---|
-| 第 0 阶段 根因修复（D2–D5） | 6 | 0 | 0 | 6 | 0 |
+| 第 0 阶段 根因修复（D2–D5） | 7 | 0 | 1 | 6 | 0 |
 | 第 1 阶段 契约扩展（**必须 D6 前**） | 6 | 5 | 1 | 0 | 0 |
 | 第 2 阶段 架构改造（D13–D18） | 6 | 3 | 3 | 0 | 0 |
 | 第 3 阶段 证据链（D7–D18） | 7 | 5 | 0 | 0 | 2 |
 | 第 4 阶段 文档口径同步 | 13 | 12 | 0 | 1 | 0 |
 | 第 5 阶段 冻结与交件（D19–D22） | 4 | 4 | 0 | 0 | 0 |
 | 第 6 阶段 PRD v1.0 需求补齐 | 10 | 7 | 3 | 0 | 0 |
-| **合计** | **52** | **36** | **7** | **7** | **2** |
+| **合计** | **53** | **36** | **8** | **7** | **2** |
 
 > 本表随 PR 更新。任何一项转 `已砍` 必须在 PR 描述里写清「保留下什么证据」。
 
@@ -62,6 +62,7 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 | R-04 | 丙 | 黄金问答口径做实 + 契约校验覆盖：仅 10 条（目标 20）；无期望答案文本；`scripts/smoke.ts` 第 5 段不传 `cve_ids`、只断言「带引用或拒答」且**不用 `expected_intent`**；`scripts/validate_contracts.py` 的 `FIXTURE_SCHEMA_MAP` 不含 golden-qa | R-01 | 已完成 | 基础 | ✅ 本地已完成并实测：fixture 扩到 20 条（6 类意图 + 拒答×5 + 澄清×1 = 8 类）；smoke 逐条硬断言 `expected_intent`/`expected_cve_ids`/`expected_answer_must_include`，请求透传 `cve_ids`，「15 条非拒答全部带引用」精确断言（原来 >=5 和稀泥）；校验器加 golden-qa 条目（None=JSON 合法性，覆盖面 9→10）；`npm run check` 与 `npm run smoke` 全绿，已合入 main（commit d631231，直推免 PR）。D-04 的「20 条」口径自此与实际一致 |
 | R-05 | 丙 | `.gitignore:32` 是 ` recordings/`（**行首有空格**），对 `recordings/` 目录无效 | — | 已完成 | 基础 | `git check-ignore -v recordings/x.mp4` 命中 ✅ 本地已删行首空格并验证 rc=0（普通路径不受影响）；已合入 main（commit 0d0e92f，直推免 PR） |
 | R-06 | 丙 | 建本台账（原先 `find -iname "*todo*"` 仓库内零命中；Taskwarrior 已装但 `project:safetrace` 零任务） | — | 已完成 | 基础 | 本文件存在且随 PR 更新  ✅ 本 PR #1 已建：本文件|
+| R-07 | 丙(H) | **前端「假数据」可信度缺陷**（`web/`；条目与验收要求摘自 KKK9747human 的 `aab1488` 与其 fork 台账草案）。原三处：① `web/src/api.ts` 硬编码 mock → 界面从不请求后端；② 大屏「采集趋势」由 `Math.random()` + 写死日期伪造却按真实指标口径展示；③ `TopNav.vue` 恒显绿色「系统运行中」、无任何「预置数据」标识 | — | 进行中 | 基础 | 三处缺陷在 main 均已消（`2aeec7c` 合入的 b30c9a5 一系，与 KKK 的 `aab1488` 目标等价、路径不同）：① api.ts 改 `VITE_DEMO_MODE` 环境开关、**默认真实后端、不可达即报错、不静默回退**；② `genTrendData` 改按情报真实 `published_at` 聚合（无随机数、无写死日期）；③ TopNav 显示真实模式 + `App.vue` 全站横幅（「本地实链模式（fixture）」/「静态演示模式」）。API 层验收通过：三场景 SSE 实测（Log4Shell 带 5 条真实引用 / CVE-2099-4321 显式拒答 / 「嗯」澄清引导；done 事件全带 `data_mode=fixture`、`cost_cny=null`），证据留痕于 `D:/AgentPrograms/safetrace-evidence/`（sse-log4shell.txt / sse-unknown-cve.txt / sse-clarify.txt）。**未完成**：浏览器页面级验收（横幅、大屏数字、问答页目视+录屏）尚未做；KKK 的 `web/scripts/smoke-data-source.mjs`（6/6 数据来源烟测）未移植——main 是二值开关、无自动回退分支，该脚本测试的是三态规则 |
 
 ## 4. 第 1 阶段：契约扩展（**必须赶在 D6 = 10/3 前**）
 
@@ -94,7 +95,7 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 | id | 线 | 标题 | 依赖 | 状态 | 砍单层级 | 验收命令 / 证据 |
 |---|---|---|---|---|---|---|
 | E-01 | 甲 | **第 7 源**。现 6 源（4 active + ghsa/arxiv 两个 planned），目标 ≥7。选 cvelistV5 git 差分（需新增 git 能力，`common.ts:53` 只有 HTTP JSON）或先落地 ghsa。要动 7 处：`registry.ts` / 新 `sources/<id>.ts` / 新 `adapters/<id>.ts` / `index.ts` export / `pipeline.ts:57-62` SOURCE_RUNNERS / `fixtures/sources/<id>.sample.json` / `registry.test.ts:7` 的 6→7。**连累三处计数断言**：`pipeline.test.ts:13-14` 的 `fetched/parsed.length===4`、`pipeline.test.ts:27` 的 `merged.raw_refs.length===4`（容易漏）。`smoke.ts:63` 是 `>=4` 前向兼容不用改 | — | 待办 | 保 | `registry.test.ts` 断言 7 源；`npm run smoke` 仍全绿 |
-| E-02 | 甲 | **真实联网抓取留痕**。`common.ts:53-85` 已有 fetch + 3 次指数退避 + 落盘 `tmp/ingest-cache/`，NVD 有真实令牌桶。已实测 cveawg.mitre.org / arXiv / NVD API 2.0 均返 200。跑一次 `runIngestOnce({offline:false})` 并与 fixture 回放结果对比 | E-01 | 待办 | 保 | 留采集日志 + 对比表；失败/离线仍走 `degrade()` 显式登记 |
+| E-02 | 甲 | **真实联网抓取留痕**。`common.ts:53-85` 已有 fetch + 3 次指数退避 + 落盘 `tmp/ingest-cache/`，NVD 有真实令牌桶。已实测 cveawg.mitre.org / arXiv / NVD API 2.0 均返 200。跑一次 `runIngestOnce({offline:false})` 并与 fixture 回放结果对比 | E-01 | 待办 | 保 | 留采集日志 + 对比表；失败/离线仍走 `degrade()` 显式登记 。**〔2026-10-01 首次实跑〕** `SAFETRACE_INGEST_OFFLINE=false npm run ingest:once` 已跑通 2 轮（09-30 06:19Z、10-01 01:58Z）并落库 `var/safetrace.sqlite`：intel.items **6970**（nvd_cve 3513 / cisa_kev 3459 / ubuntu_usn 12）、dq.verdicts 6976、enrich.items 1139、raw.docs 6；KEV/NVD 真实抓取（ext=kev_2026.09.30 官方目录版本），USN 09-30 网络失败走显式 fixture 回放、10-01 真实成功；fallback.events 1117 全部 user_visible（arXiv 429×1074 等）；OSV/cve.org 运行成功但冷启动返回"无新文档"（OSV 需 CVE IDs 入参，设计缺口）。**未完成**：富化仅覆盖 1139/6970（arXiv 限流+进程预算中断，重跑需 detached 后台且注意 events 追加式会重复）；对比表与正式验收记录见 `D:/AgentPrograms/safetrace-evidence/E-02-real-ingest-2026-10-01.md` | |
 | E-03 | 乙 | **F1 recall@5 基线**。现状零基线（`f1-papers.ts:122-128` 只有词级重合启发式）。建 20 条标注集，报 recall@5 | — | 待办 | 砍② | 输出 recall@5 数字并纳入冒烟聚合门槛 |
 | E-04 | 乙 | **DQ1 隔离区落库**。`quarantine_ref` 只是字符串（`dq1.ts:238`），无表无目录，隔离形态仅是 `dq.verdicts` 里 verdict=quarantine 的事件。`store.ts` 增 quarantine 表（照抄 `dead_letters` 模式） | — | 待办 | 保 | 隔离区可查可导出；10 条 `fixtures/dirty/` 全捕获回归仍绿 |
 | E-05 | 甲 | **compose 验证**。Docker 未装，7 服务（qdrant/postgres/langfuse×2/clickhouse/redis/minio）从未拉起，README:82 明示交件前必须验一遍 | — | **阻塞** | 禁砍 | `cd ops && docker compose up -d qdrant postgres && bash scripts/wait-healthy.sh` 全 PASS；QdrantEngine 走真检索 **〔2026-09-30 D4 更新〕** 本仓已拍板弃用 Docker/compose、改全本地直起（TEAM-PLAN §1.2/§六）；compose 验证按砍单④降级为后续补验项，本机无 Docker 不再阻塞 demo 主线 |

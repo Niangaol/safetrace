@@ -128,11 +128,18 @@
 
 | 文档 | 位置 | 用途 |
 |---|---|---|
-| 落地项目指导（骨架） | `C:\Users\niangao\safetrace\README.md` | 照着就能开工 |
-| 项目路线图（三周） | `C:\Users\niangao\safetrace\ROADMAP.md` | 硬节点、砍单顺序、拿分地图 |
-| 深度报告（21 模块契约） | `asktrace9\docs\02-report.md` | 工程依据，模块五要素 |
-| 零基础通识报告 | `asktrace9\docs\01-primer.md` | 给队员和指导老师看 |
-| 落地路线图（D1–D22） | `asktrace9\docs\03-roadmap.md` | 逐日计划 |
-| 开源项目图鉴 | `asktrace9\docs\04-open-source-map.md` | 选型、许可证、合规红线 |
-| 三张图（架构/泳道/甘特） | `asktrace9\assets\` | SVG 源文件 + JPG |
-| 完整合订本 | `asktrace9\SafeTrace-备赛合订本.docx` | 68 页 Word 版 |
+| **交接说明（先看这个）** | [`docs/HANDOVER.md`](docs/HANDOVER.md)（本仓库） | 当前状态、怎么验、已知限制、别踩的坑 |
+| 任务台账（唯一清单） | [`docs/TASKS.md`](docs/TASKS.md)（本仓库） | 全量任务的唯一可执行清单，每周对齐照此过 |
+| 后续分工与协作规范 | [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md)（本仓库） | D3 起唯一分工/优先级/协作口径 |
+| 基础 demo 施工指南 | [`docs/P07-DEMO-PLAN.md`](docs/P07-DEMO-PLAN.md)（本仓库） | 本机 demo 的施工口径与验收标准 |
+| 本地推理栈 | [`docs/LOCAL-STACK.md`](docs/LOCAL-STACK.md)（本仓库） | llama.cpp + Qdrant + 模型一键起停 |
+| 落地项目指导（骨架） | [`README.md`](README.md)（本仓库根） | 照着就能开工 |
+| 项目路线图（三周） | [`ROADMAP.md`](ROADMAP.md)（本仓库根） | 硬节点、砍单顺序、拿分地图 |
+| 深度报告（21 模块契约） | `asktrace9\docs\02-report.md` | 工程依据，模块五要素（**不在本仓库**） |
+| 零基础通识报告 | `asktrace9\docs\01-primer.md` | 给队员和指导老师看（**不在本仓库**） |
+| 落地路线图（D1–D22） | `asktrace9\docs\03-roadmap.md` | 逐日计划（**不在本仓库**） |
+| 开源项目图鉴 | `asktrace9\docs\04-open-source-map.md` | 选型、许可证、合规红线（**不在本仓库**） |
+| 三张图（架构/泳道/甘特） | `asktrace9\assets\` | SVG 源文件 + JPG（**不在本仓库**） |
+| 完整合订本 | `asktrace9\SafeTrace-备赛合订本.docx` | 68 页 Word 版（**不在本仓库**） |
+
+> ⚠️ 带 `asktrace9\` 的条目**当前不在本仓库内**（在队长本机另一目录），路径也未按本仓库更正——台账 **D-07** 已登记，尚未修；找文件请以本仓库为准。§一 表格里的 `C:\Users\niangao\safetrace\` 旧路径同理（台账 **D-06**）。
