@@ -398,7 +398,7 @@ export async function loadScoreSourcesFromRawRefs(item: IntelItem): Promise<Scor
     } catch {
       continue; // payload 非 JSON：跳过
     }
-    found.push(...extractScoreSources(doc));
+    found.push(...extractScoreSources(doc, new Set(item.cve_ids.map((id) => id.toUpperCase()))));
   }
   return dedupeBySource(found);
 }
@@ -419,7 +419,7 @@ async function readFirstReadable(ref: string): Promise<string | null> {
   return null;
 }
 
-function extractScoreSources(doc: unknown): ScoreSourceInput[] {
+function extractScoreSources(doc: unknown, cveIds: ReadonlySet<string>): ScoreSourceInput[] {
   const out: ScoreSourceInput[] = [];
   const root = asRecord(doc);
   if (root === undefined) return out;
@@ -427,6 +427,9 @@ function extractScoreSources(doc: unknown): ScoreSourceInput[] {
   // NVD 2.0：vulnerabilities[].cve.metrics.cvssMetricV31[].cvssData
   for (const vuln of asArray(root.vulnerabilities) ?? []) {
     const cve = asRecord(asRecord(vuln)?.cve);
+    // A raw_ref may contain thousands of CVEs; never adopt another CVE's score.
+    const id = str(cve?.id);
+    if (id === undefined || !cveIds.has(id.toUpperCase())) continue;
     for (const metric of asArray(asRecord(cve?.metrics)?.cvssMetricV31) ?? []) {
       const data = asRecord(asRecord(metric)?.cvssData);
       const vector = str(data?.vectorString);
@@ -437,10 +440,12 @@ function extractScoreSources(doc: unknown): ScoreSourceInput[] {
   }
 
   // CVE-ORG 5.x：containers.cna / containers.adp 的 metrics[].cvssV3_1 | cvssV3_0
-  const containers = asRecord(root.containers);
+  const recordId = str(asRecord(root.cveMetadata)?.cveId);
+  const containers = recordId !== undefined && cveIds.has(recordId.toUpperCase()) ? asRecord(root.containers) : undefined;
+  const adp = asArray(containers?.adp) ?? (containers?.adp ? [containers.adp] : []);
   const adpPairs: Array<["cna" | "adp", Record<string, unknown> | undefined]> = [
     ["cna", asRecord(containers?.cna)],
-    ["adp", asRecord(containers?.adp)],
+    ...adp.map((entry): ["adp", Record<string, unknown> | undefined] => ["adp", asRecord(entry)]),
   ];
   for (const [role, container] of adpPairs) {
     for (const metric of asArray(container?.metrics) ?? []) {
@@ -459,6 +464,9 @@ function extractScoreSources(doc: unknown): ScoreSourceInput[] {
   // OSV / GHSA：results[].vulns[].severity[]（type=CVSS_V3*，score 为向量串）
   for (const result of asArray(root.results) ?? []) {
     for (const vuln of asArray(asRecord(result)?.vulns) ?? []) {
+      const record = asRecord(vuln);
+      const aliases = [record?.id, ...(asArray(record?.aliases) ?? [])];
+      if (!aliases.some((id) => typeof id === "string" && cveIds.has(id.toUpperCase()))) continue;
       for (const sev of asArray(asRecord(vuln)?.severity) ?? []) {
         const rec = asRecord(sev);
         const type = str(rec?.type);

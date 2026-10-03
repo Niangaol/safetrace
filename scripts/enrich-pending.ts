@@ -1,5 +1,6 @@
 import { degrade, EventBus, nextId, sha256Json, SqliteEventStore, SqliteLlmContextStore } from "@safetrace/shared";
-import type { EnrichmentResult, IntelItem, QualityVerdict } from "@safetrace/shared";
+import type { EnrichmentResult, FallbackEvent, IntelItem, QualityVerdict } from "@safetrace/shared";
+import { nextArxivFailureStreak, planPendingEnrichment } from "../src/enrich/src/pending.js";
 import { createStepFunPaperReviewer, runEnrichment } from "@safetrace/enrich";
 import type { PaperReviewPort } from "@safetrace/enrich";
 import { ModelGateway } from "@safetrace/gateway";
@@ -37,12 +38,17 @@ async function main(): Promise<void> {
       readAll<QualityVerdict>(store, "dq.verdicts"),
       readAll<EnrichmentResult>(store, "enrich.items"),
     ]);
-    const latestIntel = new Map<string, IntelItem>();
-    for (const item of intelEvents) latestIntel.set(item.intel_id, item);
-    const accepted = new Set(verdictEvents.filter((item) => item.verdict === "pass" || item.verdict === "degrade").map((item) => item.item_id));
-    const completed = new Set(enrichEvents.map((item) => item.intel_id));
-    const pending = [...latestIntel.values()].filter((item) => accepted.has(item.intel_id) && !completed.has(item.intel_id));
-    const batch = pending.slice(0, limit);
+    const plan = planPendingEnrichment(intelEvents, verdictEvents, enrichEvents);
+    const pending = plan.pending;
+    const sourceArg = process.argv.find(value => value.startsWith("--source="))?.slice("--source=".length);
+    if (sourceArg !== undefined && !/^[a-z0-9_]+$/.test(sourceArg)) throw new Error("--source 必须为有效 source_id");
+    const recheckArg = process.argv.find(value => value.startsWith("--recheck-ids="))?.slice("--recheck-ids=".length);
+    const recheckIds = recheckArg === undefined ? undefined : new Set(recheckArg.split(",").filter(Boolean));
+    if (recheckIds && recheckIds.size === 0) throw new Error("--recheck-ids 不得为空");
+    const candidates = recheckIds ? plan.accepted_items.filter(item => recheckIds.has(item.intel_id)) : pending;
+    if (recheckIds && candidates.length !== recheckIds.size) throw new Error("复核 id 不存在或最新 DQ 判定未放行；不执行复核");
+    const selected = sourceArg ? candidates.filter(item => item.source_ids.includes(sourceArg)) : candidates;
+    const batch = selected.slice(0, limit);
     const traceId = nextId("tr_enrich_batch");
     const llmOptIn = process.env.SAFETRACE_ENRICH_LLM_ENABLED === "true";
     let paperReviewer: PaperReviewPort | undefined;
@@ -64,18 +70,36 @@ async function main(): Promise<void> {
         }
       }
     }
-    const delayMs = offline ? 0 : Math.max(3000, Number(process.env.SAFETRACE_ENRICH_DELAY_MS ?? "3000"));
-    console.log(JSON.stringify({ mode: offline ? "fixture/offline" : "live", db_path: dbPath, unique_intel_ids: latestIntel.size, accepted_ids: accepted.size, already_enriched: completed.size, pending: pending.length, batch_size: batch.length, delay_ms_between_live_items: delayMs, stepplan_f1_advisory_active: Boolean(paperReviewer), trace_id: traceId }));
+    const requestedDelay = Number(process.env.SAFETRACE_ENRICH_DELAY_MS ?? "3000");
+    const stopAfter = Number(process.env.SAFETRACE_ENRICH_STOP_AFTER_ARXIV_FAILURES ?? "3");
+    if (!Number.isFinite(requestedDelay) || requestedDelay < 0 || !Number.isSafeInteger(stopAfter) || stopAfter < 1) throw new Error("富化延迟必须非负有限，连续失败阈值必须为正整数");
+    const delayMs = offline ? 0 : Math.max(3000, requestedDelay);
+    console.log(JSON.stringify({ mode: offline ? "fixture/offline" : "live", db_path: dbPath, unique_intel_ids: plan.unique_intel_ids, accepted_ids: plan.accepted_ids, already_enriched: plan.already_enriched, recorded_with_failed_dimensions: plan.recorded_with_failed_dimensions, pending: pending.length, selected_source: sourceArg ?? null, recheck_recorded: Boolean(recheckIds), selected_count: selected.length, batch_size: batch.length, delay_ms_between_live_items: delayMs, stepplan_f1_advisory_active: Boolean(paperReviewer), trace_id: traceId }));
+    let processed = 0;
+    let newlyProcessed = 0;
+    const pendingIds = new Set(pending.map(item => item.intel_id));
+    let consecutiveArxivFailures = 0;
+    let stoppedForSourceFailure = false;
     for (let index = 0; index < batch.length; index++) {
       if (index > 0 && delayMs > 0) await sleep(delayMs);
       const item = batch[index]!;
-      await runEnrichment([item], {
-        offline, bus, traceId, ...(paperReviewer ? { paperReviewer } : {}),
+      const fallbackEvents: FallbackEvent[] = [];
+      const results = await runEnrichment([item], {
+        offline, bus, traceId, onDegrade: event => { fallbackEvents.push(event); }, ...(paperReviewer ? { paperReviewer } : {}),
         onPaperReview: (intelId, outcome) => console.log(JSON.stringify({ type: "f1_stepfun_advisory", intel_id: intelId, status: outcome.status, ...(outcome.status === "suggested" ? { paper_ids: outcome.paper_ids, model_confidence: outcome.confidence } : { reason: outcome.reason }), applied: false })),
       });
-      if ((index + 1) % 5 === 0 || index + 1 === batch.length) console.log("enriched", index + 1, "/", batch.length, item.intel_id);
+      processed += 1;
+      if (pendingIds.has(item.intel_id)) newlyProcessed += 1;
+      consecutiveArxivFailures = nextArxivFailureStreak(consecutiveArxivFailures, fallbackEvents);
+      console.log(JSON.stringify({ type: "enrichment_item", intel_id: item.intel_id, processed, dimensions_completed: results[0]?.dimensions_completed, dimensions_failed: results[0]?.dimensions_failed, fallback_triggers: fallbackEvents.map(event => event.trigger) }));
+      if (!offline && consecutiveArxivFailures >= stopAfter) {
+        stoppedForSourceFailure = true;
+        process.exitCode = 2;
+        console.error("arXiv 连续失败，停止本批；已落库的降级记录保留，剩余条目未处理。请待来源恢复后续跑，不将降级记录算真实成功。");
+        break;
+      }
     }
-    console.log(JSON.stringify({ completed_this_batch: batch.length, pending_after_batch: Math.max(0, pending.length - batch.length), mode: offline ? "fixture/offline" : "live", trace_id: traceId }));
+    console.log(JSON.stringify({ completed_this_batch: processed, newly_recorded_this_batch: newlyProcessed, pending_after_batch: Math.max(0, pending.length - newlyProcessed), stopped_for_source_failure: stoppedForSourceFailure, mode: offline ? "fixture/offline" : "live", trace_id: traceId }));
   } finally {
     if (previousOfflineFixtures === undefined) delete process.env.OFFLINE_FIXTURES; else process.env.OFFLINE_FIXTURES = previousOfflineFixtures;
     contextStore?.close();
