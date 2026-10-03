@@ -161,7 +161,7 @@ embedder 角色当前指向 `local_embed`。要切回云端 Tokendance，
 | `src/gateway` | ✅ 真实可用 | 31/32 过（1 跳）：MG1 路由/限流/熔断/计量、A-03 隔离闸门、云端人工关卡四路径 |
 | `src/ingest` | ✅ 离线全链路 | 85 测试全过；`ingest:once` 实测 5 源→7 解析→1 合并→1 放行→7 chunks→30 条 lineage |
 | `src/enrich` | ✅ 离线可用 | 59 测试全过；`assets:demo` 20 个资产按「受影响/不受影响/待核实」三档正确分级 |
-| `src/qa` | ✅ 离线全链路 | smoke 8 段全 PASS，引用完整率 100%；langgraph 4 个永久 skip 已随其后端删除一并消除 |
+| `src/qa` | ✅ **真实检索** | smoke 8 段全 PASS；**Q2 已切真实情报库**：查 "Log4Shell RCE" 命中 KEV 真实条目(0.76) → 姊妹 CVE-2021-45046(0.69) → 同类 Oracle WebLogic RCE(0.67)，URL 可点开核对，`degraded_to: null` |
 | 编排层 | ✅ 单后端 | 2026-09-30 删掉 langgraph 只留 native（依赖从未安装、用例永久 skip，属死代码）；4 条核心断言一条未少 |
 | 真实向量链路 | ✅ 已验收 | `vector:verify`：bge-m3 真实推理 + Qdrant 写入 + 语义召回排序正确，跑完清理剩 0 点 |
 | 本地推理服务 | ✅ 真实可用 | llama-server 8081/8080 由 `up.ps1` 拉起；模型缺了自动从国内源下载并校验 sha256 |
@@ -171,6 +171,45 @@ embedder 角色当前指向 `local_embed`。要切回云端 Tokendance，
 
 仍待办：QA/gateway 的 HTTP 服务入口、队友的 E-07 周期调度器与 E-09 时效看板尚未做端到端实测
 （目前只有单测覆盖）。
+
+## Q2 已切真实情报库（2026-10-03）
+
+以前 Q2 演示读的是 fixture 种子索引，数据是仓库里写死的样本。现在改成读**真实采集**灌进去的集合，
+一条命令从 SQLite 重建：
+
+```bash
+# 前置：本地服务起着（npm run local:up）、var/safetrace.sqlite 里有真实采集数据
+node --env-file=.env.local --import tsx scripts/index-intel-to-qdrant.ts
+```
+
+脚本做的事：读 events 表 → 只取 DQ1 放行的（pass/degrade）→ 按 intel_id 去重 →
+本地 bge-m3 出 1024 维向量 → 灌进 safetrace_intel_demo 集合。
+
+红线与坑（都实测过）：
+
+- **文本截断到 900 字符**：本地 llama-server 的 embedding 实例按 -c 2048 起上下文，
+  实测 2357 字符的 NVD 长摘要会让它对该请求失败 → MG1 降级 → 被闸门拒绝写入。
+  截断信息会写进 chunk 文本，不静默改内容。
+- **小批 40 条 + 批间停顿**：大 batch 的零星失败会被 MG1 熔断器（连 5 次失败 → 开 60s）
+  放大成整批降级。失败的批自动二分重试。
+- **chunk_id 直接用 intel_id**（它本身就是 intel_xxx）：早期误拼成 intel_intel_xxx
+  导致断点续跑永远匹配不上、同一条被反复重灌。已修。
+- **长跑末尾的孤立失败**：同一条文本在独立进程里一次就过、在主进程里反复失败
+  （疑与实例 MG1 状态 / bus 累积的大量 lineage 相关，未最终定位）。脚本会打印
+  --retry <id...> 命令，用独立进程补救，实测有效。
+- **断点续跑**：先 scroll 集合拿已有 chunk_id，只写缺的；中断后重跑不会重复灌。
+
+实测结果：DQ1 判定 6976 → 放行 5237，最终集合 **5237 点**（一条不多）。
+Q2 检索对照（查询 "CVE-2021-44228 Log4Shell remote code execution"）：
+
+| 命中 | 分数 | 说明 |
+| --- | --- | --- |
+| intel_kev_cve_2021_44228 | 0.7608 | KEV 真实条目（CISA 目录） |
+| intel_kev_cve_2021_45046 | 0.6931 | Log4j2 反序列化（姊妹漏洞） |
+| intel_kev_cve_2020_14882 | 0.6754 | Oracle WebLogic RCE（同类） |
+
+degraded_to: null（真向量链路，非降级）。想跑离线 fixture 演示就把 .env.local 里的
+QDRANT_URL 注释掉，引擎会自动退回 MemoryIndex。
 
 ## 向量入库是默认关闭的
 

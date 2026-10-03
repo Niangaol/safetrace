@@ -98,7 +98,9 @@ origin 只留 `main`（删掉已合并的 `docs/handoff-globe-zoom` 与已归档
 
 **仍未验收**（承接 D4 清单，逐条销账）：
 
-- **Q2 演示仍用 fixture 索引**，未切到 E-02 那个真实采集库 —— 这是当前最影响答辩可信度的一项
+- ~~**Q2 演示仍用 fixture 索引**~~ → **已解决（10-03）**：新增 `scripts/index-intel-to-qdrant.ts`，
+  从 SQLite 真实采集库灌 5237 条 DQ1 放行情报进 Qdrant（本地 bge-m3 1024 维），Q2 检索已指向该集合并实测通过
+  （查 Log4Shell 命中 KEV 真实条目 + 姊妹 CVE + 同类 WebLogic RCE，degraded_to=null）。详见 `docs/LOCAL-STACK.md`
 - **QA / gateway HTTP 服务入口**未做端到端实测（有单测）
 - **E-07 / E-09** 未做端到端实测（有单测）
 - **真实网页抓取**未验收（`page:demo` 是 `mock: true`）
