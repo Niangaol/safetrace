@@ -23,7 +23,7 @@ async function readScores(doc: unknown, cve = "CVE-2021-44228") {
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 const nvd = (id: string | undefined, vectorString: string, baseScore: number) => ({
-  cve: { id, metrics: { cvssMetricV31: [{ cvssData: { vectorString, baseScore } }] } },
+  cve: { id, metrics: { cvssMetricV31: [{ source: "nvd@nist.gov", type: "Primary", cvssData: { vectorString, baseScore } }] } },
 });
 
 test("raw scoring selects the target CVE instead of the first NVD record", async () => {

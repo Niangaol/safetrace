@@ -22,7 +22,7 @@ export interface CircuitOptions {
 
 export class CircuitBreaker {
   private failures = 0;
-  private openedAt = 0;
+  private openedAt: number | null = null;
   private halfOpenProbeUsed = false;
 
   constructor(
@@ -44,7 +44,7 @@ export class CircuitBreaker {
 
   state(): CircuitState {
     const t = this.now();
-    if (this.openedAt > 0) {
+    if (this.openedAt !== null) {
       const elapsed = t - this.openedAt;
       if (elapsed < this.openMs) {
         return { key: this.key, status: "open", opened_at: new Date(this.openedAt).toISOString(), consecutive_failures: this.failures, reason: "failure_threshold_exceeded" };
@@ -69,13 +69,14 @@ export class CircuitBreaker {
 
   onSuccess(): void {
     this.failures = 0;
-    this.openedAt = 0;
+    this.openedAt = null;
     this.halfOpenProbeUsed = false;
   }
 
   onFailure(): void {
     this.failures += 1;
-    if (this.failures >= this.threshold && this.openedAt === 0) {
+    // A failed half-open probe starts a new cooldown and releases the probe slot.
+    if (this.failures >= this.threshold && (this.openedAt === null || this.halfOpenProbeUsed)) {
       this.openedAt = this.now();
       this.halfOpenProbeUsed = false;
     }

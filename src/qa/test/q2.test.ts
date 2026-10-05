@@ -243,7 +243,7 @@ test("QdrantEngine：cache embedding 不写假向量，查询显式降级为 BM2
   let requests = 0;
   const fetchImpl = (async (): Promise<Response> => {
     requests += 1;
-    return new Response("{}", { status: 200 });
+    return new Response(JSON.stringify({ result: { status: "completed" } }), { status: 200 });
   }) as unknown as typeof fetch;
   try {
     const engine = new QdrantEngine({
@@ -265,7 +265,7 @@ test("QdrantEngine：cache embedding 不写假向量，查询显式降级为 BM2
 
 test("QdrantEngine：hash-256 ID 即使伪报 provider 也不能写入", async () => {
   let requests = 0;
-  const fetchImpl = (async () => { requests += 1; return new Response("{}", { status: 200 }); }) as unknown as typeof fetch;
+  const fetchImpl = (async () => { requests += 1; return new Response(JSON.stringify({ result: { status: "completed" } }), { status: 200 }); }) as unknown as typeof fetch;
   const engine = new QdrantEngine({
     url: "http://127.0.0.1:6333",
     model_id: "hash-256",
@@ -281,7 +281,7 @@ test("QdrantEngine：upsert 使用 MG1 原向量并写入 model_id", async () =>
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
   const fetchImpl = (async (input: string, init?: RequestInit): Promise<Response> => {
     calls.push({ url: input, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
-    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ result: { status: "completed" } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   const chunk: EvidenceChunk = { ...DIRTY_CHUNK, chunk_id: "chunk_embed_upsert" };
   const engine = new QdrantEngine({
@@ -331,7 +331,7 @@ test("QdrantEngine：index、dense、BM25 与 RRF 每一步都落 lineage", asyn
         provenance: payloadChunk.provenance,
       } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
-    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ result: { status: "completed" } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   const engine = new QdrantEngine({
     url: "http://127.0.0.1:6333", collection: "c_lineage", model_id: "bge-m3", model_version: "v2026.09", embedding_dim: 2,

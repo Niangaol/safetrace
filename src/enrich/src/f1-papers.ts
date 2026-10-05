@@ -4,8 +4,8 @@
  * 回放 + degrade（红线：禁止静默兜底；回放值带 degraded_to="fixture"）。
  */
 import { readFile } from "node:fs/promises";
-import { degrade, nextId } from "@safetrace/shared";
-import type { FallbackEvent, PaperLink } from "@safetrace/shared";
+import { degrade, nextId, sha256 } from "@safetrace/shared";
+import type { FallbackEvent, PaperLink, IntelItem } from "@safetrace/shared";
 import { compact, isOffline, type HttpFetcher } from "./f4-cvss.js";
 
 export type { HttpFetcher } from "./f4-cvss.js";
@@ -13,7 +13,7 @@ export type { HttpFetcher } from "./f4-cvss.js";
 const ARXIV_API = "https://export.arxiv.org/api/query";
 const MAX_RESULTS = 5;
 const ARXIV_MIN_INTERVAL_MS = 3_000;
-const ARXIV_SUCCESS_CACHE = new Map<string, PaperLink[]>();
+const ARXIV_SUCCESS_CACHE = new Map<string, { result: PapersResult; expires_at: number }>();
 let lastArxivRequestAt = 0;
 
 /** 查询词最小长度（过滤 of/the/an 之类噪声词）。 */
@@ -44,6 +44,9 @@ export interface PapersResult {
   papers: PaperLink[];
   /** 降级标记（红线：非空即表示当前论文列表为 fixture 回放，非实时检索结果）。 */
   degraded_to?: string;
+  /** Internal original response receipt; never copied into frozen PaperLink events. */
+  source_evidence?: { url: string; sha256: string; text: string };
+  paper_records?: Record<string, { title: string; summary: string; published_at: string; url: string }>;
 }
 
 /** arXiv Atom 检索：成功结果按规范化查询词缓存；在线请求串行限速并对 429/5xx 有界重试。 */
@@ -67,7 +70,8 @@ export async function searchPapers(query: string, opts: SearchPapersOptions = {}
   if (isOffline(opts.offline)) return replayFixture(q, "offline_flag", traceId, opts.emit);
   const injectedFetcher = opts.fetchImpl !== undefined;
   const cacheKey = q.toLocaleLowerCase();
-  if (!injectedFetcher && ARXIV_SUCCESS_CACHE.has(cacheKey)) return { papers: [...ARXIV_SUCCESS_CACHE.get(cacheKey)!] };
+  const cached = ARXIV_SUCCESS_CACHE.get(cacheKey);
+  if (!injectedFetcher && cached && cached.expires_at > Date.now()) return structuredClone(cached.result);
   const fetcher = opts.fetchImpl ?? ((url: string) => fetch(url, { signal: AbortSignal.timeout(15_000) }));
   const url = buildArxivUrl(q);
   let lastTrigger = "arxiv_fetch_failed: no attempt";
@@ -80,9 +84,11 @@ export async function searchPapers(query: string, opts: SearchPapersOptions = {}
     try {
       const res = await fetcher(url);
       if (res.ok) {
-        const papers = parseArxivAtom(await res.text(), q);
-        if (!injectedFetcher) ARXIV_SUCCESS_CACHE.set(cacheKey, papers);
-        return { papers };
+        const xml = await res.text();
+        if (Buffer.byteLength(xml) > 2 * 1024 * 1024 || !/^\s*(?:<\?xml[^?]*\?>\s*)?<feed\b/i.test(xml) || !/(?:<\/feed>|<feed[^>]*\/>)\s*$/i.test(xml)) throw new Error("arXiv response is not bounded Atom XML");
+        const result: PapersResult = { papers: parseArxivAtom(xml, q), paper_records: arxivPaperRecords(xml), source_evidence: { url, sha256: sha256(xml), text: xml } };
+        if (!injectedFetcher) ARXIV_SUCCESS_CACHE.set(cacheKey, { result: structuredClone(result), expires_at: Date.now() + 6 * 3600_000 });
+        return result;
       }
       lastTrigger = "arxiv_http_" + res.status;
       if (res.status !== 429 && res.status < 500) break;
@@ -136,10 +142,12 @@ export function parseArxivAtom(xml: string, query: string): PaperLink[] {
 
 /** arXiv abs id -> 契约 paper_id（形如 arXiv:2112.00507，去掉版本号）。 */
 export function arxivPaperId(absUrl: string): string {
-  const m = /abs\/([^/?#\s]+)/.exec(absUrl.trim());
-  if (!m) return absUrl.trim();
-  const base = (m[1] ?? "").replace(/v\d+$/, "");
-  return `arXiv:${base}`;
+  try {
+    const url = new URL(absUrl.trim());
+    if (!["arxiv.org", "export.arxiv.org"].includes(url.hostname.toLowerCase()) || !["http:", "https:"].includes(url.protocol) || url.username || url.password) return absUrl.trim();
+    const base = /^\/abs\/(.+)$/.exec(url.pathname)?.[1]?.replace(/v[0-9]+$/, "");
+    return base ? "arXiv:" + base : absUrl.trim();
+  } catch { return absUrl.trim(); }
 }
 
 /* ---------- relevance / confidence 启发式 ---------- */
@@ -233,4 +241,45 @@ async function replayFixture(
   });
   const xml = await readFile(ARXIV_FIXTURE_URL, "utf8");
   return { papers: parseArxivAtom(xml, query), degraded_to: d.degraded_to };
+}
+
+export function arxivPaperRecords(xml: string): NonNullable<PapersResult["paper_records"]> {
+  const records: NonNullable<PapersResult["paper_records"]> = {};
+  for (const m of xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/g)) {
+    const entry=m[1]??"",rawId=firstMatch(entry,/<id\b[^>]*>([\s\S]*?)<\/id>/);
+    if(!rawId)continue;const key=arxivPaperId(rawId);
+    if(!/^arXiv:(?:[0-9]{2}(?:0[1-9]|1[0-2])[.][0-9]{4,5}|[a-z-]+(?:[.][A-Z]{2})?[/][0-9]{7})$/.test(key))continue;
+    const date=cleanText(firstMatch(entry,/<published\b[^>]*>([\s\S]*?)<\/published>/)??"");
+    if(!/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(date)||!Number.isFinite(Date.parse(date)))continue;
+    records[key]={title:cleanText(firstMatch(entry,/<title\b[^>]*>([\s\S]*?)<\/title>/)??""),summary:cleanText(firstMatch(entry,/<summary\b[^>]*>([\s\S]*?)<\/summary>/)??""),published_at:date,url:"https://arxiv.org/abs/"+key.replace(/^arxiv:/i,"")};
+  }
+  return records;
+}
+const GENERIC_PAPER_TERMS=new Set(["remote","code","execution","vulnerability","vulnerabilities","security","flaw","flaws","allows","allow","arbitrary","attacker","attackers","attack","attacks","could","can","the","and","with","for","from","through","product","products","software","version","versions","server","servers","application","applications","issue","issues","apache","microsoft","google","ubuntu","linux","windows","overflow","buffer","denial","service","use","using","affected","affects","exploit","exploitation","of","in","to"]);
+/** Entity/identifier anchor is necessary, not a guarantee of scientific relevance. */
+export function anchoredPapers(item: Pick<IntelItem,"title"|"entities"|"cve_ids">, papers: PaperLink[], records: PapersResult["paper_records"] = {}): PaperLink[] {
+  // A known product is mandatory when available: mechanism words such as memory/corruption are not product identity.
+  const product=(item.entities.product??"").toLowerCase().trim();
+  const productAliases: Record<string,string[]> = { "log4j-core": ["log4j", "log4j2"], "apache log4j2": ["log4j2", "log4j"], "langchain-core": ["langchain"], "langchain_core": ["langchain"] };
+  const productTerms=[...(product.match(/[a-z][a-z0-9._+-]*/g)??[]), ...(productAliases[product]??[])];
+  const anchorText=productTerms.length ? productTerms.join(" ") : item.title;
+  const mechanismTerms=new Set(["memory","corruption","heap","stack","integer","out","bounds","read","write","access","control","privilege","escalation","authentication","bypass","improper","incorrect","validation","handling","management","information","disclosure"]);
+  const anchors=[...new Set(anchorText.toLowerCase().match(/[a-z][a-z0-9._+-]*/g)??[])].filter(t=>t.length>=3&&!GENERIC_PAPER_TERMS.has(t)&&!mechanismTerms.has(t));
+  return papers.filter(p=>{
+    if(!(p.relevance_score>0))return false;
+    const proof=records[p.paper_id];
+    const body=(p.title+" "+(proof?.summary??"")).toLowerCase();
+    const words=new Set(body.match(/[a-z0-9][a-z0-9._+-]*/g)??[]);
+    const context=(item.title+" "+(item.entities.product??"")).toLowerCase();
+    const focuses: Array<[RegExp, RegExp]> = [
+      [/prompt[ -]+injection|instruction[ -]+injection/, /prompt[ -]+injection|instruction[ -]+injection/],
+      [/adversarial[ -]+suffix|suffix[ -]+attack/, /adversarial[ -]+suffix|attack[ -]+suffix|suffixes/],
+      [/extract(?:ing|ion)?[ -]+training[ -]+data|training[ -]+data[ -]+extract/, /training[ -]+data[ -]+extract|extract(?:ing|ion)?[ -]+training[ -]+data/],
+      [/data[ -]+poison|model[ -]+poison|backdoor|sleeper[ -]+agent/, /poison|backdoor|sleeper[ -]+agent/],
+    ];
+    const applicable=focuses.filter(([query])=>query.test(context));
+    if (applicable.length && !applicable.every(([,candidate])=>candidate.test(body))) return false;
+    return item.cve_ids.slice(0,1).some(c=>words.has(c.toLowerCase())) || (applicable.length > 0 && productTerms.length === 0)
+      || anchors.some(a=>words.has(a)||p.evidence_terms?.includes(a));
+  });
 }

@@ -9,7 +9,7 @@ import { parseLoose } from "@safetrace/shared";
 import type { DqFlag, DqVerdict, IntelItem, QualityVerdict } from "@safetrace/shared";
 import { hasTzSuffix, isRedlineCveStatus, str } from "./common.js";
 
-export const GATE_VERSION = "1.0.0";
+export const GATE_VERSION = "1.0.1";
 
 /** 五维权重（structure/completeness/consistency/timeliness/sourcing）。 */
 const WEIGHTS = { structure: 0.15, completeness: 0.2, consistency: 0.3, timeliness: 0.15, sourcing: 0.2 } as const;
@@ -33,6 +33,8 @@ export interface IntelItemDqExtras {
   _cve_status?: string;
   poc_link?: string;
   poc_sha256?: string;
+  /** 内部逐源安全证据，运行时必须验证，未知形状不得静默丢弃。 */
+  _dq_sources?: unknown;
 }
 export type DqInputItem = IntelItem & IntelItemDqExtras;
 
@@ -149,6 +151,56 @@ function round4(x: number): number {
   return Math.round(x * 10000) / 10000;
 }
 
+/** adapters 的非红线状态；未知/错误类型不能通过 str() 被抹成空值。 */
+const SAFE_CVE_STATUSES = new Set([
+  "PUBLISHED", "ANALYZED", "MODIFIED", "RECEIVED", "AWAITING ANALYSIS", "UNDERGOING ANALYSIS", "DEFERRED",
+]);
+
+function assessDqMetadata(item: DqInputItem): { statusBad: boolean; pocDead: boolean } {
+  let statusBad = false;
+  let pocDead = false;
+  const assess = (meta: Record<string, unknown>) => {
+    if ("_cve_status" in meta) {
+      const status = typeof meta._cve_status === "string" ? meta._cve_status.trim().toUpperCase() : "";
+      if (isRedlineCveStatus(status) || !SAFE_CVE_STATUSES.has(status)) statusBad = true;
+    }
+    if ("poc_link" in meta || "poc_sha256" in meta) {
+      const link = meta.poc_link;
+      const sha = meta.poc_sha256;
+      if (("poc_link" in meta && typeof link !== "string") ||
+          ("poc_sha256" in meta && typeof sha !== "string")) pocDead = true;
+      if (typeof link === "string" && link.trim() !== "" &&
+          !(typeof sha === "string" && /^[a-f0-9]{64}$/i.test(sha))) pocDead = true;
+    }
+  };
+  assess(item as unknown as Record<string, unknown>);
+  if ("_dq_sources" in item) {
+    if (!Array.isArray(item._dq_sources) || item._dq_sources.length === 0) {
+      statusBad = true;
+    } else {
+      for (const source of item._dq_sources) {
+        if (typeof source !== "object" || source === null || Array.isArray(source)) {
+          statusBad = true;
+          continue;
+        }
+        const meta = source as Record<string, unknown>;
+        const strings = (value: unknown): boolean => Array.isArray(value) && value.length > 0 &&
+          value.every((v) => typeof v === "string" && v.trim() !== "");
+        if (typeof meta.intel_id !== "string" || meta.intel_id.trim() === "" ||
+            !strings(meta.source_ids) || !strings(meta.raw_refs) ||
+            !["_cve_status", "poc_link", "poc_sha256"].some((key) => key in meta) ||
+            Object.keys(meta).some((key) => !["intel_id", "source_ids", "raw_refs", "_cve_status", "poc_link", "poc_sha256"].includes(key))) {
+          statusBad = true;
+        }
+        assess(meta);
+      }
+    }
+  }
+  // PUBLISHED 与 NVD 的 ANALYZED/MODIFIED 是不同机构的工作流，不是撤回冲突。
+  // 每源独立检查；任何红线/未知状态均已置 statusBad，不由安全来源洗白。
+  return { statusBad, pocDead };
+}
+
 /** 对单条 IntelItem 出具质量判定（五维分 + flags + 四档 verdict）。 */
 export function assessQualityVerdict(item: IntelItem, opts: AssessOpts = {}): QualityVerdict {
   const now = opts.now ?? new Date();
@@ -158,8 +210,8 @@ export function assessQualityVerdict(item: IntelItem, opts: AssessOpts = {}): Qu
   let redline = false;
 
   // —— 硬红线 1：CVE 记录状态 ——
-  const status = str(it._cve_status);
-  if (isRedlineCveStatus(status)) {
+  const { statusBad, pocDead } = assessDqMetadata(it);
+  if (statusBad) {
     redline = true;
     flags.push("reject_status");
   }
@@ -187,9 +239,6 @@ export function assessQualityVerdict(item: IntelItem, opts: AssessOpts = {}): Qu
   }
 
   // —— 硬红线 4：POC 链接存在但无 sha256 ——
-  const pocLink = str(it.poc_link);
-  const pocSha = str(it.poc_sha256);
-  const pocDead = pocLink !== "" && pocSha === "";
   if (pocDead) {
     redline = true;
     flags.push("poc_dead_link");
@@ -206,7 +255,7 @@ export function assessQualityVerdict(item: IntelItem, opts: AssessOpts = {}): Qu
   // —— 五维分 ——
   const structure = assessStructure(item);
   const completeness = assessCompleteness(item);
-  const consistency = multiId ? 0 : unknownVersion ? 0.5 : isRedlineCveStatus(status) ? 0.2 : 1;
+  const consistency = multiId ? 0 : unknownVersion ? 0.5 : statusBad ? 0.2 : 1;
   const timeliness = assessTimeliness(pubMs, seenMs, noTz, tsOutOfRange || tsUnparseable);
   const sourcing = pocDead ? 0 : boilerHits >= BOILERPLATE_THRESHOLD ? 0.3 : 1;
   const score = round4(

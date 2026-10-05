@@ -1,4 +1,5 @@
-import type { EnrichmentResult, FallbackEvent, IntelItem, QualityVerdict } from "@safetrace/shared";
+import { enrichmentInputHash, enrichmentRetryDue, sha256Json } from "@safetrace/shared";
+import type { EnrichmentResult, FallbackEvent, IntelItem, QualityVerdict, EnrichmentDimensionState, EnrichmentDimension } from "@safetrace/shared";
 
 /** A successful empty result is not a source failure; EPSS failures do not trip the arXiv cutoff. */
 export function nextArxivFailureStreak(previous: number, events: readonly Pick<FallbackEvent, "trigger">[]): number {
@@ -8,6 +9,7 @@ export function nextArxivFailureStreak(previous: number, events: readonly Pick<F
 /** Events are append-only: last verdict wins; historical passes do not authorize later quarantines. */
 export function planPendingEnrichment(
   intelEvents: readonly IntelItem[], verdictEvents: readonly QualityVerdict[], enrichEvents: readonly EnrichmentResult[],
+  options: { states?: readonly EnrichmentDimensionState[]; now?: Date; publishedEnrichments?: readonly { event_id: string; payload: EnrichmentResult }[]; currentIntelEventIds?: ReadonlyMap<string, string> } = {},
 ) {
   const latestIntel = new Map(intelEvents.map(item => [item.intel_id, item]));
   const latestVerdicts = new Map(verdictEvents.map(item => [item.item_id, item]));
@@ -16,12 +18,42 @@ export function planPendingEnrichment(
     const verdict = latestVerdicts.get(item.intel_id)?.verdict;
     return verdict === "pass" || verdict === "degrade";
   });
+  const latestDQ = latestVerdicts;
+  const stateMap = new Map((options.states ?? []).map(state => [state.intel_id + ":" + state.dimension, state]));
+  const published = new Map((options.publishedEnrichments ?? []).map(event => [event.payload.intel_id, event]));
+  const isPublishedCurrent = (state: EnrichmentDimensionState): boolean => {
+    const item = latestIntel.get(state.intel_id), receipt = published.get(state.intel_id);
+    if (!item || !accepted.some(candidate => candidate.intel_id === state.intel_id) || state.status !== "live" || !receipt || !state.enrich_event_id
+      || receipt.event_id !== state.enrich_event_id || state.input_hash !== enrichmentInputHash(item) || state.result_hash !== sha256Json(state.artifact)) return false;
+    const artifacts = receipt.payload.artifacts;
+    const artifact = state.dimension === "paper" ? artifacts.papers ?? [] : state.dimension === "cvss" ? artifacts.score_assessment ?? null
+      : artifacts.score_assessment ? { epss_score: artifacts.score_assessment.epss_score ?? null, epss_percentile: artifacts.score_assessment.epss_percentile ?? null } : null;
+    return sha256Json(artifact) === state.result_hash;
+  };
+  const pending_dimensions = new Map<string, EnrichmentDimension[]>();
+  for (const item of accepted) {
+    const hash = enrichmentInputHash(item);
+    pending_dimensions.set(item.intel_id, (["paper", "cvss", "epss"] as const).filter(dimension => {
+      const state = stateMap.get(item.intel_id + ":" + dimension);
+      const currentIntel = options.currentIntelEventIds?.get(item.intel_id);
+      const latestReceipt = published.get(item.intel_id);
+      const receiptRepair = Boolean(state && (!state.enrich_event_id
+        || (options.publishedEnrichments !== undefined && (!latestReceipt || latestReceipt.event_id !== state.enrich_event_id))
+        || (currentIntel && state.intel_event_id !== currentIntel)));
+      return receiptRepair || enrichmentRetryDue(state, hash, options.now);
+    }));
+  }
   return {
+    latestDQ,
+    latestEnriched,
+    pending_dimensions,
+    real_live_dimensions: (options.states ?? []).filter(isPublishedCurrent).length,
+    live_marked_but_unverified_dimensions: (options.states ?? []).filter(state => state.status === "live" && !isPublishedCurrent(state)).length,
     unique_intel_ids: latestIntel.size,
     accepted_ids: accepted.length,
     accepted_items: accepted,
     already_enriched: accepted.filter(item => latestEnriched.has(item.intel_id)).length,
     recorded_with_failed_dimensions: accepted.filter(item => (latestEnriched.get(item.intel_id)?.dimensions_failed.length ?? 0) > 0).length,
-    pending: accepted.filter(item => !latestEnriched.has(item.intel_id)),
+    pending: accepted.filter(item => pending_dimensions.get(item.intel_id)!.length > 0),
   };
 }

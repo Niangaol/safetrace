@@ -19,6 +19,7 @@ import { fetchCveOrg } from "./sources/cveorg.js";
 import { fetchUsn } from "./sources/usn.js";
 import { parseUsn } from "./adapters/usn.js";
 import { dedupeAll } from "./dedupe.js";
+import { releasedIntelPayload } from "./intel-payload.js";
 import { assessQualityVerdict } from "./dq1.js";
 import { sha256PayloadRef } from "./common.js";
 import type { FetchOpts, ParseResult } from "./common.js";
@@ -302,7 +303,8 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
     let intelEventId: string | undefined;
     let dqEnv;
     if (verdict.verdict === "pass" || verdict.verdict === "degrade") {
-      const intelEnv = await bus.publish("intel.items", item, { trace_id: traceId, causation_id: rawEventId });
+      // DQ-only metadata stays in parsed/merged audit inputs, not the frozen IntelItem payload.
+      const intelEnv = await bus.publish("intel.items", releasedIntelPayload(item), { trace_id: traceId, causation_id: rawEventId });
       intelEventId = intelEnv.event_id;
       causationByIntelId[item.intel_id] = intelEnv.event_id;
       dqEnv = await bus.publish("dq.verdicts", verdict, { trace_id: traceId, causation_id: intelEnv.event_id });
@@ -322,7 +324,8 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
       input_refs: [{ kind: "IntelItem", id: item.intel_id, sha256: sha256Json(item) }],
       output_refs: [
         { kind: "QualityVerdict", id: "dq:" + item.intel_id, sha256: sha256Json(verdict) },
-        ...(intelEventId ? [{ kind: "EventEnvelope", id: intelEventId }] : []),
+        ...(intelEventId ? [{ kind: "EventEnvelope", id: intelEventId, sha256: sha256Json(releasedIntelPayload(item)) },
+          { kind: "ReleasedIntelItem", id: item.intel_id, sha256: sha256Json(releasedIntelPayload(item)) }] : []),
         { kind: "EventEnvelope", id: dqEnv.event_id },
       ],
       decision: { reason: verdict.verdict, quality_score: verdict.quality_score, review_required: verdict.verdict === "review" },

@@ -46,6 +46,11 @@ export class EventBus {
     return env;
   }
 
+  /** Read durable receipts without replaying subscriber side effects. */
+  async readEvents<T>(topic: Topic, offset = 0, limit = 500): Promise<Envelope<T>[]> {
+    return this.opts.store.read<T>(topic, offset, limit);
+  }
+
   /** Append-only processing record; does not alter frozen public event topics/schemas. */
   async recordLineage(draft: LineageDraft): Promise<LineageRecord> {
     return persistLineage(this.opts.store, draft);

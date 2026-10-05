@@ -320,7 +320,7 @@ test("runEnrichment：在线路径（注入 fetchImpl，零外网）跑通并取
     '    <id>http://arxiv.org/abs/2112.00507v1</id>',
     '    <published>2021-12-06T00:00:00Z</published>',
     '    <title>Log4Shell analysis</title>',
-    '    <summary>Log4Shell JNDI remote code execution</summary>',
+    '    <summary>Apache Log4j2 Log4Shell CVE-2021-44228 JNDI remote code execution</summary>',
     '  </entry>',
     '</feed>',
   ].join("\n");

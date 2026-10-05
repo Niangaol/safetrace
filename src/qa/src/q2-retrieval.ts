@@ -261,6 +261,10 @@ export interface QdrantEngineOptions {
   bus?: EventBus;
   /** 测试/冒烟注入的 fetch */
   fetch_impl?: typeof fetch;
+  /** Called immediately before a points PUT, never for embedding or collection setup failures. */
+  before_upsert?: () => void;
+  /** Operation owner used for conditional recovery of uncertain PUT outcomes. */
+  write_token?: string;
 }
 
 /** Qdrant REST 引擎：named vector "dense"；任何不可用都显式降级到 MemoryIndex。 */
@@ -393,6 +397,7 @@ export class QdrantEngine implements IndexableEngine {
         if (existing?.size !== meta.dim) throw new Error("Qdrant 已有集合维度不匹配；必须新建集合并重建索引");
         if (existing.distance && existing.distance.toLowerCase() !== meta.metric.toLowerCase()) throw new Error("Qdrant 已有集合距离度量不匹配");
       }
+      this.opts.before_upsert?.();
       const upResp = await fetchImpl(collectionUrl + "/points?wait=true", {
         method: "PUT",
         headers: this.headers(),
@@ -402,6 +407,7 @@ export class QdrantEngine implements IndexableEngine {
             vector: { dense: vectors[index]! },
             payload: {
               chunk_id: chunk.chunk_id,
+              ...(this.opts.write_token ? { index_run_id: this.opts.write_token } : {}),
               doc_type: chunk.doc_type,
               text: chunk.text,
               quality_score: chunk.quality_score ?? null,
@@ -417,6 +423,8 @@ export class QdrantEngine implements IndexableEngine {
         signal,
       });
       if (!upResp.ok) throw new Error("Qdrant 写入失败 HTTP " + upResp.status);
+      const upResult = await upResp.json() as { result?: { status?: string } };
+      if (upResult.result?.status !== "completed") throw new Error("Qdrant points PUT did not confirm completed");
       this.pendingMeta = meta;
       this.collections.set(meta.collection_name, meta);
       await this.opts.bus?.recordLineage({
@@ -641,6 +649,8 @@ function toChunk(p: { id: string | number; score: number; payload?: Record<strin
     },
   };
 }
+
+export { numericId as qdrantPointId };
 
 function numericId(s: string): number {
   return createHash("sha256").update(s).digest().readUInt32BE(0) % 2147483647;

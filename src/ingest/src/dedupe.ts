@@ -6,6 +6,7 @@
  */
 import { parseLoose } from "@safetrace/shared";
 import type { IntelItem } from "@safetrace/shared";
+import { isRedlineCveStatus } from "./common.js";
 
 /** 归并证据链（对齐 02-report Y3 契约；S2 暂无专属主题，由 pipeline 内部消费）。 */
 export interface DuplicateLink {
@@ -62,6 +63,42 @@ function mergeEntities(a: IntelItem["entities"], b: IntelItem["entities"]): Inte
   };
 }
 
+/** 内部逐源 DQ 证据；不把 scalar 契约字段改成数组，也不跨源拼接 POC/hash。 */
+const DQ_KEYS = ["_cve_status", "poc_link", "poc_sha256"] as const;
+function dqSources(item: IntelItem): unknown[] {
+  const meta = item as unknown as Record<string, unknown>;
+  const sources = "_dq_sources" in meta
+    ? Array.isArray(meta._dq_sources) && meta._dq_sources.length > 0
+      ? [...meta._dq_sources] : [meta._dq_sources]
+    : [];
+  if (DQ_KEYS.some((key) => key in meta)) {
+    sources.push({
+      intel_id: item.intel_id,
+      source_ids: [...item.source_ids],
+      raw_refs: [...item.raw_refs],
+      ...Object.fromEntries(DQ_KEYS.filter((key) => key in meta).map((key) => [key, meta[key]])),
+    });
+  }
+  return sources;
+}
+
+function mergeDqMetadata(a: IntelItem, b: IntelItem): Record<string, unknown> {
+  const am = a as unknown as Record<string, unknown>;
+  const bm = b as unknown as Record<string, unknown>;
+  const sources = [...dqSources(a), ...dqSources(b)];
+  const result: Record<string, unknown> = sources.length ? { _dq_sources: sources } : {};
+  // 优先展示红线状态；所有冲突/无法识别值仍由逐源证据保留，交 DQ fail-closed。
+  if ("_cve_status" in bm && (!("_cve_status" in am) || isRedlineCveStatus(bm._cve_status))) {
+    result._cve_status = bm._cve_status;
+  }
+  if (!("poc_link" in am) && !("poc_sha256" in am)) {
+    for (const key of ["poc_link", "poc_sha256"] as const) {
+      if (key in bm) result[key] = bm[key];
+    }
+  }
+  return result;
+}
+
 /** 合并两条 IntelItem；无强标识交集时返回原 existing 且 link=null（不误合）。 */
 export function mergeIntelItems(
   existing: IntelItem,
@@ -71,6 +108,7 @@ export function mergeIntelItems(
   if (matched.length === 0) return { merged: existing, link: null };
   const merged: IntelItem = {
     ...existing,
+    ...mergeDqMetadata(existing, incoming),
     cve_ids: union(existing.cve_ids, incoming.cve_ids),
     ...(unionOpt(existing.ghsa_ids, incoming.ghsa_ids) ? { ghsa_ids: unionOpt(existing.ghsa_ids, incoming.ghsa_ids) } : {}),
     ...(unionOpt(existing.osv_ids, incoming.osv_ids) ? { osv_ids: unionOpt(existing.osv_ids, incoming.osv_ids) } : {}),

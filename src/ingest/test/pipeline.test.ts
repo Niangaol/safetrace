@@ -40,6 +40,9 @@ test("pipeline：离线全链路，总线可读回 raw.docs / intel.items / dq.v
   assert.equal(verdicts.length, 1);
   assert.equal(falls.length, 5);
   assert.deepEqual(intels[0]!.payload.source_ids, merged.source_ids);
+  for (const key of ["_cve_status", "_dq_sources", "poc_link", "poc_sha256"]) {
+    assert.equal(key in intels[0]!.payload, false, "DQ-only evidence cannot leak into frozen IntelItem payload");
+  }
   assert.equal(verdicts[0]!.payload.item_id, merged.intel_id);
 
   // —— 降级显式可见：degraded_of=fixture / L2 / label 写明"离线回放预置样本" ——

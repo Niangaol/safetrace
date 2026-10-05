@@ -11,7 +11,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
-import { getJson } from '../api'
+import { getJson, BACKEND_DATA_MODE } from '../api'
 import StatCards from '../components/StatCards.vue'
 import type { CollectStatus, MetricsOverview, Paged, VulnItem } from '../types'
 
@@ -204,7 +204,8 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
 
   <template v-else>
     <h1 class="page-title">态势大屏</h1>
-    <p class="page-subtitle">本机离线 fixture 执行结果：情报数、富化结果与来源记录；非实时漏洞监控。</p>
+    <p class="page-subtitle" v-if="BACKEND_DATA_MODE === 'live'">正式库只读快照：富化只计有当前来源与事件证明的工件；旧记录未核验不算成功。趋势按页面样本的发布时间聚合，不代表实时监测 SLA。</p>
+    <p class="page-subtitle" v-else>本机离线 fixture 执行结果：情报数、富化结果与来源记录；非实时漏洞监控。</p>
 
     <StatCards
       :items="[

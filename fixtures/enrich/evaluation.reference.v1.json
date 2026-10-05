@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0",
+  "label_status": "agent-proposed",
+  "review_status": "待人工复核",
+  "blind_test": false,
+  "scope": "independent holdout proposal; not competition accuracy",
+  "papers": [
+    {
+      "paper_id": "arXiv:2307.15043",
+      "title": "Universal and Transferable Adversarial Attacks on Aligned Language Models",
+      "authors": [
+        "Zou, Andy",
+        "Wang, Zifan",
+        "Carlini, Nicholas",
+        "Nasr, Milad",
+        "Kolter, J. Zico",
+        "Fredrikson, Matt"
+      ],
+      "published_at": "2023-07-27",
+      "summary": "The study examines jailbreak attacks against aligned language models. It automatically searches for adversarial suffixes using greedy and gradient-based optimization. A suffix appended to harmful queries encourages an affirmative response instead of refusal. Optimizing across prompts and open models improves transfer to other systems, including public black-box services. The results highlight weaknesses in alignment safeguards; they do not establish a flaw in a specific software package.",
+      "source_url": "https://arxiv.org/abs/2307.15043",
+      "fetched_at": "2026-10-04",
+      "metadata_status": "official-metadata-verified",
+      "summary_kind": "agent-paraphrase-of-official-abstract"
+    },
+    {
+      "paper_id": "arXiv:2302.12173",
+      "title": "Not what you've signed up for: Compromising Real-World LLM-Integrated Applications with Indirect Prompt Injection",
+      "authors": [
+        "Greshake, Kai",
+        "Abdelnabi, Sahar",
+        "Mishra, Shailesh",
+        "Endres, Christoph",
+        "Holz, Thorsten",
+        "Fritz, Mario"
+      ],
+      "published_at": "2023-02-23",
+      "summary": "The paper studies indirect prompt injection in applications that incorporate language models. Attackers place instructions in external data that an application later retrieves, rather than submitting a direct user prompt. When retrieved content is treated as instructions, it can redirect functionality, expose information, or influence tool and API calls. The authors organize attack impacts and demonstrate examples against deployed and experimental systems. Its focus is the boundary between external content and application instructions.",
+      "source_url": "https://arxiv.org/abs/2302.12173",
+      "fetched_at": "2026-10-04",
+      "metadata_status": "official-metadata-verified",
+      "summary_kind": "agent-paraphrase-of-official-abstract"
+    },
+    {
+      "paper_id": "arXiv:2012.07805",
+      "title": "Extracting Training Data from Large Language Models",
+      "authors": [
+        "Carlini, Nicholas",
+        "Tramer, Florian",
+        "Wallace, Eric",
+        "Jagielski, Matthew",
+        "Herbert-Voss, Ariel",
+        "Lee, Katherine",
+        "Roberts, Adam",
+        "Brown, Tom",
+        "Song, Dawn",
+        "Erlingsson, Ulfar",
+        "Oprea, Alina",
+        "Raffel, Colin"
+      ],
+      "published_at": "2020-12-14",
+      "summary": "It has become common to publish large (billion parameter) language models that have been trained on private datasets. This paper demonstrates that in such settings, an adversary can perform a training data extraction attack to recover individual training examples by querying the language model. We demonstrate our attack on GPT-2, a language model trained on scrapes of the public Internet, and are able to extract hundreds of verbatim text sequences from the model's training data. These extracted examples include (public) personally identifiable information (names, phone numbers, and email addresses), IRC conversations, code, and 128-bit UUIDs. Our attack is possible even though each of the above sequences are included in just one document in the training data. We comprehensively evaluate our extraction attack to understand the factors that contribute to its success. Worryingly, we find that larger models are more vulnerable than smaller models. We conclude by drawing lessons and discussing possible safeguards for training large language models.",
+      "source_url": "https://arxiv.org/abs/2012.07805",
+      "fetched_at": "2026-10-04",
+      "metadata_status": "official-metadata-verified"
+    }
+  ],
+  "paper_cases": [
+    {
+      "id": "suffix-attack",
+      "query": "adversarial suffix aligned language models",
+      "relevant_ids": [
+        "arXiv:2307.15043"
+      ],
+      "rationale": "自动对抗后缀攻击；注入及训练数据提取为负例"
+    },
+    {
+      "id": "indirect-injection",
+      "query": "indirect prompt injection integrated applications",
+      "relevant_ids": [
+        "arXiv:2302.12173"
+      ],
+      "rationale": "应用集成中的间接提示注入；后缀越狱与训练数据提取为负例"
+    },
+    {
+      "id": "training-extraction",
+      "query": "extracting training data language models",
+      "relevant_ids": [
+        "arXiv:2012.07805"
+      ],
+      "rationale": "训练数据提取；另外两篇攻击机制不同"
+    },
+    {
+      "id": "unrelated-negative",
+      "query": "container kernel privilege escalation",
+      "relevant_ids": [],
+      "rationale": "三篇均不研究容器内核提权，不应仅凭返回非空判正确"
+    }
+  ]
+}

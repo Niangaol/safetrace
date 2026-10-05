@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
-import { IS_DEMO_MODE } from '../api'
+import { IS_DEMO_MODE, BACKEND_DATA_MODE } from '../api'
 
 const links = [
   { to: '/dashboard', label: '态势大屏', icon: 'M3 3h7v7H3V3zm0 11h7v7H3v-7zm11-11h7v7h-7V3zm0 11h7v7h-7v-7z' },
@@ -35,7 +35,7 @@ const links = [
     </div>
     <div class="nav-status" :class="{ demo: true }">
       <span class="dot"></span>
-      {{ IS_DEMO_MODE ? '静态演示' : '本地实链 · fixture' }}
+      {{ IS_DEMO_MODE ? '静态演示' : BACKEND_DATA_MODE === 'live' ? '正式库 · 只读' : BACKEND_DATA_MODE === 'fixture' ? '本地实链 · fixture' : '后端待核验' }}
     </div>
   </nav>
 </template>

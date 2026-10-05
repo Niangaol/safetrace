@@ -152,12 +152,13 @@ await check('SSE 多行帧（event: + data: 同帧）→ 事件不丢', async ()
       ': 心跳注释帧\n\n',
       'data: {"event":"stage","stage":"plan"}\n\n',
       'event: citation\ndata: {"event":"citation","cve_id":"CVE-2026-12345"}\n\n',
+      'data: {"event":"done","data_mode":"live"}\n\n',
     ]),
   )
   try {
     mod.streamChat({ question: 'Log4Shell 影响哪些版本？' }, (e) => events.push(e), () => {})
     await new Promise((r) => setTimeout(r, 100))
-    assert.equal(events.length, 2, `应解析出 2 个事件，实际 ${events.length}`)
+    assert.equal(events.length, 3, `应解析出 3 个事件，实际 ${events.length}`)
     assert.equal(events[0].event, 'stage')
     assert.equal(events[1].event, 'citation')
     assert.equal(events[1].cve_id, 'CVE-2026-12345', '多行帧的 data 载荷必须被解析')
@@ -165,6 +166,21 @@ await check('SSE 多行帧（event: + data: 同帧）→ 事件不丢', async ()
     cleanup()
   }
 })
+
+
+await check('SSE EOF 缺done必须失败，不会一直生成中', async () => {
+  let error='';const {mod,cleanup}=await loadApi({},async()=>sseResponse(['data: {"event":"token","text":"partial"}\n\n']));
+  try{mod.streamChat({question:'test'},()=>{},message=>{error=message});await new Promise(resolve=>setTimeout(resolve,100));assert.match(error,/没有发送完成状态/);}finally{cleanup();}
+});
+await check('SSE CRLF / UTF-8拆字 / 残帧可以完整结束并标注live', async () => {
+  const events=[],encoder=new TextEncoder(),bytes=encoder.encode('data: {"event":"token","text":"中文证据"}\r\n\r\ndata: {"event":"done","data_mode":"live"}');let error='';
+  const {mod,cleanup}=await loadApi({},async()=>new Response(new ReadableStream({start(controller){for(const b of bytes)controller.enqueue(new Uint8Array([b]));controller.close();}}),{headers:{'content-type':'text/event-stream'}}));
+  try{mod.streamChat({question:'test'},event=>events.push(event),message=>{error=message});await new Promise(resolve=>setTimeout(resolve,100));assert.equal(error,'');assert.equal(events[0].text,'中文证据');assert.equal(events[1].event,'done');assert.equal(mod.BACKEND_DATA_MODE.value,'live');}finally{cleanup();}
+});
+await check('SSE handler异常不能被吞成心跳', async () => {
+  let error='';const {mod,cleanup}=await loadApi({},async()=>sseResponse(['data: {"event":"done"}\n\n']));
+  try{mod.streamChat({question:'test'},()=>{throw new Error('callback exploded')},message=>{error=message});await new Promise(resolve=>setTimeout(resolve,100));assert.match(error,/callback exploded/);}finally{cleanup();}
+});
 
 console.log(results.join('\n'))
 console.log(

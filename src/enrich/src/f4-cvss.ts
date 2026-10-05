@@ -13,7 +13,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { degrade, nextId } from "@safetrace/shared";
+import { degrade, nextId, sha256Json } from "@safetrace/shared";
 import type { FallbackEvent, IntelItem, ScoreAssessment, ScoreSource } from "@safetrace/shared";
 
 /* ---------- 公共 HTTP 注入点（F1 复用） ---------- */
@@ -180,6 +180,7 @@ export interface EpssLookup {
   epss_percentile: number | null;
   /** 降级标记（红线：非空即表示当前值为 fixture 回放，非实时 API 结果）。 */
   degraded_to?: string;
+  receipt?: { url: string; sha256: string; payload: unknown; as_of_date?: string; received_at: string; cve_id: string };
 }
 
 export interface LookupEpssOptions {
@@ -198,7 +199,7 @@ export async function lookupEpss(cveId: string, opts: LookupEpssOptions = {}): P
   const traceId = opts.traceId ?? nextId("tr");
   if (isOffline(opts.offline)) return replayEpssFixture(cveId, "offline_flag", traceId, opts.emit);
 
-  const fetcher = opts.fetchImpl ?? (fetch as unknown as HttpFetcher);
+  const fetcher = opts.fetchImpl ?? ((url: string) => fetch(url, { signal: AbortSignal.timeout(15000), redirect: "error" }));
   const url = `https://api.first.org/data/v1/epss?cve=${encodeURIComponent(cveId)}`;
   let payload: unknown;
   try {
@@ -213,20 +214,27 @@ export async function lookupEpss(cveId: string, opts: LookupEpssOptions = {}): P
     // 无此 CVE 的数据行或结构异常：同样按失败显式降级，不拿别的行顶替
     return replayEpssFixture(cveId, "epss_row_missing", traceId, opts.emit);
   }
-  return { cve_id: cveId, epss_score: picked.score, epss_percentile: picked.percentile };
+  return { cve_id: cveId, epss_score: picked.score, epss_percentile: picked.percentile,
+    receipt: { url, sha256: sha256Json(payload), payload, ...(picked.date ? { as_of_date: picked.date } : {}), received_at: new Date().toISOString(), cve_id: cveId } };
 }
 
 /** 精确匹配 cve 行；缺失/不可解析 -> null（绝不回退到 rows[0] 冒充分值）。 */
-function pickEpss(payload: unknown, cveId: string): { score: number; percentile: number } | null {
+function pickEpss(payload: unknown, cveId: string): { score: number; percentile: number; date?: string } | null {
   const data = (payload as { data?: unknown } | null)?.data;
   if (!Array.isArray(data)) return null;
   const rows = data as Array<Record<string, unknown>>;
-  const row = rows.find((r) => r?.cve === cveId);
-  if (!row) return null;
-  const score = Number(row.epss);
-  const percentile = Number(row.percentile);
-  if (!Number.isFinite(score) || !Number.isFinite(percentile)) return null;
-  return { score, percentile };
+  const matching = rows.filter((r) => r?.cve === cveId);
+  if (matching.length !== 1) return null;
+  const row = matching[0]!;
+  const probability = (value: unknown): number | null => {
+    if (typeof value !== "number" && (typeof value !== "string" || !value.trim() || !/^[+-]?(?:[0-9]+[.]?[0-9]*|[.][0-9]+)(?:e[+-]?[0-9]+)?$/i.test(value.trim()))) return null;
+    const n = Number(value); return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
+  };
+  const score = probability(row.epss);
+  const percentile = probability(row.percentile);
+  if (score === null || percentile === null) return null;
+  const date = typeof row.date === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(row.date) && Number.isFinite(Date.parse(row.date + "T00:00:00Z")) && new Date(row.date + "T00:00:00Z").toISOString().slice(0, 10) === row.date ? row.date : undefined;
+  return { score, percentile, ...(date ? { date } : {}) };
 }
 
 async function replayEpssFixture(
@@ -267,6 +275,10 @@ export const SCORE_AUTHORITY: readonly ScoreSource[] = ["nvd", "cna", "ghsa", "a
 export interface ScoreSourceInput extends Partial<ScoreAssessment> {
   source_of_score: ScoreSource;
   cvss_v3_vector: string;
+  /** Internal identity; never merge scoring data from different CVEs into one frozen assessment. */
+  cve_id?: string;
+  metric_source?: string;
+  metric_type?: string;
 }
 
 export interface ArbitrateResult {
@@ -286,7 +298,8 @@ export function arbitrateSources(sources: ScoreSourceInput[]): ArbitrateResult {
     if (typeof s.cvss_v3_vector !== "string" || !s.cvss_v3_vector.trim()) {
       throw new Error(`arbitrateSources: 来源 ${s.source_of_score} 缺 cvss_v3_vector`);
     }
-    if (s.cvss_v3_base !== undefined && (!Number.isFinite(s.cvss_v3_base))) {
+    parseCvssV31Vector(s.cvss_v3_vector);
+    if (s.cvss_v3_base !== undefined && (!Number.isFinite(s.cvss_v3_base) || s.cvss_v3_base < 0 || s.cvss_v3_base > 10)) {
       throw new Error(`arbitrateSources: 来源 ${s.source_of_score} 的 cvss_v3_base 非法`);
     }
     if (s.source_of_score === "system_derived" && !s.derived_reason) {
@@ -310,6 +323,9 @@ const SOURCE_CONFIDENCE: Record<ScoreSource, number> = {
 };
 
 export interface AssessScoreOptions {
+  /** Sidecar selective retry: retain an already verified auxiliary dimension. */
+  skipEpss?: boolean;
+  onEpssLookup?: (result: EpssLookup) => void;
   sources: ScoreSourceInput[];
   kevSet?: Iterable<string>;
   offline?: boolean;
@@ -326,7 +342,11 @@ export interface AssessScoreOptions {
  */
 export async function assessScore(item: IntelItem, opts: AssessScoreOptions): Promise<ScoreAssessment | null> {
   if (opts.sources.length === 0) return null;
-  const { adopted, others } = arbitrateSources(opts.sources);
+  const targetCve = item.cve_ids[0];
+  if (item.cve_ids.length > 1 && opts.sources.some(source => !source.cve_id)) throw new Error("multi-CVE scoring requires explicit source CVE identity");
+  const matching = opts.sources.filter(source => !source.cve_id || source.cve_id.toUpperCase() === targetCve?.toUpperCase());
+  if (!matching.length) return null;
+  const { adopted, others } = arbitrateSources(matching);
 
   // 权威源分值优先；缺 base 时按向量重算（向量非法会直接抛错）
   const base =
@@ -346,9 +366,9 @@ export async function assessScore(item: IntelItem, opts: AssessScoreOptions): Pr
   // KEV 命中：上游 source_ids 含 kev / 任一来源自带 kev_flag / CVE 命中 kevSet
   const kevSetArray = opts.kevSet === undefined ? undefined : [...opts.kevSet];
   const kev =
-    item.source_ids.some((sid) => sid.toLowerCase().includes("kev")) ||
-    opts.sources.some((s) => s.kev_flag === true) ||
-    (kevSetArray !== undefined && item.cve_ids.some((c) => kevSetArray.includes(c)));
+    (item.cve_ids.length === 1 && item.source_ids.some((sid) => ["cisa_kev", "kev"].includes(sid.toLowerCase()))) ||
+    matching.some((s) => s.kev_flag === true) ||
+    (targetCve !== undefined && kevSetArray !== undefined && kevSetArray.some(c => c.toUpperCase() === targetCve.toUpperCase()));
 
   const assessment = compact({
     cvss_v3_vector: adopted.cvss_v3_vector,
@@ -364,13 +384,14 @@ export async function assessScore(item: IntelItem, opts: AssessScoreOptions): Pr
   }) as ScoreAssessment;
 
   // EPSS：上游给了就用；否则按首个 CVE 查询（离线/fetch 失败 -> fixture + degrade）
-  if (assessment.epss_score === undefined && item.cve_ids.length > 0) {
+  if (!opts.skipEpss && assessment.epss_score === undefined && item.cve_ids.length > 0) {
     const epss = await lookupEpss(item.cve_ids[0]!, {
       offline: opts.offline,
       fetchImpl: opts.fetchImpl,
       traceId: opts.traceId,
       emit: opts.emit,
     });
+    opts.onEpssLookup?.(epss);
     if (epss.epss_score !== null) assessment.epss_score = epss.epss_score;
     if (epss.epss_percentile !== null) assessment.epss_percentile = epss.epss_percentile;
   }
@@ -387,6 +408,12 @@ const REPO_ROOT = new URL("../../../", import.meta.url);
  * 识别三种已知形态：NVD 2.0、CVE-ORG 5.x（cna/adp）、OSV/GHSA。
  * 文件缺失 / 非 JSON / 形态不识别 -> 跳过（输入缺失，非降级；assessScore 对空来源返回 null）。
  */
+/** Hash captured source bytes on each reuse decision; paths alone cannot detect revisions or revocations. */
+export async function scoreSourceDependencyHash(item: IntelItem, options: { sources?: ScoreSourceInput[]; kevSet?: Iterable<string> } = {}): Promise<string> {
+  const raw = options.sources === undefined ? await Promise.all(item.raw_refs.map(async ref => { const text = await readFirstReadable(ref); return { ref, sha256: text === null ? null : sha256Json(text) }; })) : undefined;
+  return sha256Json({ revision: "cvss-source-dependencies.v3", primary_cve: item.cve_ids[0] ?? null, raw, injected: options.sources ?? null, kev: options.kevSet ? [...options.kevSet].sort() : [] });
+}
+
 export async function loadScoreSourcesFromRawRefs(item: IntelItem): Promise<ScoreSourceInput[]> {
   const found: ScoreSourceInput[] = [];
   for (const ref of item.raw_refs) {
@@ -398,7 +425,8 @@ export async function loadScoreSourcesFromRawRefs(item: IntelItem): Promise<Scor
     } catch {
       continue; // payload 非 JSON：跳过
     }
-    found.push(...extractScoreSources(doc, new Set(item.cve_ids.map((id) => id.toUpperCase()))));
+    // Frozen ScoreAssessment represents the primary CVE only. Other IDs remain related evidence, not interchangeable scores.
+    found.push(...extractScoreSources(doc, new Set(item.cve_ids.slice(0, 1).map((id) => id.toUpperCase()))));
   }
   return dedupeBySource(found);
 }
@@ -429,19 +457,26 @@ function extractScoreSources(doc: unknown, cveIds: ReadonlySet<string>): ScoreSo
     const cve = asRecord(asRecord(vuln)?.cve);
     // A raw_ref may contain thousands of CVEs; never adopt another CVE's score.
     const id = str(cve?.id);
-    if (id === undefined || !cveIds.has(id.toUpperCase())) continue;
-    for (const metric of asArray(asRecord(cve?.metrics)?.cvssMetricV31) ?? []) {
-      const data = asRecord(asRecord(metric)?.cvssData);
+    if (id === undefined || !cveIds.has(id.toUpperCase()) || /^(REJECT|RESERVED|DISPUTED)/i.test(str(cve?.vulnStatus) ?? "")) continue;
+    const metrics = [...(asArray(asRecord(cve?.metrics)?.cvssMetricV31) ?? [])].sort((a,b) => {
+      const priority = (metric: unknown) => { const m = asRecord(metric); return str(m?.source)?.toLowerCase() === "nvd@nist.gov" ? (str(m?.type)?.toLowerCase() === "primary" ? 0 : 1) : 2; };
+      return priority(a)-priority(b);
+    });
+    for (const metric of metrics) {
+      const m = asRecord(metric), data = asRecord(m?.cvssData);
+      const origin = str(m?.source)?.toLowerCase();
+      const sourceRole = origin === "nvd@nist.gov" ? "nvd" : origin && origin === str(cve?.sourceIdentifier)?.toLowerCase() ? "cna" : undefined;
+      if (!sourceRole) continue;
       const vector = str(data?.vectorString);
       if (vector !== undefined) {
-        out.push({ source_of_score: "nvd", cvss_v3_vector: vector, cvss_v3_base: num(data?.baseScore) });
+        out.push({ source_of_score: sourceRole, cvss_v3_vector: vector, cvss_v3_base: num(data?.baseScore), cve_id: id.toUpperCase(), metric_source: origin, metric_type: str(m?.type) });
       }
     }
   }
 
   // CVE-ORG 5.x：containers.cna / containers.adp 的 metrics[].cvssV3_1 | cvssV3_0
   const recordId = str(asRecord(root.cveMetadata)?.cveId);
-  const containers = recordId !== undefined && cveIds.has(recordId.toUpperCase()) ? asRecord(root.containers) : undefined;
+  const containers = recordId !== undefined && cveIds.has(recordId.toUpperCase()) && !/^(REJECT|RESERVED|DISPUTED)/i.test(str(asRecord(root.cveMetadata)?.state) ?? "") ? asRecord(root.containers) : undefined;
   const adp = asArray(containers?.adp) ?? (containers?.adp ? [containers.adp] : []);
   const adpPairs: Array<["cna" | "adp", Record<string, unknown> | undefined]> = [
     ["cna", asRecord(containers?.cna)],
@@ -454,6 +489,7 @@ function extractScoreSources(doc: unknown, cveIds: ReadonlySet<string>): ScoreSo
       if (vector !== undefined) {
         out.push({
           source_of_score: role,
+          cve_id: recordId!.toUpperCase(),
           cvss_v3_vector: vector,
           cvss_v3_base: num(v3?.baseScore),
         });
@@ -472,7 +508,7 @@ function extractScoreSources(doc: unknown, cveIds: ReadonlySet<string>): ScoreSo
         const type = str(rec?.type);
         const vector = str(rec?.score);
         if (vector !== undefined && (type === "CVSS_V3" || type === "CVSS_V3_1")) {
-          out.push({ source_of_score: "ghsa", cvss_v3_vector: vector });
+          out.push({ source_of_score: "ghsa", cvss_v3_vector: vector, cve_id: [...cveIds].find(id => aliases.some(alias => typeof alias === "string" && alias.toUpperCase() === id)) });
         }
       }
     }

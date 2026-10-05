@@ -148,6 +148,7 @@ function makeItem(overrides: Partial<IntelItem> = {}): IntelItem {
 
 test("assessScore：多源冲突时按权威序取 nvd，低权威源只增强不改写", async () => {
   const score = await assessScore(makeItem(), {
+    offline: true, // scoring arbitration tests use EPSS fixtures, never external HTTP
     sources: [
       { source_of_score: "ghsa", cvss_v3_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", cvss_v3_base: 9.8 },
       { source_of_score: "cna", cvss_v3_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", cvss_v3_base: 9.0, impact_summary: "CNA 影响描述" },
@@ -164,6 +165,7 @@ test("assessScore：多源冲突时按权威序取 nvd，低权威源只增强�
 
 test("assessScore：ghsa 高于 adp；EPSS 只从旁证补缺", async () => {
   const score = await assessScore(makeItem(), {
+    offline: true, // scoring arbitration tests use EPSS fixtures, never external HTTP
     sources: [
       { source_of_score: "adp", cvss_v3_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", cvss_v3_base: 8.8 },
       { source_of_score: "ghsa", cvss_v3_vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H", cvss_v3_base: 7.8, epss_score: 0.42, epss_percentile: 0.9 },
@@ -188,6 +190,7 @@ test("assessScore：system_derived 缺 derived_reason 抛错（契约红线）",
 
 test("assessScore：仅 system_derived 时按向量重算基准分并带 derived_reason", async () => {
   const score = await assessScore(makeItem(), {
+    offline: true, // scoring arbitration tests use EPSS fixtures, never external HTTP
     sources: [
       {
         source_of_score: "system_derived",
@@ -209,6 +212,7 @@ test("assessScore：无可用来源 → null（禁止无源默认分）", async 
 
 test("assessScore：KEV 命中（source_ids 含 kev）→ kev_flag=true 且 exploit_maturity=high", async () => {
   const score = await assessScore(makeItem({ source_ids: ["nvd_cve", "cisa_kev"] }), {
+    offline: true, // scoring arbitration tests use EPSS fixtures, never external HTTP
     sources: [{ source_of_score: "nvd", cvss_v3_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", cvss_v3_base: 10.0 }],
   });
   assert.equal(score!.kev_flag, true);
@@ -217,6 +221,7 @@ test("assessScore：KEV 命中（source_ids 含 kev）→ kev_flag=true 且 expl
 
 test("assessScore：KEV 命中（cve_ids 命中 kevSet）→ kev_flag=true", async () => {
   const score = await assessScore(makeItem(), {
+    offline: true, // scoring arbitration tests use EPSS fixtures, never external HTTP
     sources: [{ source_of_score: "nvd", cvss_v3_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", cvss_v3_base: 10.0 }],
     kevSet: new Set(["CVE-2021-44228", "CVE-2014-0160"]),
   });
@@ -225,6 +230,7 @@ test("assessScore：KEV 命中（cve_ids 命中 kevSet）→ kev_flag=true", asy
 
 test("assessScore：KEV 未命中 → kev_flag 键不存在（不猜 false）", async () => {
   const score = await assessScore(makeItem(), {
+    offline: true, // scoring arbitration tests use EPSS fixtures, never external HTTP
     sources: [{ source_of_score: "nvd", cvss_v3_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", cvss_v3_base: 10.0 }],
   });
   assert.equal("kev_flag" in score!, false);
@@ -233,8 +239,8 @@ test("assessScore：KEV 未命中 → kev_flag 键不存在（不猜 false）", 
 test("assessScore：无 epss 来源时内部查询 EPSS（离线 fixture 降级可见）", async () => {
   const events: string[] = [];
   const score = await assessScore(makeItem(), {
+    offline: true, // scoring arbitration tests use EPSS fixtures, never external HTTP
     sources: [{ source_of_score: "nvd", cvss_v3_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", cvss_v3_base: 10.0 }],
-    offline: true,
     emit: async (e) => {
       events.push(e.trigger);
     },
@@ -246,6 +252,7 @@ test("assessScore：无 epss 来源时内部查询 EPSS（离线 fixture 降级�
 
 test("assessScore：产出对象不含 undefined 值键（契约 additionalProperties:false）", async () => {
   const score = await assessScore(makeItem(), {
+    offline: true, // scoring arbitration tests use EPSS fixtures, never external HTTP
     sources: [{ source_of_score: "nvd", cvss_v3_vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", cvss_v3_base: 10.0 }],
   });
   for (const [k, v] of Object.entries(score!)) {
@@ -269,4 +276,13 @@ test("loadScoreSourcesFromRawRefs：从 NVD/OSV fixture 抽多源评分并按源
 test("loadScoreSourcesFromRawRefs：raw_refs 缺失 → 空数组（交由上层记维度失败）", async () => {
   const sources = await loadScoreSourcesFromRawRefs(makeItem({ raw_refs: ["fixtures/sources/不存在.json"] }));
   assert.deepEqual(sources, []);
+});
+
+test("EPSS null/boolean/blank/out-of-range/duplicate rows never count as genuine probabilities",async()=>{
+  for(const value of [null,false,true,"", " ", -0.1,1.1,"NaN","Infinity"]){
+    const result=await lookupEpss("CVE-2026-99999",{fetchImpl:async()=>({ok:true,status:200,text:async()=>"",json:async()=>({data:[{cve:"CVE-2026-99999",epss:value,percentile:"0.9"}]})})});
+    assert.equal(result.degraded_to,"fixture");assert.equal(result.epss_score,null);
+  }
+  const duplicated=await lookupEpss("CVE-2026-99999",{fetchImpl:async()=>({ok:true,status:200,text:async()=>"",json:async()=>({data:[{cve:"CVE-2026-99999",epss:"0.1",percentile:"0.9"},{cve:"CVE-2026-99999",epss:"0.8",percentile:"0.2"}]})})});
+  assert.equal(duplicated.degraded_to,"fixture");assert.equal(duplicated.epss_score,null);
 });

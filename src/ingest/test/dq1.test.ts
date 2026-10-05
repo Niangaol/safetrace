@@ -39,7 +39,7 @@ for (const [name, expected] of CASES) {
     );
     assert.equal(v.item_kind, "intel");
     assert.equal(v.gate_version, GATE_VERSION);
-    assert.equal(GATE_VERSION, "1.0.0");
+    assert.equal(GATE_VERSION, "1.0.1");
     assert.equal(v.item_id, item.intel_id);
     assert.ok(v.quality_score >= 0 && v.quality_score <= 1);
     for (const d of Object.values(v.dimension_scores)) {

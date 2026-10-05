@@ -99,11 +99,16 @@ test("chat：熔断中的 provider 被跳过并显式降级", async () => {
 
 test("chat：强制 cloud provider 失败后走降级链并登记 FallbackEvent", async () => {
   const events: FallbackEvent[] = [];
-  // forceProvider=deepseek 但无 key/网络 → compatChat 抛错 → 链降级到 cache（非首选→显式降级）
-  const gw = new ModelGateway({ forceProvider: "deepseek", onFallback: (e) => { events.push(e); } });
+  let attempts = 0;
+  const gw = new ModelGateway({
+    forceProvider: "deepseek",
+    fetchImpl: async () => { attempts++; throw new Error("injected provider failure"); },
+    onFallback: (e) => { events.push(e); },
+  });
   const reply = await gw.chat("answerer", [{ role: "user", content: "测试降级链" }], {}, "tr_3");
   assert.equal(reply.provider, "cache");
   assert.equal(reply.degraded_to, "cache");
+  assert.equal(attempts, 1, "失败必须来自注入 transport，不能依赖真实网络或凭据");
   assert.equal(events.length, 1);
   assert.equal(events[0]!.layer, "L3");
   assert.equal(events[0]!.user_visible, true);

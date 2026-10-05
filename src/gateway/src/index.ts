@@ -215,7 +215,7 @@ export class ModelGateway {
         }
         const def = this.cfg.providers[providerName];
         if (!def) throw new Error("未知 provider: " + providerName);
-        const cfg = resolveConfig(def, modelId, rt.profile.timeout_ms);
+        const cfg = { ...resolveConfig(def, modelId, rt.profile.timeout_ms), fetchImpl: this.opts.fetchImpl };
         const vectors = await compatEmbed(cfg, texts);
         assertEmbeddingVectors(vectors, texts.length, expectedDim);
         return { vectors, model_id: modelId, model_version: rt.profile.model_version, provider: providerName, latency_ms: Date.now() - t0, cached: false, degraded_to: "" };
@@ -262,7 +262,7 @@ export class ModelGateway {
     }
     const def = this.cfg.providers[providerName];
     if (!def) throw new Error("未知 provider: " + providerName);
-    const cfg = resolveConfig(def, modelId, rt.profile.timeout_ms);
+    const cfg = { ...resolveConfig(def, modelId, rt.profile.timeout_ms), fetchImpl: this.opts.fetchImpl };
     const reasoningEffort = rt.profile.capability_flags.reasoning_effort;
     const providerParams = reasoningEffort === "low" || reasoningEffort === "medium" || reasoningEffort === "high"
       ? { ...params, reasoning_effort: reasoningEffort as "low" | "medium" | "high" }

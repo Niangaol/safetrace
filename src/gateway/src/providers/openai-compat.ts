@@ -19,6 +19,8 @@ export interface OpenAiCompatConfig {
    * local provider 是私有数据的合法目的地，不扫描。
    */
   trustBoundary?: TrustBoundary;
+  /** Per-gateway transport injection; defaults to the current global fetch. */
+  fetchImpl?: typeof fetch;
 }
 
 export type OpenAiCompatChatParams = ChatParams & { reasoning_effort?: "low" | "medium" | "high" };
@@ -64,7 +66,7 @@ async function postJson(url: string, body: unknown, cfg: OpenAiCompatConfig): Pr
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), cfg.timeoutMs);
   try {
-    const res = await fetch(url, {
+    const res = await (cfg.fetchImpl ?? globalThis.fetch)(url, {
       method: "POST",
       redirect: "error",
       headers: {

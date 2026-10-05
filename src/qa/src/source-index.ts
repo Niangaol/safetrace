@@ -16,6 +16,9 @@ export interface SourceIndexOptions {
   trace_id: string;
   parent_lineage_ids: string[];
   fetch_impl?: typeof fetch;
+  /** Signals the first actual points PUT, after embedding/admission/collection validation. */
+  before_vector_write?: () => void;
+  write_token?: string;
 }
 
 /** Production source indexing is opt-in and refuses all fixture/fallback ingest runs. */
@@ -46,7 +49,7 @@ export async function indexSourceChunks(chunks: EvidenceChunk[], opts: SourceInd
   const engine = new QdrantEngine({
     url: opts.url, collection: opts.collection, api_key: opts.api_key,
     model_id: p.model_id, model_version: p.model_version, embedding_dim: p.dimension,
-    embedder: opts.embedder, bus: opts.bus, fetch_impl: opts.fetch_impl,
+    embedder: opts.embedder, bus: opts.bus, fetch_impl: opts.fetch_impl, before_upsert: opts.before_vector_write, write_token: opts.write_token,
   });
   await indexChunks(engine, chunks, {
     collection_name: opts.collection, model_id: p.model_id, model_version: p.model_version,

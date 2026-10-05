@@ -29,12 +29,13 @@ test("resumption respects the latest quarantine even after a historical pass", (
   assert.equal(plan.accepted_ids, 0);
   assert.deepEqual(plan.pending, []);
 });
-test("resumption selects latest unique intel and does not repeat recorded items", () => {
+test("resumption selects latest unique intel and retries unknown recorded dimensions", () => {
   const plan = planPendingEnrichment([item("a", "old"), item("b"), item("a", "new")], [verdict("a", "pass"), verdict("b", "degrade")], [enrichment("b"), enrichment("b")]);
   assert.equal(plan.unique_intel_ids, 2);
   assert.equal(plan.already_enriched, 1);
   assert.equal(plan.recorded_with_failed_dimensions, 1);
   assert.equal(plan.pending[0]!.title, "new");
+  assert.deepEqual(plan.pending.map(row => row.intel_id), ["a", "b"]);
 });
 test("resumption refuses unknown DQ and honors a later release", () => {
   const plan = planPendingEnrichment([item("a"), item("unknown")], [verdict("a", "quarantine"), verdict("a", "pass")], []);

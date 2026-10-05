@@ -8,15 +8,18 @@
  * - EnrichmentResult.json 契约 additionalProperties:false，信封 payload 一律剥离 conflicts 等审计字段
  * - 无可用评分来源 -> cvss 维度记失败（assessScore 返回 null），不造假分
  */
-import { degrade, nextId, nowIso, SCHEMA_VERSION, sha256Json } from "@safetrace/shared";
-import type { EventBus, FallbackEvent, IntelItem, EnrichmentResult, LineageArtifactRef, PaperLink } from "@safetrace/shared";
+import { enrichmentInputHash, enrichmentRetryDue, enrichmentRetryAfter, degrade, nextId, nowIso, SCHEMA_VERSION, sha256Json } from "@safetrace/shared";
+import type { EventBus, FallbackEvent, IntelItem, EnrichmentResult, LineageArtifactRef, PaperLink, ScoreAssessment, EnrichmentStateStore, EnrichmentDimension, EnrichmentStatus, EnrichmentDimensionState } from "@safetrace/shared";
 import {
   assessScore,
+  lookupEpss,
   loadScoreSourcesFromRawRefs,
+  scoreSourceDependencyHash,
   type HttpFetcher,
   type ScoreSourceInput,
+  type EpssLookup,
 } from "./f4-cvss.js";
-import { searchPapers } from "./f1-papers.js";
+import { searchPapers, anchoredPapers } from "./f1-papers.js";
 import type { PaperReviewOutcome, PaperReviewPort } from "./stepfun-paper-review.js";
 import {
   computeEnrichmentScore,
@@ -32,6 +35,8 @@ export * from "./stepfun-paper-review.js";
 export * from "./f6-verify.js";
 
 export interface EnrichContext {
+  stateStore?: EnrichmentStateStore;
+  now?: Date;
   offline?: boolean;
   kevSet?: Iterable<string>;
   fetchImpl?: HttpFetcher;
@@ -70,10 +75,36 @@ function shouldAskPaperReviewer(papers: PaperLink[]): boolean {
 
 async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<EnrichmentOutcome> {
   const traceId = ctx.traceId ?? nextId("tr");
-  const inputHash = sha256Json(item);
-  const itemRef: LineageArtifactRef = { kind: "IntelItem", id: item.intel_id, sha256: inputHash };
-  const inputParent = ctx.lineage_parent_by_intel_id?.[item.intel_id];
+  const inputHash = enrichmentInputHash(item);
+  const now = ctx.now ?? new Date();
+  const prior = (dimension: EnrichmentDimension) => ctx.stateStore?.get(item.intel_id, dimension);
+  const due = (dimension: EnrichmentDimension) => !ctx.stateStore || enrichmentRetryDue(prior(dimension), inputHash, now);
   const causation = ctx.causation_by_intel_id?.[item.intel_id] ?? null;
+  let needsReceipt = Boolean(ctx.bus && ctx.stateStore && (["paper", "cvss", "epss"] as const).some(dimension => { const s = prior(dimension); return s && (!s.enrich_event_id || (causation && s.intel_event_id !== causation)); }));
+  if (ctx.bus && ctx.stateStore && (["paper", "cvss", "epss"] as const).some(d => prior(d))) {
+    let latest: Awaited<ReturnType<EventBus["readEvents"]>>[number] | undefined;
+    for (let offset = 0; ; offset += 500) { const page = await ctx.bus.readEvents<EnrichmentResult>("enrich.items", offset, 500); for (const event of page) if (event.payload.intel_id === item.intel_id) latest = event; if (page.length < 500) break; }
+    if (!latest || (["paper", "cvss", "epss"] as const).some(d => prior(d) && prior(d)!.enrich_event_id !== latest!.event_id)) needsReceipt = true;
+  }
+  const runPaper = due("paper");
+  const scoreDependency = await scoreSourceDependencyHash(item, { sources: ctx.scoreSources, kevSet: ctx.kevSet });
+  const runCvss = due("cvss") || prior("cvss")?.dependency_hash !== scoreDependency;
+  const runEpss = due("epss");
+  if (!runPaper && !runCvss && !runEpss && !needsReceipt) return summarizeEnrichment(item, { papers: (prior("paper")?.artifact ?? []) as PaperLink[], scoreAssessment: (prior("cvss")?.artifact ?? null) as ScoreAssessment | null });
+  const states: Array<{ dimension: EnrichmentDimension; status: EnrichmentStatus; reason: string; artifact: unknown }> = [];
+  let paperProvenance: EnrichmentDimensionState["provenance"];
+  let paperMetadataUnknown = false;
+  let epssReceipt: EpssLookup | undefined;
+  const save = (dimension: EnrichmentDimension, status: EnrichmentStatus, reason: string, artifact: unknown, eventId: string | null) => {
+    const attempts = (prior(dimension)?.attempts ?? 0) + 1;
+    ctx.stateStore?.put({ intel_id: item.intel_id, dimension, status, reason, artifact, input_hash: inputHash,
+      result_hash: sha256Json(artifact), enrich_event_id: eventId, intel_event_id: causation,
+      ...(dimension === "paper" && paperProvenance ? { provenance: paperProvenance } : {}),
+      ...(dimension === "epss" && epssReceipt?.receipt ? { source_receipt: epssReceipt.receipt } : {}),
+      ...(dimension === "cvss" ? { dependency_hash: scoreDependency } : {}), retry_after: enrichmentRetryAfter(status, attempts, now), attempts, updated_at: now.toISOString() });
+  };
+  const itemRef: LineageArtifactRef = { kind: "IntelItem", id: item.intel_id, sha256: sha256Json(item) };
+  const inputParent = ctx.lineage_parent_by_intel_id?.[item.intel_id];
   const fallbackRefs: LineageArtifactRef[] = [];
   const emit = makeEmitter(ctx, fallbackRefs, itemRef, inputParent, causation);
 
@@ -82,17 +113,27 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   const f1FallbackStart = fallbackRefs.length;
   let papersRes: Awaited<ReturnType<typeof searchPapers>>;
   try {
-    papersRes = await searchPapers(item.title, { offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit });
+    papersRes = runPaper ? await searchPapers(item.title, { offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit }) : { papers: (prior("paper")?.artifact ?? []) as PaperLink[], ...(prior("paper")?.status === "degraded" ? { degraded_to: "fixture" } : {}) };
+    if (runPaper) {
+      if (!papersRes.degraded_to) {
+        const related = anchoredPapers(item, papersRes.papers, papersRes.paper_records);
+        papersRes.papers = related.filter(paper => papersRes.paper_records?.[paper.paper_id]?.title === paper.title);
+        paperMetadataUnknown = related.length > papersRes.papers.length;
+        if (papersRes.source_evidence && papersRes.paper_records) paperProvenance = { query_url: papersRes.source_evidence.url, sha256: papersRes.source_evidence.sha256, text: papersRes.source_evidence.text, paper_records: papersRes.paper_records };
+      }
+      states.push({ dimension: "paper", status: papersRes.degraded_to ? "degraded" : papersRes.papers.length ? "live" : paperMetadataUnknown ? "unknown" : "empty", reason: papersRes.degraded_to ? "fixture paper replay; not real success" : papersRes.papers.length ? "entity/topic candidates with original arXiv metadata; heuristic relevance, not accuracy" : paperMetadataUnknown ? "candidate publication metadata/identity unverified" : "no related candidates; empty backoff", artifact: papersRes.papers });
+    }
   } catch {
     await ctx.bus?.recordLineage({
       trace_id: traceId, parent_lineage_ids: inputParent ? [inputParent] : [], causation_id: causation,
       stage: "enrich.f1", operation_version: "f1-papers.v1", status: "failed", started_at: f1Started,
       input_refs: [itemRef], error: "paper enrichment failed",
     });
+    save("paper", "failed", "paper enrichment failed", null, null);
     throw new Error("F1 富化失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
   }
   const paperPayload = papersPayload(item.intel_id, papersRes.papers);
-  const papersEnv = await ctx.bus?.publish("enrich.papers", paperPayload, { trace_id: traceId, causation_id: causation });
+  const papersEnv = runPaper ? await ctx.bus?.publish("enrich.papers", paperPayload, { trace_id: traceId, causation_id: causation }) : undefined;
   const paperRefs: LineageArtifactRef[] = papersRes.papers.map((paper) => ({ kind: "PaperLink", id: paper.paper_id, sha256: sha256Json(paper) }));
   if (papersEnv) paperRefs.push({ kind: "EventEnvelope", id: papersEnv.event_id, sha256: sha256Json(paperPayload) });
   const f1FallbackRefs = fallbackRefs.slice(f1FallbackStart);
@@ -108,7 +149,7 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   });
 
   // Optional F1 StepPlan advice: sidecar only; never changes PaperLink scores, order, or published EnrichmentResult.
-  if (ctx.paperReviewer && ctx.bus && !papersRes.degraded_to && shouldAskPaperReviewer(papersRes.papers)) {
+  if (runPaper && ctx.paperReviewer && ctx.bus && !papersRes.degraded_to && shouldAskPaperReviewer(papersRes.papers)) {
     const candidates = papersRes.papers.map((paper) => ({
       paper_id: paper.paper_id,
       title: paper.title,
@@ -174,8 +215,34 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   let sources: ScoreSourceInput[];
   let score: Awaited<ReturnType<typeof assessScore>>;
   try {
-    sources = ctx.scoreSources ?? (await loadScoreSourcesFromRawRefs(item));
-    score = await assessScore(item, { sources, kevSet: ctx.kevSet, offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit });
+    sources = runCvss ? ctx.scoreSources ?? (await loadScoreSourcesFromRawRefs(item)) : [];
+    const epssEvents: FallbackEvent[] = [];
+    const scoreEmit = async (event: FallbackEvent) => { epssEvents.push(event); await emit(event); };
+    score = runCvss ? await assessScore(item, { sources, kevSet: ctx.kevSet, offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit: scoreEmit, skipEpss: !runEpss, onEpssLookup: value => { epssReceipt = value; } }) : (prior("cvss")?.artifact ?? null) as ScoreAssessment | null;
+    if (runCvss && !runEpss && score && prior("epss")) {
+      const retained = prior("epss")!.artifact as { epss_score: number | null; epss_percentile: number | null } | null;
+      delete score.epss_score; delete score.epss_percentile;
+      if (retained?.epss_score != null) score.epss_score = retained.epss_score;
+      if (retained?.epss_percentile != null) score.epss_percentile = retained.epss_percentile;
+    }
+    // FIRST scoring is independent of CVSS availability; unproved injected EPS is not a receipt.
+    if (runEpss && !epssReceipt && item.cve_ids.length) {
+      epssReceipt = await lookupEpss(item.cve_ids[0]!, { offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit: scoreEmit });
+    }
+    if (runEpss && epssReceipt && score) {
+      score = { ...score };
+      delete score.epss_score; delete score.epss_percentile;
+      if (epssReceipt.epss_score !== null) score.epss_score = epssReceipt.epss_score;
+      if (epssReceipt.epss_percentile !== null) score.epss_percentile = epssReceipt.epss_percentile;
+    }
+    if (runCvss) states.push({ dimension: "cvss", status: score ? (!ctx.scoreSources && item.raw_refs.some(ref => /(?:^|[\\/])fixtures[\\/]/.test(ref)) ? "degraded" : "live") : "empty", reason: score ? (!ctx.scoreSources && item.raw_refs.some(ref => /(?:^|[\\/])fixtures[\\/]/.test(ref)) ? "fixture CVSS source; not real success" : "source-backed CVSS; EPSS tracked independently") : "no usable CVSS source; empty backoff", artifact: score });
+    if (runEpss) {
+      const date = epssReceipt?.receipt?.as_of_date;
+      const age = date ? now.getTime() - Date.parse(date + "T00:00:00Z") : NaN;
+      const genuine = !ctx.offline && !epssReceipt?.degraded_to && !!epssReceipt?.receipt && Number.isFinite(age) && age >= -5 * 60_000 && age <= 2 * 24 * 3600_000;
+      const status: EnrichmentStatus = ctx.offline || epssEvents.length ? "degraded" : genuine ? "live" : (epssReceipt?.epss_score != null || score?.epss_score !== undefined) ? "unknown" : "empty";
+      states.push({ dimension: "epss", status, reason: status === "live" ? "FIRST response and recent as-of date verified" : status === "degraded" ? "offline/fixture EPSS; CVSS tracked independently" : status === "unknown" ? "EPSS supplied without verified recent source receipt; not real success" : "no EPSS data; empty backoff", artifact: epssReceipt ? { epss_score: epssReceipt.epss_score, epss_percentile: epssReceipt.epss_percentile } : score ? { epss_score: score.epss_score ?? null, epss_percentile: score.epss_percentile ?? null } : null });
+    }
   } catch {
     await ctx.bus?.recordLineage({
       trace_id: traceId, parent_lineage_ids: [f1Lineage?.lineage_id, inputParent].filter((id): id is string => Boolean(id)),
@@ -183,6 +250,8 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
       stage: "enrich.f4", operation_version: "f4-cvss.v1", status: "failed", started_at: f4Started,
       input_refs: [itemRef], error: "score assessment failed",
     });
+    for (const state of states) save(state.dimension, state.status, state.reason, state.artifact, null);
+    save(runCvss ? "cvss" : "epss", "failed", "score assessment failed", null, null);
     throw new Error("F4 富化失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
   }
   const f4FallbackRefs = fallbackRefs.slice(f4FallbackStart);
@@ -207,7 +276,7 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
     for (const conflict of outcome.conflicts) await ctx.onConflict?.(conflict, item.intel_id);
     contractPayload = toContractPayload(outcome);
     enrichEnv = await ctx.bus?.publish("enrich.items", contractPayload, {
-      trace_id: traceId, causation_id: papersEnv?.event_id ?? causation,
+      trace_id: traceId, causation_id: causation,
     });
   } catch {
     await ctx.bus?.recordLineage({
@@ -218,6 +287,7 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
       input_refs: [itemRef, { kind: "PaperSet", id: item.intel_id, sha256: sha256Json(papersRes.papers) }, ...(score ? [{ kind: "ScoreAssessment", id: item.intel_id, sha256: sha256Json(score) }] : [])],
       error: "F6 consolidation or enrich.items publish failed",
     });
+    for (const state of states) save(state.dimension, "failed", "enrichment publication failed; not committed as success", state.artifact, null);
     throw new Error("F6 富化收口失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
   }
   await ctx.bus?.recordLineage({
@@ -233,6 +303,16 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
     source: { source_id: item.source_ids.join(",") },
     ...(outcome.conflicts.length > 0 ? { decision: { reason: "observed " + outcome.conflicts.length + " score conflict(s)" } } : {}),
   });
+  const commitStates = () => {
+  for (const state of states) save(state.dimension, state.status, state.reason, state.artifact, enrichEnv?.event_id ?? null);
+  // Retained CVSS is unchanged by an EPSS-only retry, but the combined artifact carries the updated auxiliary values.
+  if (!runCvss && runEpss && prior("cvss") && score) ctx.stateStore?.put({ ...prior("cvss")!, artifact: score, result_hash: sha256Json(score), enrich_event_id: enrichEnv?.event_id ?? null, intel_event_id: causation });
+  for (const dimension of ["paper", "cvss", "epss"] as const) {
+    const retained = prior(dimension);
+    if (!states.some(state => state.dimension === dimension) && retained) ctx.stateStore?.put({ ...retained, enrich_event_id: enrichEnv?.event_id ?? null, intel_event_id: causation });
+  }
+  };
+  if (ctx.stateStore?.atomic) ctx.stateStore.atomic(commitStates); else commitStates();
   return outcome;
 }
 

@@ -1,0 +1,98 @@
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import { pathToFileURL } from "node:url";
+import { readLiveKnowledgeView, liveIntelItem, liveEvidenceView } from "../src/qa/src/live-knowledge-view.js";
+import { readRemediationEvidence } from "../src/qa/src/remediation-reader.js";
+import { knowledgeGeneration } from "../src/qa/src/knowledge-generation.js";
+import type { LiveKnowledgeView } from "../src/qa/src/live-knowledge-view.js";
+import { MemoryIndex } from "../src/qa/src/q2-retrieval.js";
+import { classifyIntent } from "../src/qa/src/q1-intent.js";
+import { buildRetrievalRequest } from "../src/qa/src/cli.js";
+import { synthesizeAnswer } from "../src/qa/src/q4-answer.js";
+import { nextId } from "@safetrace/shared";
+import { readIngestDiagnostics } from "./ingest-diagnostics.js";
+
+function json(res:ServerResponse,status:number,body:unknown){res.writeHead(status,{"content-type":"application/json; charset=utf-8","cache-control":"no-store"});res.end(JSON.stringify(body));}
+function event(res:ServerResponse,data:unknown){if(!res.destroyed)res.write("data: "+JSON.stringify(data)+"\n\n");}
+async function question(req:IncomingMessage):Promise<string>{
+  if(!(req.headers["content-type"]??"").startsWith("application/json"))throw new Error("JSON question required");let bytes=0;const chunks:Buffer[]=[];
+  for await(const chunk of req){const b=Buffer.from(chunk);bytes+=b.length;if(bytes>16384)throw new Error("question body exceeds 16KiB");chunks.push(b);}
+  const body=JSON.parse(Buffer.concat(chunks).toString("utf8")) as {question?:unknown};if(typeof body.question!=="string"||!body.question.trim()||body.question.length>2000)throw new Error("question must be 1–2000 characters");return body.question.trim();
+}
+function localOrigin(req:IncomingMessage):boolean {
+  const origin=req.headers.origin;if(!origin)return req.headers["sec-fetch-site"]!=="cross-site";
+  try{return ["127.0.0.1","localhost","[::1]"].includes(new URL(origin).hostname);}catch{return false;}
+}
+export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:readonly string[];readView?:()=>Promise<LiveKnowledgeView>}):Server{
+  let qaCount=0;
+  let cached: { key:string; view:LiveKnowledgeView } | undefined;
+  let building: { key:string; promise:Promise<LiveKnowledgeView> } | undefined;
+  const read=options.readView??(async()=>{
+    const key=await knowledgeGeneration(options);
+    if(cached?.key===key)return cached.view;
+    if(building?.key===key)return building.promise;
+    const promise=readLiveKnowledgeView(options).then(async view=>{if(await knowledgeGeneration(options)!==key)throw new Error("knowledge changed while constructing cached snapshot; retry");cached={key,view};return view;}).finally(()=>{if(building?.promise===promise)building=undefined;});
+    building={key,promise};return promise;
+  });
+  return createServer(async(req,res)=>{
+    if(!localOrigin(req)){json(res,403,{error:{message:"only local UI origins may access the readonly intelligence API"},data_mode:"live"});return;}
+    const url=new URL(req.url??"/","http://127.0.0.1"),path=url.pathname;
+    try{
+      const isChat=req.method==="POST"&&path==="/api/v1/qa/chat";
+      let q: string | undefined;
+      if(isChat) { try { q=await question(req); } catch { json(res,400,{error:{message:"invalid JSON question or size"},data_mode:"live"}); return; } }
+      if(req.method!=="GET"&&!isChat){json(res,405,{error:{message:"readonly API"},data_mode:"live"});return;}
+      const view=await read();
+      if(path==="/api/v1/health") {json(res,200,{status:"ok",data_mode:"live",read_only:true,automatic_ingestion:false,model_calls_enabled:false,qa_mode:"template",retrieval_mode:"bm25",intel_count:view.intel.length,source_count:new Set(view.raw.map(r=>r.source_id)).size,chunk_count:view.projection.chunks.length,verified_artifact_count:view.projection.evidence.filter(e=>e.kind!=="source").length,historical_enrichment_records:view.recorded.size,snapshot_seq:view.projection.watermark});return;}
+      if(path==="/api/v1/ingest/diagnostics"){json(res,200,readIngestDiagnostics(options.sqlitePath));return;}
+      if(path==="/api/v1/metrics/overview"){
+        const paper=[...view.verified.values()].filter(r=>r.artifacts.papers?.length).length,cvss=[...view.verified.values()].filter(r=>r.artifacts.score_assessment).length;
+        json(res,200,{data_mode:"live",read_only:true,collect:{raw_items:view.raw.length,vulns:view.intel.length,merge_ratio:null,sources:new Set(view.raw.map(r=>r.source_id)).size},latency:{p50_seconds:null,p95_seconds:null,sla_6h_ratio:null},
+          enrich:{coverage_ratio:view.intel.length?view.verified.size/view.intel.length:0,records:view.verified.size,recorded_unverified:view.recorded.size-view.verified.size,dimensions:2,degraded_ratio:null,per_dimension:{paper:{records:paper,coverage_ratio:view.intel.length?paper/view.intel.length:0,confidence_avg:null,degraded_ratio:null,mock_ratio:null},cvss:{records:cvss,coverage_ratio:view.intel.length?cvss/view.intel.length:0,confidence_avg:null,degraded_ratio:null,mock_ratio:null}}},knowledge:{chunks:view.projection.chunks.length},agents:{runs:qaCount,failed:null},cost:{total_cny:null,daily_budget_cny:null,degraded:true,breakdown:{}},snapshot_seq:view.projection.watermark});return;
+      }
+      if(path==="/api/v1/collect/status") {json(res,200,{data_mode:"live",read_only:true,queue_depth:null,watermarks:[],note:"archive snapshot, not collector health or realtime SLA"});return;}
+      if(path==="/api/v1/vulns"){
+        const page=Number(url.searchParams.get("page")??"1"),size=Number(url.searchParams.get("page_size")??"20"),needle=(url.searchParams.get("q")??"").toLowerCase(),severity=url.searchParams.get("severity")??"",poc=url.searchParams.get("has_poc")??"",sort=url.searchParams.get("sort")??"published_at";
+        if(!Number.isSafeInteger(page)||page<1||!Number.isSafeInteger(size)||size<1||size>100||!["","true","false"].includes(poc)||!["published_at","fetched_at","cvss_score"].includes(sort)){json(res,400,{error:{message:"invalid filters"},data_mode:"live"});return;}
+        const rows=view.intel.map(i=>liveIntelItem(view,i)).filter(i=>(!needle||[i.title,i.description,i.cve_id].some(s=>s.toLowerCase().includes(needle)))&&(!severity||i.severity===severity)&&poc!=="true");
+        rows.sort((a,b)=>sort==="cvss_score"?(b.cvss_score??-1)-(a.cvss_score??-1):String(b[sort as "published_at"|"fetched_at"]??"").localeCompare(String(a[sort as "published_at"|"fetched_at"]??"")));
+        json(res,200,{items:rows.slice((page-1)*size,page*size),total:rows.length,page,page_size:size,data_mode:"live",read_only:true});return;
+      }
+      const itemRoute=/^\/api\/v1\/vulns\/([^/]+)(\/evidence)?$/.exec(path);
+      if(itemRoute){
+        const item=view.intel.find(i=>i.intel_id===decodeURIComponent(itemRoute[1]!));
+        if(!item){json(res,404,{error:{message:"intelligence absent or latest DQ not released"},data_mode:"live"});return;}
+        if(!itemRoute[2]){json(res,200,liveIntelItem(view,item));return;}
+        const base=liveEvidenceView(view,item),guidance=await readRemediationEvidence({...options,intelIds:[item.intel_id],limit:1});
+        const extra=guidance.evidence.length?[{dimension:"remediation",value:{guidance:guidance.evidence.map(e=>e.artifact)},source:[...new Set(guidance.evidence.map(e=>e.artifact.source_id))],
+          evidence:guidance.evidence.map(e=>({evidence_id:e.chunk.chunk_id,source:e.artifact.source_id,url:e.artifact.source_url,snippet:e.chunk.text,artifact_sha256:e.chunk.provenance.sha256,original_sha256:e.artifact.source_sha256,parent_lineage_ids:e.parent_lineage_ids})),
+          confidence:null,model:"rule",agent:"f5",version:1,mock:false,degraded_to:null,storage:"readonly-source-derived; not frozen EnrichmentResult",validation:"vendor/agency statement, not verified fix",created_at:null}]:[];
+        json(res,200,{...base,enrichments:[...base.enrichments,...extra],derived_guidance_count:guidance.evidence.length});return;
+      }
+      if(isChat&&q!==undefined){
+        res.writeHead(200,{"content-type":"text/event-stream; charset=utf-8","cache-control":"no-cache, no-transform","x-accel-buffering":"no"});
+        const trace=nextId("tr");const index=new MemoryIndex();
+        if(res.destroyed)return;
+        const plan=classifyIntent({text:q,session_id:nextId("sess"),turn_id:nextId("turn")});
+        const selectedIds=plan.intents.includes("remediation")?view.intel.filter(item=>item.cve_ids.some(cve=>plan.slots.cve_ids.includes(cve))).slice(0,5).map(item=>item.intel_id):[];
+        const guidance=selectedIds.length?await readRemediationEvidence({...options,intelIds:selectedIds,limit:5}):undefined;
+        await index.upsert([...(guidance?.chunks??[]),...view.projection.chunks]);
+        event(res,{event:"stage",stage:"plan",intent:plan.intents[0]??null,data_mode:"live"});
+        const retrievalRequest=buildRetrievalRequest(q,plan,trace);
+        if(plan.intents.includes("paper_related"))retrievalRequest.doc_types=["paper"];
+        const evidence=await index.search(retrievalRequest);event(res,{event:"stage",stage:"retrieve",hit:evidence.chunks.length});
+        const answer=await synthesizeAnswer(q,plan,evidence);if(res.destroyed)return;
+        for(const cite of answer.citations){const chunk=evidence.chunks.find(c=>c.chunk_id===cite.chunk_id);event(res,{event:"citation",id:cite.chunk_id,title:chunk?.doc_type??"evidence",url:cite.url,score:chunk?.score_sparse??chunk?.score_dense??0});}
+        event(res,{event:"token",text:answer.text_md});qaCount++;
+        event(res,{event:"done",abstained:answer.abstained,confidence:answer.confidence,confidence_kind:"heuristic",degraded:false,degraded_to:answer.degraded_to??null,data_mode:"live",read_only:true,answer_mode:"template",retrieval_mode:"bm25",trace_id:trace,cost_cny:0,model_calls:0,snapshot_seq:view.projection.watermark,stale_warning:answer.stale_warning??null});res.end();return;
+      }
+      json(res,404,{error:{message:"not found"},data_mode:"live"});
+    }catch(error){if(res.headersSent){event(res,{event:"error",message:"readonly knowledge snapshot failed; no fixture fallback"});res.end();}else json(res,503,{error:{message:error instanceof Error?error.message:"readonly knowledge unavailable"},data_mode:"live"});}
+  });
+}
+export async function startLiveIntelServer():Promise<Server>{
+  const sqlitePath=process.env.SQLITE_PATH??"./var/safetrace.sqlite";
+  const port=Number(process.env.PORT??8000);if(!Number.isSafeInteger(port)||port<1||port>65535)throw new Error("PORT invalid");
+  const server=createLiveIntelServer({sqlitePath});await new Promise<void>((resolve,reject)=>{server.once("error",reject);server.listen(port,"127.0.0.1",resolve);});
+  console.log("SafeTrace readonly intelligence API http://127.0.0.1:"+port+" (business snapshot + verified artifacts, BM25/template; no cloud/model/collector calls)");return server;
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)void startLiveIntelServer().catch(error=>{console.error(error.message);process.exitCode=1;});

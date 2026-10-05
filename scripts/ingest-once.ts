@@ -1,13 +1,20 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { EventBus, nextId, sha256Json, SqliteEventStore } from "@safetrace/shared";
+import { EventBus, nextId, sha256Json, SqliteEventStore, SqliteEnrichmentStateStore } from "@safetrace/shared";
 import type { FallbackEvent } from "@safetrace/shared";
 import { runIngestOnce } from "../src/ingest/src/pipeline.js";
 import { runEnrichment } from "../src/enrich/src/index.js";
 import { buildSourceEvidenceChunks } from "../src/ingest/src/evidence-chunks.js";
 import { MemoryIndex, indexChunks } from "../src/qa/src/q2-retrieval.js";
 import { indexSourceChunks } from "../src/qa/src/source-index.js";
-import { ModelGateway, createCliCloudConfirm } from "@safetrace/gateway";
+import { ModelGateway } from "@safetrace/gateway";
+import { readIntelIndexSnapshot } from "./intel-index-data.js";
+import { requireVerifiedBackup } from "./verified-backup-gate.js";
+import { acquireIntelIndexLease } from "./intel-index-lock.js";
+import { fileURLToPath } from "node:url";
+import { planPendingEnrichment } from "../src/enrich/src/pending.js";
+import { releasedIntelPayload } from "../src/ingest/src/intel-payload.js";
+import { readKnowledgeProjection } from "../src/qa/src/knowledge-reader.js";
 
 async function readTraceFallbacks(store: SqliteEventStore, traceId: string): Promise<FallbackEvent[]> {
   const found: FallbackEvent[] = [];
@@ -18,30 +25,39 @@ async function readTraceFallbacks(store: SqliteEventStore, traceId: string): Pro
   }
 }
 
-async function readExistingEnrichmentIds(store: SqliteEventStore): Promise<Set<string>> {
-  const ids = new Set<string>();
-  for (let offset = 0; ; offset += 500) {
-    const page = await store.read<{ intel_id: string }>("enrich.items", offset, 500);
-    for (const event of page) ids.add(event.payload.intel_id);
-    if (page.length < 500) return ids;
-  }
-}
 
 async function main(): Promise<void> {
   const traceId = nextId("tr");
   const dbPath = resolve(process.env.SQLITE_PATH ?? "./var/safetrace.sqlite");
   const offline = process.env.SAFETRACE_INGEST_OFFLINE !== "false";
   const previousOfflineFixtures = process.env.OFFLINE_FIXTURES;
+  const apply = process.argv.includes("--apply");
+  if (apply && process.argv.includes("--dry-run")) throw new Error("--apply and --dry-run are mutually exclusive");
+  if (!apply) {
+    const snapshot = readIntelIndexSnapshot(dbPath);
+    const state = new SqliteEnrichmentStateStore(dbPath, { readOnly: true });
+    try {
+      const plan = planPendingEnrichment([...snapshot.accepted.values()].map(entry => entry.item), [...snapshot.accepted.values()].map(entry => entry.verdict), [], { states: state.list() });
+      console.log(JSON.stringify({ mode: "readonly-ingest-plan", existing_accepted: snapshot.accepted.size, existing_rejected: snapshot.rejected.size, pending_enrichment: plan.pending.length, writes: 0, source_requests: 0, model_calls: 0 }));
+    } finally { state.close(); }
+    return;
+  }
+  await requireVerifiedBackup(dbPath);
+  const releaseLease = acquireIntelIndexLease("http://127.0.0.1", "enrichment-db:" + dbPath, fileURLToPath(new URL("../.tmp/data-maintenance-locks/", import.meta.url)));
   await mkdir(dirname(dbPath), { recursive: true });
   const store = new SqliteEventStore(dbPath);
   const bus = new EventBus({ store });
+  const stateStore = new SqliteEnrichmentStateStore(dbPath);
   try {
     process.env.OFFLINE_FIXTURES = offline ? "true" : "false";
     const ingest = await runIngestOnce({ store, offline, trace_id: traceId });
     const acceptedIds = new Set(ingest.verdicts.filter((v) => v.verdict === "pass" || v.verdict === "degrade").map((v) => v.item_id));
     const accepted = ingest.merged.filter((item) => acceptedIds.has(item.intel_id));
-    const alreadyEnriched = await readExistingEnrichmentIds(store);
-    const pendingAccepted = accepted.filter((item) => !alreadyEnriched.has(item.intel_id));
+    const released = accepted.map(releasedIntelPayload);
+    const currentReceipts = [];
+    for (let offset = 0; ; offset += 500) { const page = await bus.readEvents<import("@safetrace/shared").EnrichmentResult>("enrich.items", offset, 500); currentReceipts.push(...page); if (page.length < 500) break; }
+    const plan = planPendingEnrichment(released, ingest.verdicts, currentReceipts.map(receipt => receipt.payload), { states: stateStore.list(), publishedEnrichments: currentReceipts, currentIntelEventIds: new Map(Object.entries(ingest.causation_by_intel_id)) });
+    const pendingAccepted = plan.pending;
     const configuredLimit = process.env.SAFETRACE_ENRICH_LIMIT;
     const enrichLimit = configuredLimit === undefined ? (offline ? pendingAccepted.length : 50) : Number(configuredLimit);
     if (!Number.isInteger(enrichLimit) || enrichLimit < 0 || enrichLimit > 500) throw new Error("SAFETRACE_ENRICH_LIMIT 必须为 0–500 的整数");
@@ -49,7 +65,7 @@ async function main(): Promise<void> {
     const enrichPending = pendingAccepted.length - enrichBatch.length;
     const enriched = await runEnrichment(enrichBatch, {
       offline,
-      bus,
+      bus, stateStore,
       traceId,
       lineage_parent_by_intel_id: ingest.lineage_parent_by_intel_id,
       causation_by_intel_id: ingest.causation_by_intel_id,
@@ -62,20 +78,29 @@ async function main(): Promise<void> {
       ingest.parsed, ingest.fetched, ingest.merged, ingest.verdicts,
       ingest.lineage_parent_by_intel_id, { bus, trace_id: traceId },
     );
+    const knowledge = !offline && !ingest.degraded_to ? await readKnowledgeProjection({ sqlitePath: dbPath, payloadRoots: [process.env.SAFETRACE_CACHE_DIR ?? resolve("tmp/ingest-cache")] }) : undefined;
+    const indexChunksForRun = knowledge?.chunks ?? evidence.chunks;
     const index = new MemoryIndex({ bus });
-    await indexChunks(index, evidence.chunks, {
+    await indexChunks(index, indexChunksForRun, {
       collection_name: "ingest_source_preview", model_id: index.modelId, dim: 256, metric: "cosine",
     }, { trace_id: traceId, parent_lineage_ids: evidence.parent_lineage_ids });
     let vectorIndex: { status: "disabled" | "indexed"; chunks: number } = { status: "disabled", chunks: 0 };
     if (process.env.SAFETRACE_INDEX_QDRANT === "true") {
-      // 人工关卡：降级到云端前必须人工点头（SAFETRACE_CLOUD_FALLBACK 默认 never=拒绝，不出网不花钱）
-      const gateway = new ModelGateway({ bus, confirmCloudFallback: createCliCloudConfirm() });
-      vectorIndex = await indexSourceChunks(evidence.chunks, {
+      if (!knowledge || !knowledge.chunks.length) throw new Error("live verified knowledge projection required before vector publishing");
+      // Build a separate immutable snapshot collection: an append-only upsert into the old collection would retain revoked chunks.
+      const snapshotCollection = "safetrace_knowledge_" + knowledge.fingerprint.slice(0, 16);
+      const localFetch: typeof fetch = async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (!["127.0.0.1", "[::1]"].includes(url.hostname)) throw new Error("knowledge embedding only permits literal loopback");
+        return fetch(input, { ...init, redirect: "error" });
+      };
+      const gateway = new ModelGateway({ bus, configPath: "config/models.local.yml", fetchImpl: localFetch });
+      vectorIndex = await indexSourceChunks(knowledge.chunks, {
         enabled: true, offline, source_degraded_to: ingest.degraded_to,
-        url: process.env.QDRANT_URL, collection: process.env.QDRANT_COLLECTION ?? "safetrace_sources",
+        url: process.env.QDRANT_URL ?? "http://127.0.0.1:6333", collection: snapshotCollection, fetch_impl: localFetch,
         api_key: process.env.QDRANT_API_KEY, profile: gateway.embeddingProfile(),
         embedder: (texts, trace) => gateway.embed("embedder", texts, trace),
-        bus, trace_id: traceId, parent_lineage_ids: evidence.parent_lineage_ids,
+        bus, trace_id: traceId, parent_lineage_ids: [...new Set(knowledge.evidence.flatMap(record => record.parent_lineage_ids))],
       });
     }
     const prior = await bus.readLineage(traceId);
@@ -104,6 +129,10 @@ async function main(): Promise<void> {
       enrichment_fallback_events: enrichmentFallbacks.length,
       run_status: runStatus,
       source_chunks: evidence.chunks.length,
+      verified_knowledge_chunks: knowledge?.chunks.length ?? 0,
+      artifact_chunks: knowledge?.evidence.filter(record => record.kind !== "source").length ?? 0,
+      knowledge_projection_rejections: knowledge?.rejected.length ?? 0,
+      new_collection_requires_manual_cutover: vectorIndex.status === "indexed",
       chunks_skipped: evidence.skipped,
       index_mode: vectorIndex.status === "indexed" ? "qdrant_source_index" : "transient_bm25_preview",
       vector_index: vectorIndex,
@@ -123,7 +152,7 @@ async function main(): Promise<void> {
     throw new Error("ingest:once failed; trace_id=" + traceId + " (inspect SQLite lineage)");
   } finally {
     if (previousOfflineFixtures === undefined) delete process.env.OFFLINE_FIXTURES; else process.env.OFFLINE_FIXTURES = previousOfflineFixtures;
-    store.close();
+    stateStore.close(); store.close(); releaseLease();
   }
 }
 

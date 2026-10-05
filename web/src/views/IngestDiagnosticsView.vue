@@ -75,7 +75,7 @@ onMounted(refresh)
         <strong>富化尚未跑完</strong>
         <span>目前 {{ report.latest_run.counts.enrich_items }}/{{ report.latest_run.counts.accepted_items }} 条有结果记录，其中 fixture/降级论文 {{ report.latest_run.counts.enrich_degraded_items }} 条；结果记录不等于实时论文命中。</span>
         <code>SAFETRACE_ENRICH_OFFLINE=false npm run enrich:pending -- --limit=20</code>
-        <small>分批脚本只选尚无 enrich.items 的放行情报；每条间隔至少 3 秒，强停后可继续。已产生的 fixture 降级记录不会自动覆盖。</small>
+        <small>分批脚本默认只读预览；按逐维状态重试未知、失败、降级或已变更输入，保留 last-good，缺失回执也会修复。执行前验证备份并显式加 --apply；联网每条至少 3 秒，源连续失败停止，不把 fixture 算成功。</small>
       </section>
 
       <section v-if="report.latest_run.warnings.length" class="panel warnings">

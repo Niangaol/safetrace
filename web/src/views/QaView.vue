@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, nextTick, watch } from 'vue'
 
-import { getJson } from '../api'
+import { getJson, BACKEND_DATA_MODE } from '../api'
 import { useQaStore } from '../stores/qa'
 import type { MetricsOverview } from '../types'
 
@@ -64,11 +64,13 @@ watch(() => qa.citations.length, scrollToBottom)
 
 <template>
   <h1 class="page-title">情报问答</h1>
-  <p class="page-subtitle">Q1 规则优先、低置信时 StepPlan 补判；Q2 仍由本地检索提供证据、低召回时 StepPlan 可改写查询；Q4 用 StepPlan 生成结论。各层失败保留规则/原模板，引用始终来自 Q2。</p>
+  <p v-if="BACKEND_DATA_MODE === 'live'" class="page-subtitle">读取当前正式情报与经来源/事件核验的富化工件；BM25 检索、规则模板回答，不调用云模型。没有已验证论文时明确拒答，不用原始漏洞摘要冒充论文。</p>
+  <p v-else class="page-subtitle">Q1 规则优先、低置信时 StepPlan 补判；Q2 仍由本地检索提供证据、低召回时 StepPlan 可改写查询；Q4 用 StepPlan 生成结论。各层失败保留规则/原模板，引用始终来自 Q2。</p>
 
   <div v-if="qa.metrics" class="muted" style="margin-bottom: 12px; font-size: 12px; display: flex; align-items: center; gap: 12px">
-    <span>离线采集 fixture：{{ qa.metrics.collect.vulns }} 条情报 / {{ qa.metrics.knowledge.chunks }} 个检索块</span>
-    <span>本地 fixture 证据 {{ qa.answerMode ? "· Q4：" + answerModeLabel(qa.answerMode) : "" }}；StepPlan 云端模式会发送问题/查询改写请求，请勿输入敏感内容。</span>
+    <span>{{ BACKEND_DATA_MODE === 'live' ? '正式库只读' : '离线采集 fixture' }}：{{ qa.metrics.collect.vulns }} 条情报 / {{ qa.metrics.knowledge.chunks }} 个检索块</span>
+    <span v-if="BACKEND_DATA_MODE === 'live'">已验证来源工件 · Q4 规则模板；历史未知富化记录不进入回答，置信分不是准确率。</span>
+    <span v-else>本地 fixture 证据 {{ qa.answerMode ? "· Q4：" + answerModeLabel(qa.answerMode) : "" }}；StepPlan 云端模式会发送问题/查询改写请求，请勿输入敏感内容。</span>
     <span v-if="qa.llmLayers.length">本轮模型层：{{ qa.llmLayers.map((layer) => LLM_LAYER_LABEL[layer] ?? layer).join("、") }}</span>
     <span v-if="qa.layerFallbacks.length">层内兜底：{{ qa.layerFallbacks.join("；") }}</span>
   </div>
@@ -115,7 +117,8 @@ watch(() => qa.citations.length, scrollToBottom)
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; flex-shrink: 0">
           <path d="M12 9v4 M12 17h.01 M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
         </svg>
-        <span v-if="qa.answerMode === 'template_fallback'">StepPlan 不可用，已回退原 Q4 模板；{{ qa.fallbackReason }}。当前检索证据来自 fixture。</span>
+        <span v-if="BACKEND_DATA_MODE === 'live'">当前读取正式库及已验证富化工件；没有足够证据时拒答。规则模板不代表语义模型或实时监测。</span>
+        <span v-else-if="qa.answerMode === 'template_fallback'">StepPlan 不可用，已回退原 Q4 模板；{{ qa.fallbackReason }}。当前检索证据来自 fixture。</span>
         <span v-else-if="qa.answerMode === 'stepfun'">本次结论由 StepPlan LLM 生成；引用由 Q4 保留，检索证据仍来自 fixture，不代表实时情报。</span>
         <span v-else>本次使用原 Q4 规则模板；输入与检索证据为 fixture。</span>
       </div>

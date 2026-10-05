@@ -1,8 +1,13 @@
+import { ref } from 'vue'
 import { mockCollectStatus, mockEvidence, mockMetrics, mockVuln, mockVulnsPage, mockQaResponse } from './mock'
 
 const BASE = '/api/v1'
 // VITE_DEMO_MODE=true 时才使用前端内置静态 mock；默认请求本地实链 API。
 export const IS_DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
+export const BACKEND_DATA_MODE = ref<'fixture' | 'live' | 'unknown'>(IS_DEMO_MODE ? 'fixture' : 'unknown')
+function recordDataMode(value: any) {
+  if (value?.data_mode === 'fixture' || value?.data_mode === 'live') BACKEND_DATA_MODE.value = value.data_mode
+}
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('api_token')
@@ -15,7 +20,9 @@ async function unwrap<T>(res: Response): Promise<T> {
     const err = body?.detail?.error ?? body?.error
     throw new Error(err?.message ?? `${res.status} ${res.statusText}`)
   }
-  return res.json() as Promise<T>
+  const value = await res.json()
+  recordDataMode(value)
+  return value as T
 }
 
 export function getJson<T>(path: string, params?: Record<string, string | number | boolean | undefined>) {
@@ -69,28 +76,31 @@ export function streamChat(
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const frames = buffer.split('\n\n')
-        buffer = frames.pop() ?? ''
-        for (const frame of frames) {
-          // SSE 帧可能同时带 `event:` 与 `data:` 行，逐行找出 data 载荷即可
-          // （原来只取整帧第一行，遇到多行帧会静默丢事件）
-          for (const line of frame.split('\n')) {
-            const trimmed = line.trim()
-            if (!trimmed.startsWith('data:')) continue
-            const raw = trimmed.slice(5).trim()
-            if (!raw) continue
-            try {
-              onEvent(JSON.parse(raw))
-            } catch {
-              // 非 JSON 的心跳/注释帧直接忽略
-            }
+      let terminal = false
+      const dispatch = (frame: string) => {
+        const raw = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n').trim()
+        if (!raw || raw === 'ping') return
+        let value: Record<string, any>
+        try { value = JSON.parse(raw) } catch { throw new Error('后端返回了无效的 SSE 数据') }
+        recordDataMode(value)
+        if (value.event === 'done' || value.event === 'error') terminal = true
+        onEvent(value) // callback errors must not be mistaken for ignorable JSON heartbeats
+      }
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
+          buffer = buffer.replace(/\r\n/g, '\n')
+          const frames = buffer.split('\n\n')
+          buffer = frames.pop() ?? ''
+          for (const frame of frames) dispatch(frame)
+          if (done) {
+            if (buffer.trim()) dispatch(buffer)
+            if (!terminal) throw new Error('问答连接已结束，但后端没有发送完成状态')
+            break
           }
         }
-      }
+      } finally { reader.releaseLock() }
     } catch (e) {
       if ((e as Error).name !== 'AbortError') onError((e as Error).message)
     }

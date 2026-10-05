@@ -28,7 +28,7 @@ test("source index sends original vectors, source hash, version and audited gate
   const opts = options();
   opts.fetch_impl = (async (input, init) => {
     requests.push({ url: String(input), body: JSON.parse(String(init?.body)) });
-    return new Response("{}", { status: 200 });
+    return new Response(JSON.stringify({ result: { status: "completed" } }), { status: 200 });
   }) as typeof fetch;
   assert.deepEqual(await indexSourceChunks(chunks, opts), { status: "indexed", chunks: 1 });
   assert.equal(requests.length, 2);
@@ -48,7 +48,7 @@ test("runtime cache fallback and Qdrant failure never report indexed", async () 
   let calls = 0;
   const opts = options();
   opts.embedder = async () => ({ vectors: [[0.2, 0.8]], provider: "cache", model_id: "bge-m3", model_version: "v1", degraded_to: "cache" });
-  opts.fetch_impl = (async () => { calls++; return new Response("{}", { status: 200 }); }) as typeof fetch;
+  opts.fetch_impl = (async () => { calls++; return new Response(JSON.stringify({ result: { status: "completed" } }), { status: 200 }); }) as typeof fetch;
   await assert.rejects(indexSourceChunks(chunks, opts));
   assert.equal(calls, 0);
   const broken = options();
