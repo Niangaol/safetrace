@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { getJson, IS_DEMO_MODE } from '../api'
+import { getJson, IS_DEMO_MODE, BACKEND_DATA_MODE } from '../api'
 import type { IngestDiagnostics, IngestSourceState } from '../types'
 
+// 当前代码登记快照，不是运行成功统计；实际产出只看下方 trace。
+const sourceCatalog = [
+  { category: '已利用目录', active: 'cisa_kev', planned: '—' },
+  { category: '公共漏洞库', active: 'nvd_cve / cve_org', planned: '—' },
+  { category: '开源生态通告', active: 'osv', planned: 'ghsa' },
+  { category: '厂商安全公告', active: 'ubuntu_usn', planned: '—' },
+  { category: '研究论文', active: '—', planned: 'arxiv（采集线；富化论文检索单独运行）' },
+]
 const report = ref<IngestDiagnostics | null>(null)
 const loading = ref(false)
 const error = ref('')
@@ -40,12 +48,18 @@ onMounted(refresh)
     <header class="page-head">
       <div>
         <div class="eyebrow">INGEST · EVIDENCE</div>
-        <h1>采集诊断</h1>
+        <h1>多源情报采集</h1>
         <p>按 SQLite lineage 和事件记录展示真实采集、无新数据、fixture 降级与富化进度。</p>
       </div>
       <button class="refresh" :disabled="loading || IS_DEMO_MODE" @click="refresh">{{ loading ? '读取中…' : '刷新' }}</button>
     </header>
 
+    <section class="panel">
+      <div class="panel-title"><h2>来源类别与接入计划</h2><span>代码登记快照 · 非成功数</span></div>
+      <p class="table-note">active 表示已登记可调度，不代表本轮真实抓取；planned 不参与采集。当前页面模式：{{ IS_DEMO_MODE ? '静态演示' : BACKEND_DATA_MODE }}。实际来源、fixture 与失败由下方运行记录证明。</p>
+      <div class="table-wrap"><table><thead><tr><th>类别</th><th>active / 已接入登记</th><th>planned / 计划</th></tr></thead><tbody><tr v-for="source in sourceCatalog" :key="source.category"><td>{{ source.category }}</td><td>{{ source.active }}</td><td>{{ source.planned }}</td></tr></tbody></table></div>
+      <p class="table-note">采集时效 / 6 小时达标：本诊断接口未提供测量，显示「未测」。最近活动时间不等于新漏洞入库延迟。</p>
+    </section>
     <section v-if="IS_DEMO_MODE" class="notice warning">
       <strong>当前是静态演示模式</strong>
       <span>此模式不会请求诊断 API。关闭 VITE_DEMO_MODE 后才能查看本机 SQLite 的真实采集记录。</span>
@@ -84,7 +98,7 @@ onMounted(refresh)
       </section>
 
       <section class="panel">
-        <div class="panel-title"><h2>本轮数据源</h2><span>{{ report.latest_run.sources.length }} 个 runner</span></div>
+        <div class="panel-title"><h2>本轮实际来源与产出</h2><span>{{ report.latest_run.sources.length }} 个 runner</span></div>
         <p class="table-note">状态对应上方 trace 的历史记录，代码修复不会回写旧事件；需重新运行 pipeline 验证新逻辑。一个漏洞可由多个源共同支撑，来源行数会重叠，不能相加当唯一漏洞数。</p>
         <div class="table-wrap"><table>
           <thead><tr><th>来源</th><th>状态</th><th>RawDoc</th><th>归并情报</th><th>说明</th></tr></thead>

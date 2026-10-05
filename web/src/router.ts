@@ -5,6 +5,7 @@ import DetailView from './views/DetailView.vue'
 import IntelView from './views/IntelView.vue'
 import IngestDiagnosticsView from './views/IngestDiagnosticsView.vue'
 import QaView from './views/QaView.vue'
+import SettingsView from './views/SettingsView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -15,5 +16,6 @@ export const router = createRouter({
     { path: '/intel/:id', component: DetailView, props: true },
     { path: '/ingest-diagnostics', component: IngestDiagnosticsView },
     { path: '/qa', component: QaView },
+    { path: '/settings', component: SettingsView },
   ],
 })

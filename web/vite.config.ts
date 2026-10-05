@@ -15,6 +15,8 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    // DSH guarded edits create short-lived atomic-write files; do not watch these intermediates.
+    watch: { ignored: ['**/*.tmpdir/**', '**/*.tmpdir', '**/*.tmp'] },
     allowedHosts: ['localhost', '127.0.0.1', ...localHosts, os.hostname()],
     proxy: {
       // 用 127.0.0.1 而不是 localhost：后者在部分 Windows 环境会解析到 ::1，

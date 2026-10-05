@@ -1,3 +1,9 @@
+import { allowedLocalHost } from "./local-api-security.js";
+import { ModelSettingsController } from "./model-settings-controller.js";
+import { RuntimeSettingsStore } from "../src/gateway/src/runtime-settings-store.js";
+import { LocalModelRuntime } from "../src/gateway/src/local-model-runtime.js";
+import { ActivityStream } from "./activity-stream.js";
+import { resolve, dirname } from "node:path";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { readLiveKnowledgeView, liveIntelItem, liveEvidenceView } from "../src/qa/src/live-knowledge-view.js";
@@ -19,11 +25,13 @@ async function question(req:IncomingMessage):Promise<string>{
   const body=JSON.parse(Buffer.concat(chunks).toString("utf8")) as {question?:unknown};if(typeof body.question!=="string"||!body.question.trim()||body.question.length>2000)throw new Error("question must be 1–2000 characters");return body.question.trim();
 }
 function localOrigin(req:IncomingMessage):boolean {
+  if(!allowedLocalHost(req))return false;
   const origin=req.headers.origin;if(!origin)return req.headers["sec-fetch-site"]!=="cross-site";
   try{return ["127.0.0.1","localhost","[::1]"].includes(new URL(origin).hostname);}catch{return false;}
 }
-export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:readonly string[];readView?:()=>Promise<LiveKnowledgeView>}):Server{
+export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:readonly string[];readView?:()=>Promise<LiveKnowledgeView>;modelSettings?:ModelSettingsController}):Server{
   let qaCount=0;
+  const activity=new ActivityStream(options.sqlitePath),settings=options.modelSettings;
   let cached: { key:string; view:LiveKnowledgeView } | undefined;
   let building: { key:string; promise:Promise<LiveKnowledgeView> } | undefined;
   const read=options.readView??(async()=>{
@@ -33,20 +41,22 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
     const promise=readLiveKnowledgeView(options).then(async view=>{if(await knowledgeGeneration(options)!==key)throw new Error("knowledge changed while constructing cached snapshot; retry");cached={key,view};return view;}).finally(()=>{if(building?.promise===promise)building=undefined;});
     building={key,promise};return promise;
   });
-  return createServer(async(req,res)=>{
+  const server=createServer(async(req,res)=>{
     if(!localOrigin(req)){json(res,403,{error:{message:"only local UI origins may access the readonly intelligence API"},data_mode:"live"});return;}
     const url=new URL(req.url??"/","http://127.0.0.1"),path=url.pathname;
     try{
+      if(settings && await settings.handle(req,res,url))return;
+      if(req.method==="GET"&&path==="/api/v1/activity/stream"){activity.attach(req,res,url);return;}
       const isChat=req.method==="POST"&&path==="/api/v1/qa/chat";
       let q: string | undefined;
       if(isChat) { try { q=await question(req); } catch { json(res,400,{error:{message:"invalid JSON question or size"},data_mode:"live"}); return; } }
       if(req.method!=="GET"&&!isChat){json(res,405,{error:{message:"readonly API"},data_mode:"live"});return;}
       const view=await read();
-      if(path==="/api/v1/health") {json(res,200,{status:"ok",data_mode:"live",read_only:true,automatic_ingestion:false,model_calls_enabled:false,qa_mode:"template",retrieval_mode:"bm25",intel_count:view.intel.length,source_count:new Set(view.raw.map(r=>r.source_id)).size,chunk_count:view.projection.chunks.length,verified_artifact_count:view.projection.evidence.filter(e=>e.kind!=="source").length,historical_enrichment_records:view.recorded.size,snapshot_seq:view.projection.watermark});return;}
+      if(path==="/api/v1/health") {json(res,200,{status:"ok",data_mode:"live",read_only:true,automatic_ingestion:false,model_calls_enabled:settings?.mode()!==undefined&&settings.mode()!=="template",qa_mode:settings?.mode()??"template",retrieval_mode:"bm25",intel_count:view.intel.length,source_count:new Set(view.raw.map(r=>r.source_id)).size,chunk_count:view.projection.chunks.length,verified_artifact_count:view.projection.evidence.filter(e=>e.kind!=="source").length,historical_enrichment_records:view.recorded.size,snapshot_seq:view.projection.watermark});return;}
       if(path==="/api/v1/ingest/diagnostics"){json(res,200,readIngestDiagnostics(options.sqlitePath));return;}
       if(path==="/api/v1/metrics/overview"){
         const paper=[...view.verified.values()].filter(r=>r.artifacts.papers?.length).length,cvss=[...view.verified.values()].filter(r=>r.artifacts.score_assessment).length;
-        json(res,200,{data_mode:"live",read_only:true,collect:{raw_items:view.raw.length,vulns:view.intel.length,merge_ratio:null,sources:new Set(view.raw.map(r=>r.source_id)).size},latency:{p50_seconds:null,p95_seconds:null,sla_6h_ratio:null},
+        json(res,200,{data_mode:"live",read_only:true,qa_mode:settings?.mode()??"template",collect:{raw_items:view.raw.length,vulns:view.intel.length,merge_ratio:null,sources:new Set(view.raw.map(r=>r.source_id)).size},latency:{p50_seconds:null,p95_seconds:null,sla_6h_ratio:null},
           enrich:{coverage_ratio:view.intel.length?view.verified.size/view.intel.length:0,records:view.verified.size,recorded_unverified:view.recorded.size-view.verified.size,dimensions:2,degraded_ratio:null,per_dimension:{paper:{records:paper,coverage_ratio:view.intel.length?paper/view.intel.length:0,confidence_avg:null,degraded_ratio:null,mock_ratio:null},cvss:{records:cvss,coverage_ratio:view.intel.length?cvss/view.intel.length:0,confidence_avg:null,degraded_ratio:null,mock_ratio:null}}},knowledge:{chunks:view.projection.chunks.length},agents:{runs:qaCount,failed:null},cost:{total_cny:null,daily_budget_cny:null,degraded:true,breakdown:{}},snapshot_seq:view.projection.watermark});return;
       }
       if(path==="/api/v1/collect/status") {json(res,200,{data_mode:"live",read_only:true,queue_depth:null,watermarks:[],note:"archive snapshot, not collector health or realtime SLA"});return;}
@@ -71,6 +81,7 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
       if(isChat&&q!==undefined){
         res.writeHead(200,{"content-type":"text/event-stream; charset=utf-8","cache-control":"no-cache, no-transform","x-accel-buffering":"no"});
         const trace=nextId("tr");const index=new MemoryIndex();
+        activity.publish({trace_id:trace,intel_id:null,stage:"answer",status:"running",at:new Date().toISOString(),label:"qa.question_received",details:{reason:"问题已接收；不展示问题正文"}});
         if(res.destroyed)return;
         const plan=classifyIntent({text:q,session_id:nextId("sess"),turn_id:nextId("turn")});
         const selectedIds=plan.intents.includes("remediation")?view.intel.filter(item=>item.cve_ids.some(cve=>plan.slots.cve_ids.includes(cve))).slice(0,5).map(item=>item.intel_id):[];
@@ -80,19 +91,33 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
         const retrievalRequest=buildRetrievalRequest(q,plan,trace);
         if(plan.intents.includes("paper_related"))retrievalRequest.doc_types=["paper"];
         const evidence=await index.search(retrievalRequest);event(res,{event:"stage",stage:"retrieve",hit:evidence.chunks.length});
-        const answer=await synthesizeAnswer(q,plan,evidence);if(res.destroyed)return;
+        activity.publish({trace_id:trace,intel_id:null,stage:"knowledge",status:"success",at:new Date().toISOString(),label:"qa.retrieval",details:{artifact_count:evidence.chunks.length}});
+        event(res,{event:"stage",stage:"generate",answer_mode:settings?.mode()??"template"});
+        let answerMode="template",answerModel="q4-template-v1",modelFallback=false,modelAttempts=0;let answer;
+        try{const selected=settings?await settings.synthesizer(()=>{modelAttempts++;}):undefined;
+          const modelEvidence=selected?.synth?settings!.modelEvidence(evidence,[...view.projection.chunks,...(guidance?.chunks??[])]):evidence;
+          answer=await synthesizeAnswer(q,plan,modelEvidence,selected?.synth?{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id,model_version:"runtime-settings"}}:{});
+          if(selected?.synth && !answer.abstained && !answer.degraded_to){answerMode=selected.mode;answerModel=selected.model_id;}else if(selected?.synth&&!answer.abstained){answerMode="template_fallback";modelFallback=true;}
+        }catch{answer=await synthesizeAnswer(q,plan,evidence);answerMode="template_fallback";modelFallback=true;}
+        activity.publish({trace_id:trace,intel_id:null,stage:modelFallback?"fallback":"answer",status:modelFallback?"degraded":answer.abstained?"rejected":"success",at:new Date().toISOString(),label:"qa.answer_completed",details:{artifact_count:answer.citations.length,reason:modelFallback?"已回退规则模板；无其它云端自动降级":answer.abstained?"证据不足或保护门禁拒答":"引用已绑定检索证据"}});
+        if(res.destroyed)return;
+        event(res,{event:"stage",stage:"check"});
         for(const cite of answer.citations){const chunk=evidence.chunks.find(c=>c.chunk_id===cite.chunk_id);event(res,{event:"citation",id:cite.chunk_id,title:chunk?.doc_type??"evidence",url:cite.url,score:chunk?.score_sparse??chunk?.score_dense??0});}
         event(res,{event:"token",text:answer.text_md});qaCount++;
-        event(res,{event:"done",abstained:answer.abstained,confidence:answer.confidence,confidence_kind:"heuristic",degraded:false,degraded_to:answer.degraded_to??null,data_mode:"live",read_only:true,answer_mode:"template",retrieval_mode:"bm25",trace_id:trace,cost_cny:0,model_calls:0,snapshot_seq:view.projection.watermark,stale_warning:answer.stale_warning??null});res.end();return;
+        event(res,{event:"done",abstained:answer.abstained,confidence:answer.confidence,confidence_kind:"heuristic",degraded:modelFallback,degraded_to:answer.degraded_to??null,data_mode:"live",read_only:true,answer_mode:answerMode,answer_model_id:answerModel,retrieval_mode:"bm25",trace_id:trace,cost_cny:modelAttempts===0?0:null,model_calls:modelAttempts,model_attempts:modelAttempts,snapshot_seq:view.projection.watermark,stale_warning:answer.stale_warning??null});res.end();return;
       }
       json(res,404,{error:{message:"not found"},data_mode:"live"});
     }catch(error){if(res.headersSent){event(res,{event:"error",message:"readonly knowledge snapshot failed; no fixture fallback"});res.end();}else json(res,503,{error:{message:error instanceof Error?error.message:"readonly knowledge unavailable"},data_mode:"live"});}
   });
+  server.on("close",()=>{activity.dispose();void settings?.dispose();});
+  return server;
 }
 export async function startLiveIntelServer():Promise<Server>{
   const sqlitePath=process.env.SQLITE_PATH??"./var/safetrace.sqlite";
   const port=Number(process.env.PORT??8000);if(!Number.isSafeInteger(port)||port<1||port>65535)throw new Error("PORT invalid");
-  const server=createLiveIntelServer({sqlitePath});await new Promise<void>((resolve,reject)=>{server.once("error",reject);server.listen(port,"127.0.0.1",resolve);});
-  console.log("SafeTrace readonly intelligence API http://127.0.0.1:"+port+" (business snapshot + verified artifacts, BM25/template; no cloud/model/collector calls)");return server;
+  const root=resolve("."),runtime=new LocalModelRuntime({modelsRoots:[process.env.SAFETRACE_MODELS_DIR??resolve(dirname(root),"safetrace-models"),resolve(root,"local-models")],executableCandidates:[process.env.SAFETRACE_LLAMA_SERVER??resolve(root,"third_party/llamacpp/llama-server.exe"),resolve(root,"third_party/llama.cpp/llama-server.exe"),resolve(process.env.LOCALAPPDATA??".","Microsoft/WinGet/Packages/ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe/llama-server.exe")]});
+  const settings=new ModelSettingsController({store:new RuntimeSettingsStore(resolve(root,"var/runtime-settings")),runtime});
+  const server=createLiveIntelServer({sqlitePath,modelSettings:settings});await new Promise<void>((resolve,reject)=>{server.once("error",reject);server.listen(port,"127.0.0.1",resolve);});
+  console.log("SafeTrace readonly intelligence API http://127.0.0.1:"+port+" (business archive readonly; BM25; configured template/cloud/local answers; no automatic collector tasks)");return server;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)void startLiveIntelServer().catch(error=>{console.error(error.message);process.exitCode=1;});

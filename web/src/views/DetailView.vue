@@ -1,14 +1,37 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
-import { getJson } from '../api'
-import type { EvidenceResponse, VulnItem } from '../types'
+import { getJson, IS_DEMO_MODE, BACKEND_DATA_MODE } from '../api'
+import type { EvidenceResponse, Evidence, Enrichment, VulnItem } from '../types'
 
 const props = defineProps<{ id: string }>()
 
 const vuln = ref<VulnItem | null>(null)
-const chain = ref<EvidenceResponse | null>(null)
+type ProofEvidence = Evidence & { original_sha256?: string; artifact_sha256?: string; text_sha256?: string; parent_lineage_ids?: string[] }
+type DetailEvidence = EvidenceResponse & { historical_unknown?: boolean; recorded_result_present?: boolean; dimension_states?: { dimension: string; status: string; reason?: string; has_last_good?: boolean }[] }
+const chain = ref<DetailEvidence | null>(null)
+const focusDims = ['paper', 'cvss', 'fix', 'asset', 'poc']
+function proofLabel(e?: Enrichment): string {
+  if (e?.dimension === 'asset' || e?.dimension === 'poc') return '未实现 · 样例不算实证'
+  if (IS_DEMO_MODE || chain.value?.data_mode === 'fixture' || e?.mock) return 'fixture / 预置样例'
+  if (e?.degraded_to) return '降级 · 待复核'
+  if (e?.evidence.length && e.evidence.every(ev => { const p = ev as ProofEvidence; return p.original_sha256 && p.artifact_sha256 && p.text_sha256 && p.parent_lineage_ids?.length })) return '可证明 · 来源与工件已绑定'
+  if (chain.value?.historical_unknown || chain.value?.recorded_result_present && !e) return 'historical / 历史未知'
+  return 'unknown / 尚无充分证明'
+}
+const dimensionCards = computed(() => focusDims.map(dimension => {
+  const result = chain.value?.enrichments.find(e => e.dimension === dimension)
+  const state = chain.value?.dimension_states?.find(s => s.dimension === dimension)
+  return { dimension, result, state, status: dimension === 'asset' || dimension === 'poc' ? '未实现' : proofLabel(result) }
+}))
+function limitation(dim: string): string {
+  return ({ paper: '相关研究不等于该漏洞复现；需核对 CVE、产品与论文关联。', cvss: '评分只适用于来源声明的 CVE / 版本；风险评分不是准确率，缺失不按 0 处理。', fix: '只读修复指引；不是已执行或已验证修复，适用版本与来源须人工复核。', asset: '未接入真实资产清单，不推断你的环境已受影响。', poc: '未实现隔离 PoC 自动复现，不将利用链接当复现成功。' } as Record<string, string>)[dim] ?? '结论须按来源范围复核。'
+}
+function proofHashes(ev: Evidence): string {
+  const p = ev as ProofEvidence
+  return '原文 SHA-256: ' + (p.original_sha256 ?? '未提供') + '\n工件 SHA-256: ' + (p.artifact_sha256 ?? '未提供') + '\n文本 SHA-256: ' + (p.text_sha256 ?? '未提供') + '\nlineage: ' + (p.parent_lineage_ids?.join(' / ') || '未提供')
+}
 const openDims = ref<Set<string>>(new Set())
 const error = ref('')
 const loading = ref(true)
@@ -51,7 +74,7 @@ onMounted(async () => {
   try {
     const [v, e] = await Promise.all([
       getJson<VulnItem>(`/vulns/${props.id}`),
-      getJson<EvidenceResponse>(`/vulns/${props.id}/evidence`),
+      getJson<DetailEvidence>(`/vulns/${props.id}/evidence`),
     ])
     vuln.value = v
     chain.value = e
@@ -83,6 +106,10 @@ onMounted(async () => {
       <span class="muted">· 发布于 {{ vuln.published_at?.slice(0, 19).replace('T', ' ') ?? '—' }}</span>
     </p>
 
+    <p class="muted detail-note">模块二 · 富化与证据 ｜ {{ IS_DEMO_MODE ? '静态样例' : BACKEND_DATA_MODE === 'live' ? '正式库只读' : BACKEND_DATA_MODE === 'fixture' ? '本地 fixture 样例' : '模式待核验' }}。结果记录不等于全部维度完成；置信分 / 质量分均不是准确率。</p>
+    <section class="dimension-grid" aria-label="逐维可信状态">
+      <article v-for="card in dimensionCards" :key="card.dimension" class="dimension-card"><h3>{{ DIM_LABEL[card.dimension] }}</h3><strong>{{ card.status }}</strong><p>来源：{{ card.result?.source?.join(' / ') || card.result?.evidence.map(e => e.source).join(' / ') || '未提供' }}</p><p>范围：当前 {{ vuln.cve_id || vuln.id }}；{{ card.result ? '以该维度字段和引用声明为准' : '暂无可核验结论' }}</p><p>{{ limitation(card.dimension) }}</p><small v-if="card.state">运行状态：{{ card.state.status }} · {{ card.state.reason || '无说明' }}{{ card.state.has_last_good ? ' · 保留 last-good（不等于本轮成功）' : '' }}</small></article>
+    </section>
     <div class="cards" style="margin-bottom: 20px">
       <div class="card" :class="vuln.severity === 'critical' ? 'critical' : vuln.severity === 'high' ? 'warn' : 'ok'">
         <div class="label">危险等级</div>
@@ -108,7 +135,7 @@ onMounted(async () => {
       <div class="card">
         <div class="label">来源数 / 采集延迟</div>
         <div class="value">{{ vuln.source_count }}</div>
-        <div class="hint">{{ vuln.collect_latency_seconds != null ? `${(vuln.collect_latency_seconds / 3600).toFixed(1)}h` : '—' }}</div>
+        <div class="hint">{{ vuln.collect_latency_seconds != null ? `${(vuln.collect_latency_seconds / 3600).toFixed(1)}h` : '未测' }}</div>
       </div>
     </div>
 
@@ -132,7 +159,7 @@ onMounted(async () => {
         fixture 模式：URL / 时间来自 RawDoc 记录；展示文字是多源归并摘要，不是逐源原文片段。请点击来源链接核对上游内容。
       </p>
       <p v-else class="muted" style="font-size: 12px; margin-top: 0">
-        每个字段均显示其来源信息与证据状态。
+        可证明需来源、工件 hash 与 lineage 绑定；unknown / historical 不算已核验。以下保留接口实际返回字段，不补造来源。
       </p>
 
       <div v-for="e in chain?.enrichments ?? []" :key="e.dimension" style="margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden">
@@ -141,10 +168,11 @@ onMounted(async () => {
             <path :d="DIM_ICON[e.dimension] || 'M12 2L2 7v10l10 5 10-5V7L12 2z'" />
           </svg>
           <strong style="min-width: 100px">{{ DIM_LABEL[e.dimension] ?? e.dimension }}</strong>
-          <span v-if="e.confidence != null" class="badge info">置信度 {{ (e.confidence * 100).toFixed(0) }}%</span>
+          <span class="badge warn">{{ proofLabel(e) }}</span>
+          <span v-if="e.confidence != null" class="badge info">启发式置信分（非准确率） {{ (e.confidence * 100).toFixed(0) }}%</span>
           <span v-if="e.mock" class="badge warn">预置数据</span>
           <span v-if="e.degraded_to" class="badge warn">降级：{{ e.degraded_to }}</span>
-          <span v-if="e.quality_score != null" class="badge info">质量分 {{ (e.quality_score * 100).toFixed(0) }}%</span>
+          <span v-if="e.quality_score != null" class="badge info">质量分（非准确率） {{ (e.quality_score * 100).toFixed(0) }}%</span>
           <span class="muted" style="font-size: 11px; margin-left: auto">{{ e.model }} · v{{ e.version }}</span>
           <button class="secondary" style="padding: 4px 12px; font-size: 12px">
             {{ openDims.has(e.dimension) ? '收起' : `证据（${e.evidence.length}）` }}
@@ -153,7 +181,8 @@ onMounted(async () => {
         <div style="padding: 12px 16px; border-top: 1px solid var(--border)">
           <div class="muted" style="font-size: 12px">
             <span v-if="e.source?.length"><strong>来源：</strong>{{ e.source.join(' / ') }} · </span>
-            {{ renderValue(e.value) }}
+            <pre class="dimension-value">{{ renderValue(e.value) }}</pre>
+            <p>{{ limitation(e.dimension) }}</p>
           </div>
           <div v-if="e.degraded_reason" class="label muted" style="margin-top: 4px">
             {{ e.degraded_reason }}
@@ -167,7 +196,8 @@ onMounted(async () => {
               <span v-else class="muted" style="font-size: 12px">{{ ev.source }}（本地计算，无可点开链接）</span>
               <div class="snippet">{{ ev.snippet }}</div>
               <div class="label muted" style="margin-top: 4px">
-                抓取于 {{ ev.fetched_at ?? '—' }}
+                引用编号 {{ ev.evidence_id ?? '未提供' }} · 抓取于 {{ ev.fetched_at ?? '未提供' }}
+                <pre class="hash-proof">{{ proofHashes(ev) }}</pre>
               </div>
             </div>
             <p v-if="!e.evidence.length" class="muted" style="font-size: 12px">该字段暂无证据，请人工确认。</p>
@@ -176,7 +206,7 @@ onMounted(async () => {
       </div>
 
       <p v-if="!chain?.enrichments?.length" class="muted">
-        尚未富化。可调用 POST /enrich/backfill 补齐。
+        暂无可展示的富化证据。历史记录未核验仍为 unknown；补跑需先备份并显式授权，页面不会自动写入。
       </p>
     </div>
 
@@ -197,3 +227,6 @@ onMounted(async () => {
     </div>
   </template>
 </template>
+<style scoped>
+.dimension-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:20px}.dimension-card{padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated)}.dimension-card h3{margin:0 0 10px;font-size:15px}.dimension-card strong{font-size:12px;color:var(--accent)}.dimension-card p,.detail-note{font-size:12px;color:var(--muted);line-height:1.8}.dimension-card small{color:var(--muted)}.hash-proof,.dimension-value{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.8;font-family:monospace}.panel{overflow-x:auto}.panel :deep(a){overflow-wrap:anywhere}.panel>div>div:first-child{flex-wrap:wrap}@media(max-width:600px){.dimension-grid{grid-template-columns:1fr}.page-subtitle{flex-wrap:wrap}}
+</style>

@@ -3,10 +3,11 @@ import { RouterLink } from 'vue-router'
 import { IS_DEMO_MODE, BACKEND_DATA_MODE } from '../api'
 
 const links = [
-  { to: '/dashboard', label: '态势大屏', icon: 'M3 3h7v7H3V3zm0 11h7v7H3v-7zm11-11h7v7h-7V3zm0 11h7v7h-7v-7z' },
-  { to: '/intel', label: '情报列表', icon: 'M12 2l9 4v6c0 5.5-3.8 10.7-9 12-5.2-1.3-9-6.5-9-12V6l9-4z' },
-  { to: '/ingest-diagnostics', label: '采集诊断', icon: 'M3 3v18h18 M7 14l4-4 3 3 6-7' },
-  { to: '/qa', label: '情报问答', icon: 'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.6 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.6-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z' },
+  { to: '/dashboard', label: '工作台', icon: 'M3 3h7v7H3V3zm0 11h7v7H3v-7zm11-11h7v7h-7V3zm0 11h7v7h-7v-7z' },
+  { to: '/intel', label: '富化与证据', icon: 'M12 2l9 4v6c0 5.5-3.8 10.7-9 12-5.2-1.3-9-6.5-9-12V6l9-4z' },
+  { to: '/ingest-diagnostics', label: '多源采集', icon: 'M3 3v18h18 M7 14l4-4 3 3 6-7' },
+  { to: '/qa', label: '证据问答', icon: 'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.6 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.6-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z' },
+  { to: '/settings', label: '设置', icon: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3' },
 ]
 </script>
 
@@ -33,9 +34,12 @@ const links = [
         {{ link.label }}
       </RouterLink>
     </div>
-    <div class="nav-status" :class="{ demo: true }">
+    <div class="nav-status" :class="{ demo: IS_DEMO_MODE || BACKEND_DATA_MODE !== 'live' }">
       <span class="dot"></span>
       {{ IS_DEMO_MODE ? '静态演示' : BACKEND_DATA_MODE === 'live' ? '正式库 · 只读' : BACKEND_DATA_MODE === 'fixture' ? '本地实链 · fixture' : '后端待核验' }}
     </div>
   </nav>
 </template>
+<style scoped>
+.top{flex-wrap:wrap;gap:12px}.nav-links{flex-wrap:wrap}.nav-status{white-space:nowrap}@media(max-width:800px){.top{padding:14px}.nav-links{order:3;width:100%;gap:4px}.nav-links a{padding:8px;font-size:12px}.brand{font-size:14px}.nav-status{margin-left:auto;font-size:10px}}
+</style>

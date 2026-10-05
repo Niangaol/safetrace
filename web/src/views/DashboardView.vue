@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
 import { RouterLink } from 'vue-router'
 // 按需引入 echarts：本页只用到柱状图/折线图 + 直角坐标系 + 提示框 + 图例。
 // 原来 `import * as echarts from 'echarts'` 会把整个库打进主包（实测 1.18 MB / gzip 399 KB），
@@ -13,6 +13,8 @@ echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendCompone
 
 import { getJson, BACKEND_DATA_MODE } from '../api'
 import StatCards from '../components/StatCards.vue'
+import ActivityBoard from '../components/ActivityBoard.vue'
+import CompetitionFocus from '../components/CompetitionFocus.vue'
 import type { CollectStatus, MetricsOverview, Paged, VulnItem } from '../types'
 
 const metrics = ref<MetricsOverview | null>(null)
@@ -67,7 +69,7 @@ function genTrendData(range: string, items: VulnItem[]): RangeData {
 }
 
 function fmtLatency(s: number | null): string {
-  if (s === null) return '—'
+  if (s === null || !Number.isFinite(s)) return '未测'
   if (s < 3600) return `${Math.round(s)}s`
   return `${(s / 3600).toFixed(1)}h`
 }
@@ -82,7 +84,7 @@ function initSevChart() {
   const confidence = names.map(n => dims[n]?.confidence_avg == null ? null : Number((dims[n].confidence_avg * 100).toFixed(0)))
   sevChartInst.setOption({
     tooltip: { trigger: 'axis', backgroundColor: '#0a0f1a', borderColor: '#1e2d44', textStyle: { color: '#e2e8f0' } },
-    legend: { data: ['覆盖率', '平均置信度'], textStyle: { color: '#64748b' }, top: 0 },
+    legend: { data: ['覆盖率', '启发式置信分'], textStyle: { color: '#64748b' }, top: 0 },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
     xAxis: {
       type: 'category', data: names,
@@ -104,7 +106,7 @@ function initSevChart() {
         ]) },
       },
       {
-        name: '平均置信度', type: 'bar', barWidth: 14,
+        name: '启发式置信分', type: 'bar', barWidth: 14,
         data: confidence,
         itemStyle: { borderRadius: [4, 4, 0, 0], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
           { offset: 0, color: '#818cf8' }, { offset: 1, color: '#6366f1' },
@@ -122,7 +124,7 @@ function initTrendChart() {
   const isLongRange = trendRange.value === '90d' || trendRange.value === '1y'
   trendChartInst.setOption({
     tooltip: { trigger: 'axis', backgroundColor: '#0a0f1a', borderColor: '#1e2d44', textStyle: { color: '#e2e8f0' } },
-    legend: { data: ['新增漏洞', '富化完成'], textStyle: { color: '#64748b' }, top: 0 },
+    legend: { data: ['发布样本', '有富化结果的样本'], textStyle: { color: '#64748b' }, top: 0 },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
     xAxis: {
       type: 'category', data: data.labels, boundaryGap: false,
@@ -137,7 +139,7 @@ function initTrendChart() {
     },
     series: [
       {
-        name: '新增漏洞', type: 'line', smooth: !isLongRange, showSymbol: !isLongRange,
+        name: '发布样本', type: 'line', smooth: !isLongRange, showSymbol: !isLongRange,
         data: data.vulns,
         lineStyle: { width: 2, color: '#38bdf8' },
         areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -147,7 +149,7 @@ function initTrendChart() {
         itemStyle: { color: '#38bdf8' },
       },
       {
-        name: '富化完成', type: 'line', smooth: !isLongRange, showSymbol: !isLongRange,
+        name: '有富化结果的样本', type: 'line', smooth: !isLongRange, showSymbol: !isLongRange,
         data: data.enrich,
         lineStyle: { width: 2, color: '#818cf8' },
         areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -192,9 +194,12 @@ onMounted(async () => {
 })
 
 watch(metrics, () => { nextTick(() => initSevChart()) })
+onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChartInst?.dispose(); trendChartInst?.dispose() })
 </script>
 
 <template>
+  <ActivityBoard />
+  <CompetitionFocus />
   <div v-if="loading" class="muted" style="padding: 40px; text-align: center">
     <span class="spinner" style="margin-right: 8px"></span>
     加载中…
@@ -203,7 +208,7 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
   <p v-else-if="error" class="muted">加载失败：{{ error }}</p>
 
   <template v-else>
-    <h1 class="page-title">态势大屏</h1>
+    <h1 class="page-title">数据与证据快照</h1>
     <p class="page-subtitle" v-if="BACKEND_DATA_MODE === 'live'">正式库只读快照：富化只计有当前来源与事件证明的工件；旧记录未核验不算成功。趋势按页面样本的发布时间聚合，不代表实时监测 SLA。</p>
     <p class="page-subtitle" v-else>本机离线 fixture 执行结果：情报数、富化结果与来源记录；非实时漏洞监控。</p>
 
@@ -211,26 +216,27 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
       :items="[
         { label: '漏洞总数', value: metrics?.collect.vulns ?? null, icon: 'shield', variant: 'critical' },
         { label: '原始条目', value: metrics?.collect.raw_items ?? null, hint: `去重合并率 ${((metrics?.collect.merge_ratio ?? 0) * 100).toFixed(1)}%`, icon: 'docs' },
-        { label: '富化覆盖率', value: metrics ? `${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%` : null, icon: 'spark', variant: 'ok' },
+        { label: '富化结果覆盖（非准确率）', value: metrics ? `${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%` : null, icon: 'spark', variant: 'ok' },
         { label: '采集延迟 P50', value: fmtLatency(metrics?.latency.p50_seconds ?? null), icon: 'clock' },
-        { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : null, icon: 'zap', variant: 'ok' },
+        { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : '未测', icon: 'zap', variant: 'ok' },
         { label: '知识库切片', value: metrics?.knowledge.chunks ?? null, icon: 'box' },
-        { label: '模型调用费用', value: '—', hint: 'StepFun 费用暂未计量', icon: 'yen' },
-        { label: '在跑任务', value: status?.queue_depth ?? null, icon: 'refresh' },
+        { label: '模型调用费用', value: metrics?.cost.total_cny != null ? `¥${metrics.cost.total_cny.toFixed(4)}` : '未测', hint: '仅后端已计量范围', icon: 'yen' },
+        { label: '队列深度', value: status?.queue_depth ?? null, icon: 'refresh' },
       ]"
     />
 
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px">
+    <div class="chart-grid">
       <div class="panel fade-in">
         <div class="panel-header">
-          <h3>富化维度覆盖与置信度</h3>
-          <span class="badge-count">{{ metrics?.enrich.dimensions ?? 7 }} 维度</span>
+          <h3>逐维覆盖与启发式置信分</h3>
+          <span class="badge-count">{{ metrics?.enrich.dimensions ?? 0 }} 维度</span>
         </div>
+        <p class="muted chart-note">覆盖率只表示存在结果；置信分与质量分不是人工评测准确率。空维度没有可展示数据。</p>
         <div ref="sevChart" style="height: 260px"></div>
       </div>
       <div class="panel fade-in">
         <div class="panel-header">
-          <h3>采集趋势</h3>
+          <h3>页面样本发布时间分布</h3>
           <div class="range-selector">
             <button :class="{ active: trendRange === '7d' }" @click="switchTrendRange('7d')">7天</button>
             <button :class="{ active: trendRange === '30d' }" @click="switchTrendRange('30d')">30天</button>
@@ -238,13 +244,14 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
             <button :class="{ active: trendRange === '1y' }" @click="switchTrendRange('1y')">全年</button>
           </div>
         </div>
+        <p class="muted chart-note">最多 {{ latest?.items.length ?? 0 }} 条样本，按发布时间聚合；不是采集吞吐量或富化完成时间。</p>
         <div ref="trendChart" style="height: 260px"></div>
       </div>
     </div>
 
     <div class="panel fade-in">
       <div class="panel-header">
-        <h3>采集源水位线</h3>
+        <h3>实际来源水位（非登记源数量）</h3>
         <span class="badge-count">{{ status?.watermarks?.filter(w => w.success).length ?? 0 }}/{{ status?.watermarks?.length ?? 0 }} {{ status?.data_mode === 'fixture' ? '回放成功' : '正常' }}</span>
       </div>
       <table>
@@ -315,3 +322,6 @@ watch(metrics, () => { nextTick(() => initSevChart()) })
     </div>
   </template>
 </template>
+<style scoped>
+.chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.chart-note{font-size:12px;line-height:1.7}.panel{overflow-x:auto}.panel-header{flex-wrap:wrap;gap:8px}table{min-width:560px}@media(max-width:850px){.chart-grid{grid-template-columns:1fr}}
+</style>

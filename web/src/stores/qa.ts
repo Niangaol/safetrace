@@ -10,7 +10,7 @@ export const useQaStore = defineStore('qa', () => {
   const stage = ref('')
   const thinking = ref(false)
   const degraded = ref(false)
-  const answerMode = ref<'stepfun' | 'template' | 'template_fallback' | ''>('')
+  const answerMode = ref<'stepfun' | 'cloud' | 'local' | 'template' | 'template_fallback' | ''>('')
   const answerModelId = ref('')
   const fallbackReason = ref('')
   const llmLayers = ref<string[]>([])
@@ -45,7 +45,7 @@ export const useQaStore = defineStore('qa', () => {
         switch (event.event) {
           case 'stage':
             stage.value = event.stage
-            if (['stepfun', 'template', 'template_fallback'].includes(event.answer_mode)) answerMode.value = event.answer_mode
+            if (['stepfun', 'cloud', 'local', 'template', 'template_fallback'].includes(event.answer_mode)) answerMode.value = event.answer_mode
             break
           case 'citation':
             citations.value = [...citations.value, event as unknown as Citation]
@@ -56,7 +56,7 @@ export const useQaStore = defineStore('qa', () => {
           case 'done':
             thinking.value = false
             degraded.value = Boolean(event.degraded)
-            answerMode.value = ['stepfun', 'template', 'template_fallback'].includes(event.answer_mode) ? event.answer_mode : 'template'
+            answerMode.value = ['stepfun', 'cloud', 'local', 'template', 'template_fallback'].includes(event.answer_mode) ? event.answer_mode : 'template'
             answerModelId.value = event.answer_model_id ?? ''
             fallbackReason.value = event.fallback_reason ?? ''
             llmLayers.value = Array.isArray(event.llm_layers) ? event.llm_layers.filter((value: unknown): value is string => typeof value === 'string') : []

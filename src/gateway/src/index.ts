@@ -20,6 +20,8 @@ export { createCliCloudConfirm, cloudFallbackPolicy, type CloudFallbackPolicy, t
 
 export interface GatewayOptions {
   configPath?: string;
+  /** Controlled runtime settings inject a validated config without mutating global environment. */
+  config?: ModelsConfig;
   usageStore?: UsageStore;
   /** Context catalog; production callers inject a SQLite-backed store, tests use the in-memory defaults. */
   contextStore?: LlmContextStore;
@@ -86,7 +88,7 @@ export class ModelGateway {
   private cache = new Map<string, LlmReply>();
 
   constructor(private opts: GatewayOptions = {}) {
-    this.cfg = loadModelsConfig(opts.configPath);
+    this.cfg = opts.config ?? loadModelsConfig(opts.configPath);
     this.usage = opts.usageStore ?? new MemoryUsageStore();
     this.contextStore = opts.contextStore ?? new MemoryLlmContextStore();
     for (const [name, profile] of Object.entries(this.cfg.roles)) {

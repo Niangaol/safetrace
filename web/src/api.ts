@@ -5,7 +5,10 @@ const BASE = '/api/v1'
 // VITE_DEMO_MODE=true 时才使用前端内置静态 mock；默认请求本地实链 API。
 export const IS_DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
 export const BACKEND_DATA_MODE = ref<'fixture' | 'live' | 'unknown'>(IS_DEMO_MODE ? 'fixture' : 'unknown')
+export const BACKEND_QA_MODE = ref('unknown')
 function recordDataMode(value: any) {
+  if (typeof value?.qa_mode === 'string') BACKEND_QA_MODE.value = value.qa_mode
+  if (typeof value?.answer_mode === 'string') BACKEND_QA_MODE.value = value.answer_mode
   if (value?.data_mode === 'fixture' || value?.data_mode === 'live') BACKEND_DATA_MODE.value = value.data_mode
 }
 

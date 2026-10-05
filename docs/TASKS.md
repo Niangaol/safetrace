@@ -19,10 +19,12 @@
 | N06 备份恢复 | 已完成本机恢复验收 | 7表一致性SQLite副本 + 5237完整向量 + 6原始payload；单独临时集合真实恢复比对后删除，正式库不覆盖 |
 | N07 来源/富化投影 | 已实现，临时库整链与正式库只读验收通过；正式工件复核待办 | 原文/论文/CVSS有hash、causation及lineage；真实只读API已兼容前端、无长期服务切换；旧1123记录无sidecar，不能自动变已验证 |
 | N08 逐维状态/续跑 | 已实现，回归与保存原文10条小批通过 | source bytes/评分依赖/TTL失效，last-good、原子状态提交、回执repair进入默认pending；CVSS/EPSS主CVE不串分 |
+| C01 赛题重点前端与模型设置 / 实时工作台 | 已实现，真实浏览器与四门禁验收 | 三主线与可信缺口置顶；data_mode/qa_mode如实而非写死；新增/设置页（私密加密草稿、显式测试与启用、CSRF/Origin/Host/启用确认门、GGUF受控runtime）；SSE真实事件拟物工作台、hover/键盘字段、历史与重连明确标记；562/562与前端两项smoke通过 |
 | N20 评测骨架 | 已实现，人工标注/隐藏集/真实检索待办 | 3篇官方metadata，4个agent提议参考case；排序与发布策略分开，不冒充盲测或真实准确率 |
 | N09 保存原文评分复核 | 小批已验收，扩大范围仍待办 | 当前10条NIST主CVE评分正式发布并可引用；备份前后验证，未验证原文不能借proof；未调用网络/模型/向量 |
 | N10 修复建议维度 | 确定性模块与只读派生接口/问答已验收；统一队列/公用契约待确认 | USN同公告CVE+固定包版本；KEV通用指引，来源声明非验证修复；51边界测试，正式保存源只读预览 |
 | N11–N19、N21–N24 | 后续独立验收 | 本轮重点富化质量；新增有效维度、真实小批复核与语义/多轮等不能按本轮完成报告 |
+| C01 赛题重点前端、模型设置与实时工作台 | 已实现，真实浏览器与全门禁验收 | 三主线/可信缺口置顶；data_mode 与 qa_mode 如实显示；新增设置页（私密加密草稿、CSRF/Origin/Host、显式测试与启用、GGUF 受控 runtime）；SSE 真实事件拟物工作台与 hover/键盘细节；562/562 与前端两项 smoke 通过；云真实生成、第二份托管加载、盲测待办 |
 
 ## 0. 怎么用这份台账
 
@@ -62,10 +64,10 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 | 第 1 阶段 契约扩展（**必须 D6 前**） | 6 | 5 | 1 | 0 | 0 |
 | 第 2 阶段 架构改造（D13–D18） | 6 | 3 | 3 | 0 | 0 |
 | 第 3 阶段 证据链（D7–D18） | 7 | 4 | 1 | 0 | 2 |
-| 第 4 阶段 文档口径同步 | 13 | 12 | 0 | 1 | 0 |
+| 第 4 阶段 文档口径同步 | 13 | 5 | 1 | 7 | 0 |
 | 第 5 阶段 冻结与交件（D19–D22） | 4 | 4 | 0 | 0 | 0 |
 | 第 6 阶段 PRD v1.0 需求补齐 | 10 | 7 | 3 | 0 | 0 |
-| **合计** | **53** | **35** | **9** | **7** | **2** |
+| **合计** | **53** | **28** | **10** | **14** | **2** |
 
 > 本表随 PR 更新。任何一项转 `已砍` 必须在 PR 描述里写清「保留下什么证据」。
 
@@ -127,19 +129,19 @@ D2(9/29)    D6★(10/3)   D9(10/6)   D11(10/8)  D13(10/10)  D16★(10/13)  D18�
 
 | id | 线 | 标题 | 依赖 | 状态 | 砍单层级 |
 |---|---|---|---|---|---|
-| D-01 | 丙 | `README.md:21/34`、`ROADMAP.md:19` 写「7 个 JSON Schema」，实际 8 个，而 `README.md:128` 又写「8 schema」——统一为实际数 | C-06 | 待办 | 基础 |
-| D-02 | 丙 | 契约冻结日三个口径并存：README:128「D1 冻结 v1」/ ROADMAP:19「D6」/ README:10 与 GITHUB-FLOW:101「D8」→ 统一为「v1 内容 D1 落库，D6=10/3 形式化冻结」 | C-06 | 待办 | 基础 |
-| D-03 | 丙 | `PROJECT-INTRO.md:15/75`、`README.md:29` 说编排框架是 **pi-agent-core——从未安装、零代码、零 spike**，实际是自研 TaskGraph → 改为适配层 + LangGraph 后端 + 原生后备；pi-agent-core 移入「已评估未采用」并写明理由 | A-01 | 待办 | 基础 |
+| D-01 | 丙 | `README.md:21/34`、`ROADMAP.md:19` 写「7 个 JSON Schema」，实际 8 个，而 `README.md:128` 又写「8 schema」——统一为实际数 | C-06 | **已完成（2026-10-05）** | 基础 | README §1 目录树与 §7 状态表均按实测 8 schema 编写；ROADMAP D6 行 7→8 并补 v1.1 冻结状态；`npm run validate:contracts` 实测输出「8 个 schema 契约文件 / fixtures 12」 |
+| D-02 | 丙 | 契约冻结日三个口径并存：README:128「D1 冻结 v1」/ ROADMAP:19「D6」/ README:10 与 GITHUB-FLOW:101「D8」→ 统一为「v1 内容 D1 落库，D6=10/3 形式化冻结」 | C-06 | **已完成（2026-10-05）** | 基础 | README §1 红线第 1 条、§7 状态表与 ROADMAP D6 行统一为「v1 内容 D1 落库，D6=10/3 形式化冻结，三线 sign-off 收尾中」；旧 README:128 段落已随状态表重写一并替换 |
+| D-03 | 丙 | `PROJECT-INTRO.md:15/75`、`README.md:29` 说编排框架是 **pi-agent-core——从未安装、零代码、零 spike**，实际是自研 TaskGraph → 改为适配层 + 原生后端；pi-agent-core 移入「已评估未采用」并写明理由 | A-01 | **已完成（2026-10-05）** | 基础 | README 目录树、PROJECT-INTRO §一头表与架构图均已改为自研 TaskGraph（statemachine 适配层 + native 后端）；**并以实测修正台账原文目标**：LangGraph 后端并非"后备"，2026-09-30 已判定死代码（依赖从未进 package.json、4 用例永久 SKIP）并删除，现为 native 单后端；pi-agent-core 标注「已评估未采用（从未安装、零代码、零 spike）」 |
 | D-04 | 丙 | 黄金问答「20 条」vs 实际 10 条（README:48/97/133/160、ROADMAP:22/86、PROJECT-INTRO:41/95）→ 扩到 20 后统一；未扩前如实写 10/20 | R-04 | 已完成 | 基础 | ✅ R-04（commit d631231）已把 fixture 扩到 20 条，README:48/97 与 ROADMAP:22 的「20 条」口径自此与 fixtures/golden-qa.v0.json 实际一致；README:133 的 `src/qa` 测试数与 README:160 的黄金问答数字随 C-06/D-01 一并核准 |
 | D-05 | 丙 | `README.md:49`「Trace 全落 Langfuse」vs 代码零 Langfuse → 改为「S2 总线 trace_id 已贯穿；Langfuse 外发在 D13-D18 落地」 | A-06 | 待办 | 砍③ |
-| D-06 | 丙 | `PROJECT-INTRO.md` 与 README 多用 `C:\Users\niangao\safetrace\`、`C:\Users\niangao\asktrace9\` → 改成本仓库实际路径与远端 | — | 待办 | 基础 |
-| D-07 | 丙 | `PROJECT-INTRO.md:136` 指向 `asktrace9/docs/` 四篇报告 + 三张图，**仓库内完全缺失**（`docs/` 只有 GITHUB-FLOW.md）；交叉引用（GITHUB-FLOW:4 引 03-roadmap、README:54、GITHUB-FLOW:86 引 02-report）全部不可解析 → 迁入 `docs/` 或改写索引 | — | 待办 | 基础 |
-| D-08 | 丙 | `PROJECT-INTRO.md:138` 称合订本 68 页，仓库内 PDF 实为 **15 页**，且是 README/ROADMAP/PROJECT-INTRO 的合订、早于 D1 交付 → 改页数、说明性质 | — | 待办 | 基础 |
+| D-06 | 丙 | `PROJECT-INTRO.md` 与 README 多用 `C:\Users\niangao\safetrace\`、`C:\Users\niangao\asktrace9\` → 改成本仓库实际路径与远端 | — | **已完成（2026-10-05）** | 基础 | PROJECT-INTRO §一「工程目录」行已改为仓库实际路径（`D:/AgentPrograms/safetrace` 本仓库 + `safetrace-models` 5.0G + `qdrant` Qdrant 二进制实测运行中）；README 目录树同步核实无残留旧用户目录引用（grep 零命中） |
+| D-07 | 丙 | `PROJECT-INTRO.md` 曾指向 `asktrace9/docs/` 四篇报告 + 三张图，**仓库内完全缺失**；交叉引用全部不可解析 → 迁入 `docs/` 或改写索引 | — | **进行中（2026-10-05 阻塞升级）** | 基础 | 本轮核实发现事态比原登记严重：`C:/Users/niangao/asktrace9/` **整个目录已不存在**（全盘 find 无副本，四篇 md + 三张 SVG/JPG 去向不明，回收站未见）。PROJECT-INTRO §四表格已改为如实标注「源目录已不存在，需重建或从合订本导出」。**交件前 S-03 依赖这四篇，需队长确认重建口径** |
+| D-08 | 丙 | `PROJECT-INTRO.md:138` 称合订本 68 页，仓库内 PDF 实为 **15 页**，且是 README/ROADMAP/PROJECT-INTRO 的合订、早于 D1 交付 → 改页数、说明性质 | — | **已完成（2026-10-05）** | 基础 | PDF 页数已用 `/Count` 解析实测复核 = **15 页**；PROJECT-INTRO §四表格改为「实为 15 页，README/ROADMAP/PROJECT-INTRO 合订、早于 D1 交付」，指向本仓库根 `SafeTrace-三件套-内部版.docx/.pdf`（实测在位） |
 | D-09 | 丙 | `README.md:51`「A1 自愈 L1/L2」vs 只有角色声明 → 按 A-06 实施后改写；未完成前如实标注 | A-06 | 待办 | 基础 |
 | D-10 | 丙(H) | `config/models.yml:4` 说 openai_compat 对四家「通用」→ 补注「chat/embed 通用；rerank 无标准端点，会显式报错（`openai-compat.ts:107-111`）」 | — | 待办 | 基础 |
-| D-11 | 丙 | `src/qa/package.json` 声明依赖 `@safetrace/gateway`，但 Q 线零 import → 删空声明或注明「经 AnswerSynthesizer 注入、不直接依赖」 | — | 待办 | 基础 |
-| D-12 | 丙 | `src/qa/server.ts:127` 只绑 `127.0.0.1`，README 未提 → 补注（这其实是合规优点，写明「默认仅本机」） | — | 待办 | 基础 |
-| D-13 | 丙 | README:123「零外部依赖即可演示」在接入 LangGraph 后不成立 → 改写为「零 provider SDK、无 API key 亦可离线跑通；编排层可选接 LangGraph」，并按新三条红线措辞 + CI grep 断言重述 | A-01 | 待办 | 基础 |
+| D-11 | 丙 | `src/qa/package.json` 声明依赖 `@safetrace/gateway`，但 Q 线零 import → 删空声明或注明「经 AnswerSynthesizer 注入、不直接依赖」 | — | **已完成（2026-10-05 核实后注销）** | 基础 | 实测推翻原登记前提：`src/qa/src/index.ts` 的约定注释（「本包不 import @safetrace/gateway」）已过时——`server.ts:10` 确有 `import { ModelGateway } from "@safetrace/gateway"`（用于 /v1/retrieve 服务注入）。依赖声明与实际相符，本项作为「登记失实」注销，无需改动 |
+| D-12 | 丙 | `src/qa/server.ts` 只绑 `127.0.0.1`，README 未提 → 补注（这其实是合规优点，写明「默认仅本机」） | — | **已完成（2026-10-05）** | 基础 | README §7 状态表已在 `src/qa` 行与已知限制⑦如实标注；`server.ts:225` 实测 `listen(port, "127.0.0.1")`，只回环不对外，作为合规优点写入 |
+| D-13 | 丙 | README:123「零外部依赖即可演示」在接入 LangGraph 后不成立 → 改写为「零 provider SDK、无 API key 亦可离线跑通；编排层可选接 LangGraph」，并按新三条红线措辞 + CI grep 断言重述 | A-01 | **已完成（2026-10-05）** | 基础 | README §7 已改为「零 provider SDK 即可演示」并补「2026-10-05 实测门禁：543/543、冒烟全段 PASS」；**台账原文需按实测修正**：LangGraph 已删、并非"可选接"，编排为 native 单后端；「零外部依赖」的准确口径是「零 provider SDK + 零 API key + 离线 fixture 可复现」 |
 
 ## 8. 第 5 阶段：冻结与交件（D19–D22）
 

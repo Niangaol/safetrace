@@ -16,7 +16,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --import ./scripts/test-network-guard.mjs --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node --import ./scripts/test-network-guard.mjs --import tsx --test --test-concurrency=2 \"src/**/*.test.ts\"",
     "test:live": "node --import tsx --test \"src/gateway/test/*.live.ts\"",
     "typecheck": "tsc -p tsconfig.json",
     "validate:contracts": "node scripts/validate-contracts.mjs",
@@ -36,7 +36,7 @@
     "trace:lineage": "tsx scripts/trace-lineage.ts",
     "backup:intel": "node --import tsx scripts/backup-intel.ts",
     "knowledge:preview": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/knowledge-preview.ts",
-    "serve:live": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/live-intel-server.ts",
+    "serve:live": "node --import tsx scripts/live-intel-server.ts",
     "enrich:evaluate": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/enrich-evaluate.ts",
     "enrich:captured:cvss": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/reconcile-captured-cvss.ts",
     "remediation:preview": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/remediation-preview.ts",
