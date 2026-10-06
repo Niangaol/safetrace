@@ -3,9 +3,14 @@ import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { RouterView } from 'vue-router'
 
 import TopNav from './components/TopNav.vue'
+import AmbientBackground from './effects/AmbientBackground.vue'
+import { attachPointerLight } from './effects/pointer-light'
 import { IS_DEMO_MODE, BACKEND_DATA_MODE, BACKEND_QA_MODE, getJson } from './api'
+
 const backendError = ref('')
 const modeChanged = (event: Event) => { const mode = (event as CustomEvent).detail; if (['template','cloud','local'].includes(mode)) BACKEND_QA_MODE.value = mode }
+let detachPointerLight: (() => void) | undefined
+
 onBeforeUnmount(() => window.removeEventListener('safetrace-model-mode', modeChanged))
 
 onMounted(() => {
@@ -14,10 +19,14 @@ onMounted(() => {
   const saved = localStorage.getItem('api_token')
   if (saved === null) localStorage.setItem('api_token', '')
   if (!IS_DEMO_MODE) getJson('/health').catch(error => { backendError.value = (error as Error).message })
+  detachPointerLight = attachPointerLight()
 })
+onBeforeUnmount(() => detachPointerLight?.())
 </script>
 
 <template>
+  <AmbientBackground />
+  <div class="pointer-spot" aria-hidden="true"></div>
   <TopNav />
   <main>
     <div v-if="IS_DEMO_MODE" class="demo-banner" role="status">

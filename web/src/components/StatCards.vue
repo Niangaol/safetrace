@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import CountUpNumber from '../effects/CountUpNumber.vue'
+
 defineProps<{
-  items: { label: string; value: string | number | null; hint?: string; icon?: string; variant?: string }[]
+  items: { label: string; value: string | number | null; hint?: string; icon?: string; variant?: string; numeric?: { value: number; decimals?: number; prefix?: string; suffix?: string } }[]
 }>()
 
 const ICON_PATHS: Record<string, string> = {
@@ -18,13 +20,24 @@ const ICON_PATHS: Record<string, string> = {
 <template>
   <div class="cards">
     <div
-      v-for="item in items"
+      v-for="(item, index) in items"
       :key="item.label"
-      class="card fade-in"
+      class="card fade-in fx-sheen fx-lift"
       :class="item.variant || ''"
+      data-sheen
+      :style="{ '--fx-delay': index * 55 + 'ms' }"
     >
       <div class="label">{{ item.label }}</div>
-      <div class="value">{{ item.value ?? '—' }}</div>
+      <div class="value">
+        <CountUpNumber
+          v-if="item.numeric"
+          :value="item.numeric.value"
+          :decimals="item.numeric.decimals ?? 0"
+          :prefix="item.numeric.prefix ?? ''"
+          :suffix="item.numeric.suffix ?? ''"
+        />
+        <template v-else>{{ item.value ?? '—' }}</template>
+      </div>
       <div v-if="item.hint" class="hint">{{ item.hint }}</div>
       <div v-if="item.icon" class="icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

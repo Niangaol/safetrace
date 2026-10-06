@@ -4,6 +4,8 @@ import { RouterLink } from 'vue-router'
 
 import { getJson, IS_DEMO_MODE, BACKEND_DATA_MODE } from '../api'
 import type { EvidenceResponse, Evidence, Enrichment, VulnItem } from '../types'
+import CountUpNumber from '../effects/CountUpNumber.vue'
+import RevealOnScroll from '../effects/RevealOnScroll.vue'
 
 const props = defineProps<{ id: string }>()
 
@@ -99,7 +101,7 @@ onMounted(async () => {
       <RouterLink to="/intel" style="font-size: 12px">← 返回列表</RouterLink>
     </div>
 
-    <h1 class="page-title" style="font-size: 20px; margin-bottom: 4px">{{ vuln.title }}</h1>
+    <h1 class="page-title fx-underline" style="font-size: 20px; margin-bottom: 4px">{{ vuln.title }}</h1>
     <p class="page-subtitle" style="display: flex; gap: 12px; align-items: center; margin-bottom: 20px">
       <span style="font-family: 'JetBrains Mono', monospace">{{ vuln.cve_id || vuln.id }}</span>
       <span v-if="vuln.ghsa_id" class="muted">· {{ vuln.ghsa_id }}</span>
@@ -108,9 +110,9 @@ onMounted(async () => {
 
     <p class="muted detail-note">模块二 · 富化与证据 ｜ {{ IS_DEMO_MODE ? '静态样例' : BACKEND_DATA_MODE === 'live' ? '正式库只读' : BACKEND_DATA_MODE === 'fixture' ? '本地 fixture 样例' : '模式待核验' }}。结果记录不等于全部维度完成；置信分 / 质量分均不是准确率。</p>
     <section class="dimension-grid" aria-label="逐维可信状态">
-      <article v-for="card in dimensionCards" :key="card.dimension" class="dimension-card"><h3>{{ DIM_LABEL[card.dimension] }}</h3><strong>{{ card.status }}</strong><p>来源：{{ card.result?.source?.join(' / ') || card.result?.evidence.map(e => e.source).join(' / ') || '未提供' }}</p><p>范围：当前 {{ vuln.cve_id || vuln.id }}；{{ card.result ? '以该维度字段和引用声明为准' : '暂无可核验结论' }}</p><p>{{ limitation(card.dimension) }}</p><small v-if="card.state">运行状态：{{ card.state.status }} · {{ card.state.reason || '无说明' }}{{ card.state.has_last_good ? ' · 保留 last-good（不等于本轮成功）' : '' }}</small></article>
+      <article v-for="(card, index) in dimensionCards" :key="card.dimension" class="dimension-card fx-sheen fx-lift" data-sheen :style="{ '--fx-delay': index * 80 + 'ms' }"><h3>{{ DIM_LABEL[card.dimension] }}</h3><strong>{{ card.status }}</strong><p>来源：{{ card.result?.source?.join(' / ') || card.result?.evidence.map(e => e.source).join(' / ') || '未提供' }}</p><p>范围：当前 {{ vuln.cve_id || vuln.id }}；{{ card.result ? '以该维度字段和引用声明为准' : '暂无可核验结论' }}</p><p>{{ limitation(card.dimension) }}</p><small v-if="card.state">运行状态：{{ card.state.status }} · {{ card.state.reason || '无说明' }}{{ card.state.has_last_good ? ' · 保留 last-good（不等于本轮成功）' : '' }}</small></article>
     </section>
-    <div class="cards" style="margin-bottom: 20px">
+    <div class="cards fx-in" style="margin-bottom: 20px">
       <div class="card" :class="vuln.severity === 'critical' ? 'critical' : vuln.severity === 'high' ? 'warn' : 'ok'">
         <div class="label">危险等级</div>
         <div class="value">
@@ -125,7 +127,7 @@ onMounted(async () => {
       </div>
       <div class="card">
         <div class="label">CVSS 基础分</div>
-        <div class="value">{{ vuln.cvss_score ?? '—' }}</div>
+        <div class="value"><CountUpNumber v-if="vuln.cvss_score != null" :value="vuln.cvss_score" :decimals="1" /><template v-else>—</template></div>
         <div class="hint" style="font-family: 'JetBrains Mono', monospace; font-size: 10px">{{ vuln.cvss_vector ?? '无向量' }}</div>
       </div>
       <div class="card">
@@ -134,13 +136,14 @@ onMounted(async () => {
       </div>
       <div class="card">
         <div class="label">来源数 / 采集延迟</div>
-        <div class="value">{{ vuln.source_count }}</div>
+        <div class="value"><CountUpNumber :value="vuln.source_count" suffix=" 个" /></div>
         <div class="hint">{{ vuln.collect_latency_seconds != null ? `${(vuln.collect_latency_seconds / 3600).toFixed(1)}h` : '未测' }}</div>
       </div>
     </div>
 
+    <RevealOnScroll as="div" :delay="60">
     <div class="panel fade-in" style="margin-bottom: 16px">
-      <div class="panel-header"><h3>描述</h3></div>
+      <div class="panel-header"><h3 class="fx-underline">描述</h3></div>
       <p class="answer">{{ vuln.description || vuln.summary || '暂无描述' }}</p>
       <div v-if="vuln.cwe.length" class="muted" style="margin-top: 12px; font-size: 12px">
         <strong>CWE：</strong>{{ vuln.cwe.join('、') }}
@@ -150,9 +153,12 @@ onMounted(async () => {
       </div>
     </div>
 
+    </RevealOnScroll>
+
+    <RevealOnScroll as="div" :delay="120">
     <div class="panel fade-in">
       <div class="panel-header">
-        <h3>富化证据链</h3>
+        <h3 class="fx-underline">富化证据链</h3>
         <span class="badge-count">{{ chain?.enrichments?.length ?? 0 }} 维度</span>
       </div>
       <p v-if="chain?.data_mode === 'fixture'" class="muted" style="font-size: 12px; margin-top: 0">
@@ -162,7 +168,7 @@ onMounted(async () => {
         可证明需来源、工件 hash 与 lineage 绑定；unknown / historical 不算已核验。以下保留接口实际返回字段，不补造来源。
       </p>
 
-      <div v-for="e in chain?.enrichments ?? []" :key="e.dimension" style="margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden">
+      <div v-for="e in chain?.enrichments ?? []" :key="e.dimension" class="fx-sheen" data-sheen style="margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden">
         <div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--bg-elevated); cursor: pointer" @click="toggle(e.dimension)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px; color: var(--accent); flex-shrink: 0">
             <path :d="DIM_ICON[e.dimension] || 'M12 2L2 7v10l10 5 10-5V7L12 2z'" />
@@ -209,9 +215,11 @@ onMounted(async () => {
         暂无可展示的富化证据。历史记录未核验仍为 unknown；补跑需先备份并显式授权，页面不会自动写入。
       </p>
     </div>
+    </RevealOnScroll>
 
+    <RevealOnScroll as="div" :delay="180">
     <div v-if="chain?.graph.edges.length" class="panel fade-in" style="margin-top: 16px">
-      <div class="panel-header"><h3>关系视图</h3></div>
+      <div class="panel-header"><h3 class="fx-underline">关系视图</h3></div>
       <table>
         <thead>
           <tr><th>起点</th><th>关系</th><th>终点</th></tr>
@@ -225,8 +233,9 @@ onMounted(async () => {
         </tbody>
       </table>
     </div>
+    </RevealOnScroll>
   </template>
 </template>
 <style scoped>
-.dimension-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:20px}.dimension-card{padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated)}.dimension-card h3{margin:0 0 10px;font-size:15px}.dimension-card strong{font-size:12px;color:var(--accent)}.dimension-card p,.detail-note{font-size:12px;color:var(--muted);line-height:1.8}.dimension-card small{color:var(--muted)}.hash-proof,.dimension-value{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.8;font-family:monospace}.panel{overflow-x:auto}.panel :deep(a){overflow-wrap:anywhere}.panel>div>div:first-child{flex-wrap:wrap}@media(max-width:600px){.dimension-grid{grid-template-columns:1fr}.page-subtitle{flex-wrap:wrap}}
+.dimension-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:20px}.dimension-card{padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated);transition:transform .3s cubic-bezier(.22,.61,.36,1),border-color .3s}.dimension-card:hover{transform:translateY(-3px);border-color:var(--border-bright)}@media(prefers-reduced-motion:reduce){.dimension-card:hover{transform:none}}.dimension-card h3{margin:0 0 10px;font-size:15px}.dimension-card strong{font-size:12px;color:var(--accent)}.dimension-card p,.detail-note{font-size:12px;color:var(--muted);line-height:1.8}.dimension-card small{color:var(--muted)}.hash-proof,.dimension-value{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.8;font-family:monospace}.panel{overflow-x:auto}.panel :deep(a){overflow-wrap:anywhere}.panel>div>div:first-child{flex-wrap:wrap}@media(max-width:600px){.dimension-grid{grid-template-columns:1fr}.page-subtitle{flex-wrap:wrap}}
 </style>

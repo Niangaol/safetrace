@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 
 import { getJson, BACKEND_DATA_MODE, IS_DEMO_MODE } from '../api'
 import CompetitionFocus from '../components/CompetitionFocus.vue'
+import CountUpNumber from '../effects/CountUpNumber.vue'
 import { useQaStore } from '../stores/qa'
 import type { MetricsOverview } from '../types'
 
@@ -83,11 +84,13 @@ watch(() => qa.citations.length, scrollToBottom)
     <div><strong>{{ dataLabel }}</strong><span>服务模式：{{ answerModeLabel(configuredMode) }}{{ runtime?.qa_model ? ' · ' + runtime.qa_model : '' }}</span><span v-if="runtime?.retrieval_mode">检索：{{ runtime.retrieval_mode }}</span></div>
     <div><strong>本轮回答</strong><span>{{ qa.answerMode ? answerModeLabel(qa.answerMode) : '尚未返回执行模式' }}{{ qa.answerModelId ? ' · ' + qa.answerModelId : '' }}</span></div>
     <p>正式库当前默认使用 BM25 与规则模板；若后端启用模型，以服务模式和本轮回执为准。云模型会发送问题 / 查询内容，请勿输入敏感信息。历史提问仅供回看，不代表多轮语义已完成。</p>
-    <p v-if="qa.metrics">当前接口范围：{{ qa.metrics.collect.vulns }} 条情报 / {{ qa.metrics.knowledge.chunks }} 个检索块。结果数、检索得分和置信分都不是准确率。</p>
+    <p v-if="qa.metrics">当前接口范围：<CountUpNumber :value="qa.metrics.collect.vulns" /> 条情报 / <CountUpNumber :value="qa.metrics.knowledge.chunks" /> 个检索块。结果数、检索得分和置信分都不是准确率。</p>
     <p v-if="qa.llmLayers.length">本轮模型层：{{ qa.llmLayers.map((layer) => LLM_LAYER_LABEL[layer] ?? layer).join('、') }}</p>
     <p v-if="qa.layerFallbacks.length">层内兜底：{{ qa.layerFallbacks.join('；') }}</p>
   </section>
-  <div class="process-strip" aria-label="处理阶段"><span v-for="(label, key) in STAGE_LABEL" :key="key" :class="{ current: qa.stage === key }">{{ label }}</span></div>
+  <!-- 阶段高亮完全由 store 真实返回的 qa.stage 驱动：当前阶段常驻下划线生长（fx-underline + is-active），
+       生成进行中（qa.thinking）额外加 fx-beam 光束；未进入的阶段保持普通样式，不编造进度。 -->
+  <div class="process-strip" aria-label="处理阶段"><span v-for="(label, key) in STAGE_LABEL" :key="key" :class="{ current: qa.stage === key, 'fx-underline': qa.stage === key, 'is-active': qa.stage === key, 'fx-beam': qa.stage === key && qa.thinking }">{{ label }}</span></div>
 
   <div class="panel" style="min-height: 400px; display: flex; flex-direction: column">
     <div ref="chatScroll" style="flex: 1; overflow-y: auto; max-height: 520px; padding-right: 8px">
@@ -113,12 +116,13 @@ watch(() => qa.citations.length, scrollToBottom)
           <path d="M21 21l-4.35-4.35" />
         </svg>
         <p class="muted" style="margin-bottom: 16px">提出一个 AI 安全相关的问题试试</p>
+        <!-- 问题建议按钮组：错落入场（fx-in-scale + --fx-delay 逐个错开），纯装饰不影响点击 -->
         <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 600px; margin: 0 auto">
           <button
-            v-for="s in SUGGESTIONS"
+            v-for="(s, i) in SUGGESTIONS"
             :key="s"
-            class="secondary"
-            style="font-size: 12px; padding: 6px 14px"
+            class="secondary fx-in-scale"
+            :style="{ '--fx-delay': i * 80 + 'ms', 'font-size': '12px', padding: '6px 14px' }"
             @click="submit(s)"
           >
             {{ s }}

@@ -8,7 +8,8 @@
     "build": "node scripts/build.mjs",
     "preview": "vite preview",
     "smoke:data-source": "node scripts/smoke-data-source.mjs",
-    "smoke:activity": "node scripts/smoke-activity.mjs"
+    "smoke:activity": "node scripts/smoke-activity.mjs",
+    "smoke:effects": "node scripts/smoke-effects.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",

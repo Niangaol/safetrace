@@ -214,29 +214,31 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
 
     <StatCards
       :items="[
-        { label: '漏洞总数', value: metrics?.collect.vulns ?? null, icon: 'shield', variant: 'critical' },
-        { label: '原始条目', value: metrics?.collect.raw_items ?? null, hint: `去重合并率 ${((metrics?.collect.merge_ratio ?? 0) * 100).toFixed(1)}%`, icon: 'docs' },
-        { label: '富化结果覆盖（非准确率）', value: metrics ? `${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%` : null, icon: 'spark', variant: 'ok' },
+        { label: '漏洞总数', value: metrics?.collect.vulns ?? null, numeric: metrics?.collect.vulns != null ? { value: metrics.collect.vulns } : undefined, icon: 'shield', variant: 'critical' },
+        { label: '原始条目', value: metrics?.collect.raw_items ?? null, numeric: metrics?.collect.raw_items != null ? { value: metrics.collect.raw_items } : undefined, hint: `去重合并率 ${((metrics?.collect.merge_ratio ?? 0) * 100).toFixed(1)}%`, icon: 'docs' },
+        { label: '富化结果覆盖（非准确率）', value: metrics ? `${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%` : null, numeric: metrics ? { value: (metrics.enrich.coverage_ratio ?? 0) * 100, decimals: 1, suffix: '%' } : undefined, icon: 'spark', variant: 'ok' },
         { label: '采集延迟 P50', value: fmtLatency(metrics?.latency.p50_seconds ?? null), icon: 'clock' },
-        { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : '未测', icon: 'zap', variant: 'ok' },
-        { label: '知识库切片', value: metrics?.knowledge.chunks ?? null, icon: 'box' },
-        { label: '模型调用费用', value: metrics?.cost.total_cny != null ? `¥${metrics.cost.total_cny.toFixed(4)}` : '未测', hint: '仅后端已计量范围', icon: 'yen' },
-        { label: '队列深度', value: status?.queue_depth ?? null, icon: 'refresh' },
+        { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : '未测', numeric: metrics?.latency.sla_6h_ratio != null ? { value: metrics.latency.sla_6h_ratio * 100, decimals: 1, suffix: '%' } : undefined, icon: 'zap', variant: 'ok' },
+        { label: '知识库切片', value: metrics?.knowledge.chunks ?? null, numeric: metrics?.knowledge.chunks != null ? { value: metrics.knowledge.chunks } : undefined, icon: 'box' },
+        { label: '模型调用费用', value: metrics?.cost.total_cny != null ? `¥${metrics.cost.total_cny.toFixed(4)}` : '未测', numeric: metrics?.cost.total_cny != null ? { value: metrics.cost.total_cny, decimals: 4, prefix: '¥' } : undefined, hint: '仅后端已计量范围', icon: 'yen' },
+        { label: '队列深度', value: status?.queue_depth ?? null, numeric: status?.queue_depth != null ? { value: status.queue_depth } : undefined, icon: 'refresh' },
       ]"
     />
 
     <div class="chart-grid">
-      <div class="panel fade-in">
+      <div class="panel fade-in fx-beam">
+        <div class="fx-radar panel-glow" aria-hidden="true"></div>
         <div class="panel-header">
-          <h3>逐维覆盖与启发式置信分</h3>
+          <h3 class="fx-underline">逐维覆盖与启发式置信分</h3>
           <span class="badge-count">{{ metrics?.enrich.dimensions ?? 0 }} 维度</span>
         </div>
         <p class="muted chart-note">覆盖率只表示存在结果；置信分与质量分不是人工评测准确率。空维度没有可展示数据。</p>
-        <div ref="sevChart" style="height: 260px"></div>
+        <div ref="sevChart" class="chart-box" style="height: 260px"></div>
       </div>
-      <div class="panel fade-in">
+      <div class="panel fade-in fx-beam" style="--fx-delay: 400ms">
+        <div class="fx-radar panel-glow" aria-hidden="true"></div>
         <div class="panel-header">
-          <h3>页面样本发布时间分布</h3>
+          <h3 class="fx-underline">页面样本发布时间分布</h3>
           <div class="range-selector">
             <button :class="{ active: trendRange === '7d' }" @click="switchTrendRange('7d')">7天</button>
             <button :class="{ active: trendRange === '30d' }" @click="switchTrendRange('30d')">30天</button>
@@ -245,13 +247,13 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
           </div>
         </div>
         <p class="muted chart-note">最多 {{ latest?.items.length ?? 0 }} 条样本，按发布时间聚合；不是采集吞吐量或富化完成时间。</p>
-        <div ref="trendChart" style="height: 260px"></div>
+        <div ref="trendChart" class="chart-box" style="height: 260px"></div>
       </div>
     </div>
 
     <div class="panel fade-in">
       <div class="panel-header">
-        <h3>实际来源水位（非登记源数量）</h3>
+        <h3 class="fx-underline">实际来源水位（非登记源数量）</h3>
         <span class="badge-count">{{ status?.watermarks?.filter(w => w.success).length ?? 0 }}/{{ status?.watermarks?.length ?? 0 }} {{ status?.data_mode === 'fixture' ? '回放成功' : '正常' }}</span>
       </div>
       <table>
@@ -266,7 +268,7 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
           </tr>
         </thead>
         <tbody>
-          <tr v-for="w in status?.watermarks ?? []" :key="w.source">
+          <tr v-for="w in status?.watermarks ?? []" :key="w.source" class="fx-sheen" data-sheen>
             <td style="font-family: 'JetBrains Mono', monospace; font-weight: 500">{{ w.source }}</td>
             <td class="muted">{{ w.last_sync_at?.replace('T', ' ').slice(0, 19) ?? '—' }}</td>
             <td class="muted">{{ w.last_full_sync_at?.replace('T', ' ').slice(0, 19) ?? '—' }}</td>
@@ -287,7 +289,7 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
 
     <div class="panel fade-in">
       <div class="panel-header">
-        <h3>最新漏洞</h3>
+        <h3 class="fx-underline">最新漏洞</h3>
         <RouterLink to="/intel" style="font-size: 12px">查看全部 →</RouterLink>
       </div>
       <table>
@@ -302,7 +304,7 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
           </tr>
         </thead>
         <tbody>
-          <tr v-for="v in latest?.items ?? []" :key="v.id">
+          <tr v-for="v in latest?.items ?? []" :key="v.id" class="fx-sheen" data-sheen>
             <td>
               <RouterLink :to="`/intel/${v.id}`" style="font-family: 'JetBrains Mono', monospace; font-size: 12px">
                 {{ v.cve_id || v.id }}
@@ -323,5 +325,5 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
   </template>
 </template>
 <style scoped>
-.chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.chart-note{font-size:12px;line-height:1.7}.panel{overflow-x:auto}.panel-header{flex-wrap:wrap;gap:8px}table{min-width:560px}@media(max-width:850px){.chart-grid{grid-template-columns:1fr}}
+.chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}.chart-note{font-size:12px;line-height:1.7}.panel{overflow-x:auto}.panel-header{flex-wrap:wrap;gap:8px}table{min-width:560px}@media(max-width:850px){.chart-grid{grid-template-columns:1fr}}.chart-grid .panel{position:relative;overflow:hidden}.chart-box{position:relative;z-index:1}.panel-glow{position:absolute;inset:0;z-index:0;opacity:.55;pointer-events:none}tbody tr{position:relative}
 </style>

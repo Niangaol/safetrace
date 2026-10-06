@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 
 import { getJson } from '../api'
 import type { Paged, VulnItem } from '../types'
+import CountUpNumber from '../effects/CountUpNumber.vue'
 
 const rows = ref<VulnItem[]>([])
 const total = ref(0)
@@ -41,7 +42,7 @@ onMounted(load)
 </script>
 
 <template>
-  <h1 class="page-title">情报列表</h1>
+  <h1 class="page-title fx-underline">情报列表</h1>
   <p class="page-subtitle">所有已采集的 AI 安全漏洞情报，支持多维度筛选与检索</p>
 
   <div class="toolbar">
@@ -78,8 +79,8 @@ onMounted(load)
 
   <div class="panel fade-in">
     <div class="panel-header">
-      <h3>漏洞列表</h3>
-      <span class="badge-count">共 {{ total }} 条 · 第 {{ page }} / {{ totalPages() }} 页</span>
+      <h3 class="fx-underline">漏洞列表</h3>
+      <span class="badge-count">共 <CountUpNumber :value="total" /> 条 · 第 {{ page }} / {{ totalPages() }} 页</span>
     </div>
     <table>
       <thead>
@@ -94,7 +95,7 @@ onMounted(load)
         </tr>
       </thead>
       <tbody>
-        <tr v-for="v in rows" :key="v.id" class="fade-in">
+        <tr v-for="(v, index) in rows" :key="v.id" class="fade-in fx-sheen" data-sheen :style="{ '--fx-delay': Math.min(index, 12) * 40 + 'ms' }">
           <td>
             <RouterLink :to="`/intel/${v.id}`" style="font-family: 'JetBrains Mono', monospace; font-size: 12px">
               {{ v.cve_id || v.id }}
@@ -126,3 +127,7 @@ onMounted(load)
     </div>
   </div>
 </template>
+
+<style scoped>
+tbody tr{position:relative}
+</style>

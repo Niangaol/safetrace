@@ -22,16 +22,23 @@ const links = [
       AI 安全情报系统
     </span>
     <div class="nav-links">
+      <!-- 悬停光泽 + 指针微光：fx-sheen + data-sheen（effects 层提供，纯装饰，不改链接文字与路由）。
+           当前项下划线生长：fx-underline 配 is-active，isActive 与 active-class 的 "active" 同源派生。 -->
       <RouterLink
         v-for="link in links"
         :key="link.to"
         :to="link.to"
         active-class="active"
+        class="fx-sheen"
+        data-sheen
+        v-slot="{ isActive }"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
-          <path :d="link.icon" />
-        </svg>
-        {{ link.label }}
+        <span class="fx-underline" :class="{ 'is-active': isActive }">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+            <path :d="link.icon" />
+          </svg>
+          {{ link.label }}
+        </span>
       </RouterLink>
     </div>
     <div class="nav-status" :class="{ demo: IS_DEMO_MODE || BACKEND_DATA_MODE !== 'live' }">
