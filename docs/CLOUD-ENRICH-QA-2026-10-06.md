@@ -212,3 +212,8 @@ node --import tsx scripts/coverage-agent.ts --apply --batches 4
 
 远端 main 与本地 HEAD 一致（`b5949ed`）。
 用户未提交的 PROJECT-INTRO.md / README.md / ROADMAP.md / Python/ 全程未被触碰。
+
+---
+**本轮最终状态**：origin/main = f8ddd4f（含 PR #11 合并）；覆盖率 94.9%（6068/6392）≥ 90% 目标；
+CVSS v3.1 live 3241、EPSS live 6068、论文 live 0（arXiv 对这批条目无匹配，未算成功）；
+剩余 324 条未覆盖（323 条从未跑过 + 1 条 EPSS 降级），补跑需 Qdrant（6333）恢复后才能走 --apply 备份门禁。
