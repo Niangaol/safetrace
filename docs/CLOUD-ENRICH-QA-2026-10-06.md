@@ -48,3 +48,79 @@
 - scripts/model-settings-controller.ts：回答角色 60 秒超时、云端通道 70 秒传输预算
 - web/src/views/QaView.vue：Markdown 回答、可点击引用与域名、逐条入场与生成中光标
 - docs/CLOUD-ENRICH-QA-2026-10-06.md：本文件
+
+
+---
+
+# 附：预富化（不依赖 NIST v3.1 分数）+ 缺口明示（2026-10-06 追加，commit bbb0255）
+
+用户要求“省略这个分数，做预先富化，缺什么展示出来”。做法：先把本地已经抓到的 6 份批量文档（NVD / CISA KEV / Ubuntu USN）整理成结构化事实，不要求 v3.1 分数；同时把每个维度“有没有、为什么没有”写明。
+
+## 做了什么
+
+1) src/enrich/src/baseline-facts.ts（纯函数，零网络）
+   - parseNvdRecords / parseKevRecords / parseUsnRecords：只取合法记录，REJECTED/RESERVED/DISPUTED 拒绝，坏 JSON 返回空。
+   - extractBaselineFacts：产出 description（NVD 英文描述或 KEV shortDescription 首句）、cwe[]、references[]（仅 https 且无凭据）、score_versions[]（**按版本标注** v4.0/v3.1/v3.0/v2，各带 source 与 Primary/Secondary，verified 只在显式 v31_proven 且来源为 nvd@nist.gov + Primary 时为真）、kev（列入日期/截止/勒索软件/建议动作）、usn（notice 与各 release 的修复版本）。
+   - description 抽取带 HTML 剥离与控制字符清理；指令样文本（“ignore previous instructions / output verified fix”等）整段拒绝，不进结论。
+   - gaps[]：cvss_v31 / paper / epss / remediation 四维，逐条给“缺失原因”或“已证明”，措辞明确“不代表无风险，也不按 0 分处理”。
+
+2) src/qa/src/baseline-reader.ts（只读）
+   - 按当前已验证的原文引用加载本地文档，逐份 sha256 校验，内容变化即重新解析；单份不可读不影响其它来源。
+
+3) scripts/live-intel-server.ts
+   - 情报详情 /api/v1/vulns/{id} 增加 baseline 与 gaps 字段。
+   - 问答结论在缺少 v3.1 时也能基于本地事实说人话（KEV 在野利用、其它版本评分、USN 修复版本），并在结论末尾追加“维度缺口：…（原因）”。缺口按该 CVE 实际是否已证明计算，**不会把已证明的 v3.1 误报成缺失**。
+   - 修复版本列表按 notice+包+版本去重，避免同一公告重复列举。
+
+4) 前端
+   - DetailView“已知信息与缺口”区块：官方描述 / CWE / 可点击参考链接 / 按版本评分（v3.1 已验证才加徽标）/ KEV / USN 修复版本 / 逐维缺口（缺失橙色、已验证绿色）。没有 baseline 时整块不渲染。
+   - QaView 在回答下方提示“部分维度缺失（见情报详情页的已知信息与缺口）”。
+
+## 实测（真实后端 + 真实浏览器）
+
+- CVE-2026-86219（无 v3.1、来源为 USN）：
+  - 详情页显示“1 个来源 · 缺口 3 · 已验证 1”，USN-8858-1 给出 7 个 release 的修复版本；缺口写明“本地 NVD 文档中没有该 CVE 记录；需要联网查询 NVD”。
+  - 问答不再拒答：结论基于本地事实（厂商公告的修复版本），并在末尾列出三个缺失维度。
+- CVE-2025-21042（已有证明 v3.1）：缺口只列论文/EPSS/修复版本，不再误报 CVSS 缺失；结论仍由云端模型给出自然语言摘要。
+
+## 未做/边界
+
+- 仍是离线口径：论文（arXiv）、EPSS（FIRST）两个维度未联网，因此全部条目这两个维度都是“缺失”。
+- 525 条已证明 v3.1 之外的其余条目，CVSS 维度缺口原因按“无 NVD 记录 / 只有其它版本 / 有 v3.1 但未复核”三类如实说明。
+
+
+---
+
+# 附二：联网补富化（2026-10-06 追加）
+
+用户已同意联网。本轮用现有管线跑真实外部请求，全部走“已验证备份 + 单写 lease + 逐维状态机”，没有绕过任何门禁。
+
+## 做了什么
+
+- 备份：`scripts/backup-intel.ts --create` 新建 `.tmp/verified-backups/safetrace-kR5zLX`（9 表 / 5237 向量 / 6 原文），随后所有联网批次都以它作为写入前置条件。
+- 联网命令：`SAFETRACE_ENRICH_OFFLINE=false` 跑 `scripts/enrich-pending.ts --apply --limit=N`，每条之间至少 3 秒，遵守 arXiv 限流语义；连续源失败会停批并保留已落库记录。
+- 批次日志新增 `dimension_states`：逐维给出真实状态（live/empty/failed）+ 原因，避免把“确实没有数据”误读成“失败”。
+
+## 真实结果（截至本轮结束）
+
+| 维度 | 状态 | 说明 |
+|---|---|---|
+| CVSS v3.1（已证明） | 526 条 live | 其中 525 条来自本地 NVD 原文离线复核；本轮联网批次未新造 |
+| EPSS（FIRST 官方接口） | **155 条 live** | 联网新增；每条都校验 as-of 日期新鲜度，过期/缺日期不计 |
+| 论文（arXiv） | 155 条 empty | 这些条目确实是近期 KEV CVE，arXiv 没有相关论文——空结果被如实记录，不是失败 |
+| 评分（无来源） | 154 条 empty | 本地 NVD 文档没有这些 CVE 记录 |
+
+也就是说：联网后真正补上的是 **EPSS 155 条**；论文维度对这批条目确实无数据，系统按“空”记录并给了 24 小时退避，不会反复刷。
+
+## 修掉的一个真问题
+
+缺口展示原先写死“未联网查询 FIRST”，但 sidecar 里 EPSS 已经是 live —— 缺口和真实状态不一致。现已把逐维 sidecar 状态传入缺口计算：
+- EPSS 已 live 的条目，缺口显示 `epss: proven`，理由“已从 FIRST 官方接口取得 EPSS 并验证 as-of 日期”。
+- 未处理的条目仍显示 missing 及原因。
+详情页与问答结论中的缺口列表都按真实状态给出，不再出现“明明有数据却显示缺失”。
+
+## 仍然受限
+
+- 论文维度要等到处理到有研究积累的旧 CVE 才可能有命中；本批处理的都是近期 KEV 条目，因此 empty 居多。
+- 每条 3 秒以上的礼貌延迟意味着全量覆盖需要数小时；本轮只跑了约 150 条规模，剩余可按同样命令续跑（append-only，断点续跑）。
+- 正式库写入均在前述已验证备份与 lease 之下；未调用付费模型、未写正式向量库。

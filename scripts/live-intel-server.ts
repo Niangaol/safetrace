@@ -75,7 +75,7 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
       if(itemRoute){
         const item=view.intel.find(i=>i.intel_id===decodeURIComponent(itemRoute[1]!));
         if(!item){json(res,404,{error:{message:"intelligence absent or latest DQ not released"},data_mode:"live"});return;}
-        if(!itemRoute[2]){const index=await readBaseline();const baseline=baselineForItem(index,item,view.verified.has(item.intel_id));json(res,200,{...liveIntelItem(view,item),baseline:baseline.facts,gaps:baseline.gaps});return;}
+        if(!itemRoute[2]){const index=await readBaseline();const baseline=baselineForItem(index,item,view.verified.has(item.intel_id),view.states.filter(state=>state.intel_id===item.intel_id).map(state=>({dimension:state.dimension,status:state.status})));json(res,200,{...liveIntelItem(view,item),baseline:baseline.facts,gaps:baseline.gaps});return;}
         const base=liveEvidenceView(view,item),guidance=await readRemediationEvidence({...options,intelIds:[item.intel_id],limit:1});
         const extra=guidance.evidence.length?[{dimension:"remediation",value:{guidance:guidance.evidence.map(e=>e.artifact)},source:[...new Set(guidance.evidence.map(e=>e.artifact.source_id))],
           evidence:guidance.evidence.map(e=>({evidence_id:e.chunk.chunk_id,source:e.artifact.source_id,url:e.artifact.source_url,snippet:e.chunk.text,artifact_sha256:e.chunk.provenance.sha256,original_sha256:e.artifact.source_sha256,parent_lineage_ids:e.parent_lineage_ids})),
@@ -103,7 +103,7 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
           if(!baselineIndex||!plan.slots.cve_ids.length)return null;
           try{
             const item={cve_ids:plan.slots.cve_ids,source_ids:[]} as any;
-            const {gaps}=baselineForItem(baselineIndex,item,plan.slots.cve_ids.some(cve=>provenCves.has(cve)));
+            const {gaps}=baselineForItem(baselineIndex,item,plan.slots.cve_ids.some(cve=>provenCves.has(cve)),view.states.filter(state=>plan.slots.cve_ids.includes((view.intel.find(i=>i.intel_id===state.intel_id)?.cve_ids??[])[0]??"")).map(state=>({dimension:state.dimension,status:state.status})));
             const missing=gaps.filter(g=>g.status==="missing");
             if(!missing.length)return null;
             return "维度缺口：" + missing.map(g=>{const label=({cvss_v31:"CVSS v3.1 官方评分",paper:"论文关联",epss:"EPSS 利用概率",remediation:"修复版本"} as Record<string,string>)[g.dimension]??g.dimension;return label+"（"+g.reason+"）";}).join("；") + "。以上缺口不代表无风险，也不按 0 分处理。";

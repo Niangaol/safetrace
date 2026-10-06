@@ -92,9 +92,12 @@ export interface BaselineInput {
   kev?: Map<string, Obj>
   usn?: Map<string, Obj[]>
   v31_proven?: boolean
+  /** 逐维 sidecar 状态：缺口必须按真实状态给出，而不是写死 */
+  dimension_states?: readonly { dimension: string; status: string }[]
 }
 /** 只从本地记录提取；没有可用信息时对应字段为 null / 空数组，不用通用话术填充。 */
 export function extractBaselineFacts(input: BaselineInput): { facts: BaselineFacts; gaps: BaselineGap[] } {
+  const liveDimension = (input: { dimension_states?: readonly { dimension: string; status: string }[] }, dimension: string): boolean => Boolean(input.dimension_states?.some(s => s.dimension === dimension && s.status === "live"));
   const cve = input.cve_ids[0]?.toUpperCase() ?? null
   const nvd = cve ? input.nvd?.get(cve) : undefined
   const kev = cve ? input.kev?.get(cve) : undefined
@@ -129,8 +132,10 @@ export function extractBaselineFacts(input: BaselineInput): { facts: BaselineFac
   else if (!hasNvd) gaps.push({ dimension: "cvss_v31", status: "missing", reason: "本地 NVD 文档中没有该 CVE 记录；需要联网查询 NVD" })
   else if (!versions.includes("v3.1")) gaps.push({ dimension: "cvss_v31", status: "missing", reason: versions.length ? "本地 NVD 文档中该 CVE 只有 " + versions.join("、") + " 分数，没有 NIST 主 v3.1 指标" : "本地 NVD 文档中该 CVE 没有任何 CVSS 指标" })
   else gaps.push({ dimension: "cvss_v31", status: "missing", reason: "本地 NVD 文档有 v3.1 指标，但尚无 NIST 主指标或未完成复核发布" })
-  gaps.push({ dimension: "paper", status: "missing", reason: "未联网检索 arXiv；论文维度尚无成功记录" })
-  gaps.push({ dimension: "epss", status: "missing", reason: "未联网查询 FIRST；EPSS 维度尚无成功记录" })
+  if (liveDimension(input, "paper")) gaps.push({ dimension: "paper", status: "proven", reason: "已从 arXiv 取得关联论文并完成筛选发布" });
+  else gaps.push({ dimension: "paper", status: "missing", reason: "未检索到 arXiv 关联论文；未联网或该 CVE 无论文" })
+  if (liveDimension(input, "epss")) gaps.push({ dimension: "epss", status: "proven", reason: "已从 FIRST 官方接口取得 EPSS 并验证 as-of 日期" });
+  else gaps.push({ dimension: "epss", status: "missing", reason: "未联网查询 FIRST；EPSS 维度尚无成功记录" })
   if (usn && usn.length) gaps.push({ dimension: "remediation", status: "proven", reason: "已从 Ubuntu USN 公告提取修复版本" })
   else if (kevFacts) gaps.push({ dimension: "remediation", status: "missing", reason: "CISA KEV 只给出通用处置建议，没有厂商修复版本" })
   else gaps.push({ dimension: "remediation", status: "missing", reason: "本地没有 USN 修复公告，也没有 KEV 记录" })

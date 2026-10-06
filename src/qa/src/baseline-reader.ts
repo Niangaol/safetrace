@@ -34,8 +34,8 @@ export async function loadBaselineIndex(options: { sqlitePath: string; payloadRo
   return index;
 }
 
-export function baselineForItem(index: BaselineIndex, item: IntelItem, v31Proven: boolean): { facts: BaselineFacts; gaps: BaselineGap[] } {
-  return extractBaselineFacts({ cve_ids: item.cve_ids, source_ids: item.source_ids, nvd: index.nvd, kev: index.kev, usn: index.usn, v31_proven: v31Proven });
+export function baselineForItem(index: BaselineIndex, item: IntelItem, v31Proven: boolean, dimensionStates: readonly { dimension: string; status: string }[] = []): { facts: BaselineFacts; gaps: BaselineGap[] } {
+  return extractBaselineFacts({ cve_ids: item.cve_ids, source_ids: item.source_ids, nvd: index.nvd, kev: index.kev, usn: index.usn, v31_proven: v31Proven, dimension_states: dimensionStates });
 }
 
 /** 给自然语言结论用的基线事实描述（无 v3.1 分数时也能说人话）。 */

@@ -121,7 +121,8 @@ async function main(): Promise<void> {
       processed += 1;
       if (pendingIds.has(item.intel_id)) newlyProcessed += 1;
       consecutiveArxivFailures = nextArxivFailureStreak(consecutiveArxivFailures, fallbackEvents);
-      console.log(JSON.stringify({ type: "enrichment_item", intel_id: item.intel_id, processed, dimensions_completed: results[0]?.dimensions_completed, dimensions_failed: results[0]?.dimensions_failed, fallback_triggers: fallbackEvents.map(event => event.trigger) }));
+      const dimensionStates = ["paper", "cvss", "epss"].map(dimension => { const state = stateStore.get(item.intel_id, dimension as "paper"); return state ? { dimension, status: state.status, reason: state.reason.slice(0, 120) } : { dimension, status: "unknown", reason: "no sidecar state" }; });
+      console.log(JSON.stringify({ type: "enrichment_item", intel_id: item.intel_id, processed, dimensions_completed: results[0]?.dimensions_completed, dimensions_failed: results[0]?.dimensions_failed, dimension_states: dimensionStates, fallback_triggers: fallbackEvents.map(event => event.trigger) }));
       if (!offline && consecutiveArxivFailures >= stopAfter) {
         stoppedForSourceFailure = true;
         process.exitCode = 2;
