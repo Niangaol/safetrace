@@ -78,6 +78,8 @@ await test('component aggregation / 500 history / eight-card flood / pause / res
  const api = url('export const IS_DEMO_MODE=false')
  const stream = url('export const streamActivity=o=>{globalThis.__activitySmoke.receive=o.onEvent;return new Promise((_,reject)=>o.signal.addEventListener("abort",()=>reject(new DOMException("Aborted","AbortError")),{once:true}))}')
  let script = compileScript(descriptor, { id: 'activity-smoke' }).content
+ script = script.replaceAll("from './ParcelPipeline.vue'",'from '+JSON.stringify(url('export default {}')))
+ assert.ok(!text.includes('class="paper-tray"'),'duplicate lower data cards removed')
  script = script.replaceAll("from 'vue'", 'from ' + JSON.stringify(runtime))
  script = script.replaceAll("from '../api'", 'from ' + JSON.stringify(api))
  script = script.replaceAll("from '../activity-api'", 'from ' + JSON.stringify(stream))
@@ -107,7 +109,7 @@ await test('component aggregation / 500 history / eight-card flood / pause / res
   state.togglePause()
   assert.equal(state.history.value.length, 500); assert.equal(state.trimmed.value, 102)
   assert.equal(state.cards.value.length, 500); assert.equal(state.archivedGroups.value, 101)
-  assert.equal(state.visibleCards.value.length, 8); assert.equal(state.pending.value, 0)
+  assert.equal(state.pending.value, 0)
   hooks.receive(event(604)); flush(); assert.match(state.gap.value, /603/)
   const count = state.total.value
   hooks.receive(event(604)); assert.equal(state.total.value, count, 'replay duplicate not recounted')
@@ -124,3 +126,4 @@ await test('component aggregation / 500 history / eight-card flood / pause / res
  }
 })
 console.log('Activity smoke: ' + passed + ' passed')
+await import('./smoke-parcels.mjs')
