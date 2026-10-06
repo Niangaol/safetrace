@@ -8,6 +8,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { pathToFileURL } from "node:url";
 import { readLiveKnowledgeView, liveIntelItem, liveEvidenceView } from "../src/qa/src/live-knowledge-view.js";
 import { readRemediationEvidence } from "../src/qa/src/remediation-reader.js";
+import { naturalConclusion } from "./natural-answer.js";
 import { knowledgeGeneration } from "../src/qa/src/knowledge-generation.js";
 import type { LiveKnowledgeView } from "../src/qa/src/live-knowledge-view.js";
 import { MemoryIndex } from "../src/qa/src/q2-retrieval.js";
@@ -93,12 +94,14 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
         const evidence=await index.search(retrievalRequest);event(res,{event:"stage",stage:"retrieve",hit:evidence.chunks.length});
         activity.publish({trace_id:trace,intel_id:null,stage:"knowledge",status:"success",at:new Date().toISOString(),label:"qa.retrieval",details:{artifact_count:evidence.chunks.length}});
         event(res,{event:"stage",stage:"generate",answer_mode:settings?.mode()??"template"});
-        let answerMode="template",answerModel="q4-template-v1",modelFallback=false,modelAttempts=0;let answer;
+        const natural=naturalConclusion({cve_id:plan.slots.cve_ids[0]??null,chunks:evidence.chunks,remediation:(guidance?.evidence??[]).map(item=>item.artifact),askRemediation:plan.intents.includes("remediation")});
+                let answerMode="template",answerModel="q4-template-v1",modelFallback=false,modelAttempts=0;let answer;
         try{const selected=settings?await settings.synthesizer(()=>{modelAttempts++;}):undefined;
           const modelEvidence=selected?.synth?settings!.modelEvidence(evidence,[...view.projection.chunks,...(guidance?.chunks??[])]):evidence;
           answer=await synthesizeAnswer(q,plan,modelEvidence,selected?.synth?{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id,model_version:"runtime-settings"}}:{});
           if(selected?.synth && !answer.abstained && !answer.degraded_to){answerMode=selected.mode;answerModel=selected.model_id;}else if(selected?.synth&&!answer.abstained){answerMode="template_fallback";modelFallback=true;}
         }catch{answer=await synthesizeAnswer(q,plan,evidence);answerMode="template_fallback";modelFallback=true;}
+        if(!answer.text_md.includes("## 结论（自然语言）")&&natural)answer={...answer,text_md:"## 结论（自然语言）\n\n"+natural+"\n\n"+answer.text_md};
         activity.publish({trace_id:trace,intel_id:null,stage:modelFallback?"fallback":"answer",status:modelFallback?"degraded":answer.abstained?"rejected":"success",at:new Date().toISOString(),label:"qa.answer_completed",details:{artifact_count:answer.citations.length,reason:modelFallback?"已回退规则模板；无其它云端自动降级":answer.abstained?"证据不足或保护门禁拒答":"引用已绑定检索证据"}});
         if(res.destroyed)return;
         event(res,{event:"stage",stage:"check"});
