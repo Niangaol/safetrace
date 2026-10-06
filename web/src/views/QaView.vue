@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 
 import { getJson, BACKEND_DATA_MODE, IS_DEMO_MODE } from '../api'
 import CompetitionFocus from '../components/CompetitionFocus.vue'
+import MarkdownBlock from '../components/MarkdownBlock.vue'
 import CountUpNumber from '../effects/CountUpNumber.vue'
 import { useQaStore } from '../stores/qa'
 import type { MetricsOverview } from '../types'
@@ -36,6 +37,10 @@ const SUGGESTIONS = [
   '比较 CVE-2021-44228 与 CVE-2021-45046 的影响和修复，分别引用证据。',
   'CVE-2099-4321 影响哪些版本？（拒答检查样例）',
 ]
+
+function hostOf(url: string): string {
+  try { return new URL(url).host } catch { return '本地证据' }
+}
 
 function answerModeLabel(mode: string): string {
   if (mode === "cloud") return "已启用云端模型"
@@ -101,8 +106,9 @@ watch(() => qa.citations.length, scrollToBottom)
       </div>
 
       <!-- 回答 -->
-      <div v-if="qa.answer" class="answer" style="background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 12px">
-        {{ qa.answer }}
+      <div v-if="qa.answer" class="answer markdown-answer fx-in" style="background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 12px">
+        <MarkdownBlock :source="qa.answer" />
+        <span v-if="qa.thinking" class="fx-type-cursor generating-caret" aria-hidden="true"></span>
       </div>
       <div v-else-if="qa.thinking && !qa.stage" class="muted" style="padding: 24px; text-align: center">
         <span class="spinner" style="margin-right: 8px"></span>
@@ -146,10 +152,10 @@ watch(() => qa.citations.length, scrollToBottom)
       <!-- 引用 -->
       <div v-if="qa.citations.length" style="margin-top: 16px">
         <div class="label" style="margin-bottom: 8px">引用来源 · 检索匹配不等于结论已证实</div>
-        <div v-for="(c, i) in qa.citations" :key="c.id" class="evidence" style="margin-bottom: 6px">
+        <div v-for="(c, i) in qa.citations" :key="c.id" class="evidence fx-in-left" :style="{ '--fx-delay': i * 70 + 'ms', marginBottom: '6px' }">
           <div style="display: flex; align-items: center; gap: 8px">
             <span class="badge info" style="min-width: 28px; text-align: center">[{{ i + 1 }}]</span>
-            <a :href="c.url" target="_blank" rel="noreferrer" style="font-size: 12px">{{ c.title }}</a>
+            <a :href="c.url" target="_blank" rel="noreferrer noopener" style="font-size: 12px">{{ c.title }}<span class="link-host">{{ hostOf(c.url) }} ↗</span></a>
           </div>
           <div class="snippet" style="margin-top: 4px">检索得分（非准确率） {{ c.score?.toFixed(4) ?? '—' }}</div>
         </div>
@@ -187,5 +193,19 @@ watch(() => qa.citations.length, scrollToBottom)
   </div>
 </template>
 <style scoped>
+/* Markdown 回答区：层级、链接与生成中光标。链接强制新窗口 + noopener，域名明文供人工核对。 */
+.markdown-answer :deep(h1),.markdown-answer :deep(h2),.markdown-answer :deep(h3),.markdown-answer :deep(h4){margin:14px 0 8px;line-height:1.5}
+.markdown-answer :deep(h1){font-size:19px}.markdown-answer :deep(h2){font-size:17px}.markdown-answer :deep(h3){font-size:15px}.markdown-answer :deep(h4){font-size:14px}
+.markdown-answer :deep(p){margin:8px 0;line-height:1.85}
+.markdown-answer :deep(ul),.markdown-answer :deep(ol){margin:8px 0;padding-left:22px;line-height:1.85}
+.markdown-answer :deep(blockquote){margin:10px 0;padding:6px 12px;border-left:3px solid var(--accent);background:rgba(56,189,248,.06);color:var(--muted-light)}
+.markdown-answer :deep(pre){margin:10px 0;padding:12px;background:#0a1221;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:auto}
+.markdown-answer :deep(code){font-family:'JetBrains Mono',monospace;font-size:12px}
+.markdown-answer :deep(a){color:var(--accent);text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
+.markdown-answer :deep(a:hover){color:#7dd3fc}
+.markdown-answer :deep(hr){border:0;border-top:1px solid var(--border);margin:14px 0}
+.generating-caret{margin-left:2px;color:var(--accent)}
+.link-host{display:block;font-size:10px;color:var(--muted);margin-top:2px}
+@media(prefers-reduced-motion:reduce){.markdown-answer{animation:none}.evidence{animation:none}}
 .runtime-panel{border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:14px;background:var(--bg-elevated)}.runtime-panel>div{display:flex;flex-wrap:wrap;gap:10px 16px;margin-bottom:8px;font-size:12px}.runtime-panel p,.refusal-note{font-size:12px;color:var(--muted);line-height:1.8;margin:8px 0}.process-strip{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.process-strip span{padding:6px 12px;font-size:12px;border:1px solid var(--border);border-radius:20px;color:var(--muted)}.process-strip .current{color:var(--accent);border-color:var(--accent)}.toolbar{flex-wrap:wrap}.toolbar input{min-width:200px}.evidence a{overflow-wrap:anywhere}@media(max-width:600px){.toolbar input{width:100%;flex-basis:100%!important}.runtime-panel{padding:12px}}
 </style>
