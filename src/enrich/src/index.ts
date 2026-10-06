@@ -55,6 +55,11 @@ export interface EnrichContext {
   /** Optional StepPlan F1 review sidecar; it must never reorder or modify published scores by itself. */
   paperReviewer?: PaperReviewPort;
   onPaperReview?: (intelId: string, outcome: PaperReviewOutcome) => void | Promise<void>;
+  /**
+   * 本轮只跑这些维度（运维用：例如只补 cvss/epss 时不发起 arXiv 请求）。
+   * 未列出维度既不请求也不改写状态；缺省为全部三维度。
+   */
+  dimensions?: readonly EnrichmentDimension[];
 }
 
 /** 富化一批情报。单个条目内部失败直接抛错（显式失败，不静默跳过）。 */
@@ -78,13 +83,14 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   const inputHash = enrichmentInputHash(item);
   const now = ctx.now ?? new Date();
   const prior = (dimension: EnrichmentDimension) => ctx.stateStore?.get(item.intel_id, dimension);
-  const due = (dimension: EnrichmentDimension) => !ctx.stateStore || enrichmentRetryDue(prior(dimension), inputHash, now);
+  const inScope = (dimension: EnrichmentDimension) => ctx.dimensions === undefined || ctx.dimensions.includes(dimension);
+  const due = (dimension: EnrichmentDimension) => inScope(dimension) && (!ctx.stateStore || enrichmentRetryDue(prior(dimension), inputHash, now));
   const causation = ctx.causation_by_intel_id?.[item.intel_id] ?? null;
-  let needsReceipt = Boolean(ctx.bus && ctx.stateStore && (["paper", "cvss", "epss"] as const).some(dimension => { const s = prior(dimension); return s && (!s.enrich_event_id || (causation && s.intel_event_id !== causation)); }));
+  let needsReceipt = Boolean(ctx.bus && ctx.stateStore && (["paper", "cvss", "epss"] as const).some(dimension => { if (!inScope(dimension)) return false; const s = prior(dimension); return s && (!s.enrich_event_id || (causation && s.intel_event_id !== causation)); }));
   if (ctx.bus && ctx.stateStore && (["paper", "cvss", "epss"] as const).some(d => prior(d))) {
     let latest: Awaited<ReturnType<EventBus["readEvents"]>>[number] | undefined;
     for (let offset = 0; ; offset += 500) { const page = await ctx.bus.readEvents<EnrichmentResult>("enrich.items", offset, 500); for (const event of page) if (event.payload.intel_id === item.intel_id) latest = event; if (page.length < 500) break; }
-    if (!latest || (["paper", "cvss", "epss"] as const).some(d => prior(d) && prior(d)!.enrich_event_id !== latest!.event_id)) needsReceipt = true;
+    if (!latest || (["paper", "cvss", "epss"] as const).some(d => inScope(d) && prior(d) && prior(d)!.enrich_event_id !== latest!.event_id)) needsReceipt = true;
   }
   const runPaper = due("paper");
   const scoreDependency = await scoreSourceDependencyHash(item, { sources: ctx.scoreSources, kevSet: ctx.kevSet });

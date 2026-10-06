@@ -9,7 +9,7 @@ export function nextArxivFailureStreak(previous: number, events: readonly Pick<F
 /** Events are append-only: last verdict wins; historical passes do not authorize later quarantines. */
 export function planPendingEnrichment(
   intelEvents: readonly IntelItem[], verdictEvents: readonly QualityVerdict[], enrichEvents: readonly EnrichmentResult[],
-  options: { states?: readonly EnrichmentDimensionState[]; now?: Date; publishedEnrichments?: readonly { event_id: string; payload: EnrichmentResult }[]; currentIntelEventIds?: ReadonlyMap<string, string> } = {},
+  options: { states?: readonly EnrichmentDimensionState[]; now?: Date; publishedEnrichments?: readonly { event_id: string; payload: EnrichmentResult }[]; currentIntelEventIds?: ReadonlyMap<string, string>; dimensions?: readonly EnrichmentDimension[] } = {},
 ) {
   const latestIntel = new Map(intelEvents.map(item => [item.intel_id, item]));
   const latestVerdicts = new Map(verdictEvents.map(item => [item.item_id, item]));
@@ -31,9 +31,10 @@ export function planPendingEnrichment(
     return sha256Json(artifact) === state.result_hash;
   };
   const pending_dimensions = new Map<string, EnrichmentDimension[]>();
+  const scoped = (dimension: EnrichmentDimension) => options.dimensions === undefined || options.dimensions.includes(dimension);
   for (const item of accepted) {
     const hash = enrichmentInputHash(item);
-    pending_dimensions.set(item.intel_id, (["paper", "cvss", "epss"] as const).filter(dimension => {
+    pending_dimensions.set(item.intel_id, (["paper", "cvss", "epss"] as const).filter(scoped).filter(dimension => {
       const state = stateMap.get(item.intel_id + ":" + dimension);
       const currentIntel = options.currentIntelEventIds?.get(item.intel_id);
       const latestReceipt = published.get(item.intel_id);

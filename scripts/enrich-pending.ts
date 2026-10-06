@@ -55,7 +55,11 @@ async function main(): Promise<void> {
     ]);
     const snapshot = readIntelIndexSnapshot(dbPath);
     const releasedItems = [...snapshot.accepted.values()].map(entry => entry.item);
-    const plan = planPendingEnrichment(releasedItems, [...snapshot.accepted.values()].map(entry => entry.verdict), enrichEvents, { states: stateStore.list(), publishedEnrichments: publishedEnrichments(reader), currentIntelEventIds: new Map([...snapshot.accepted].map(([id, entry]) => [id, entry.intel_event.event_id])) });
+    const dimensionsArg = process.argv.find(value => value.startsWith("--dimensions="))?.slice("--dimensions=".length);
+    const dimensions = dimensionsArg === undefined ? undefined : ([...new Set(dimensionsArg.split(",").map(v => v.trim()).filter(Boolean))] as string[]);
+    if (dimensions !== undefined && (dimensions.length === 0 || dimensions.some(d => !["paper","cvss","epss"].includes(d)))) throw new Error("--dimensions 只能取 paper,cvss,epss 的非空子集");
+    const scope = dimensions as readonly ("paper"|"cvss"|"epss")[] | undefined;
+    const plan = planPendingEnrichment(releasedItems, [...snapshot.accepted.values()].map(entry => entry.verdict), enrichEvents, { states: stateStore.list(), publishedEnrichments: publishedEnrichments(reader), currentIntelEventIds: new Map([...snapshot.accepted].map(([id, entry]) => [id, entry.intel_event.event_id])), ...(scope ? { dimensions: scope } : {}) });
     const pending = plan.pending;
     const sourceArg = process.argv.find(value => value.startsWith("--source="))?.slice("--source=".length);
     if (sourceArg !== undefined && !/^[a-z0-9_]+$/.test(sourceArg)) throw new Error("--source 必须为有效 source_id");
@@ -98,15 +102,16 @@ async function main(): Promise<void> {
     const requestedDelay = Number(process.env.SAFETRACE_ENRICH_DELAY_MS ?? "3000");
     const stopAfter = Number(process.env.SAFETRACE_ENRICH_STOP_AFTER_ARXIV_FAILURES ?? "3");
     if (!Number.isFinite(requestedDelay) || requestedDelay < 0 || !Number.isSafeInteger(stopAfter) || stopAfter < 1) throw new Error("富化延迟必须非负有限，连续失败阈值必须为正整数");
-    const delayMs = offline ? 0 : Math.max(3000, requestedDelay);
-    console.log(JSON.stringify({ mode: offline ? "fixture/offline" : "live", db_path: dbPath, unique_intel_ids: plan.unique_intel_ids, accepted_ids: plan.accepted_ids, already_enriched: plan.already_enriched, recorded_with_failed_dimensions: plan.recorded_with_failed_dimensions, pending: pending.length, selected_source: sourceArg ?? null, recheck_recorded: Boolean(recheckIds), selected_count: selected.length, batch_size: batch.length, delay_ms_between_live_items: delayMs, stepplan_f1_advisory_active: Boolean(paperReviewer), trace_id: traceId }));
+    // arXiv 礼让只在真的会发起 arXiv 请求时生效；只补 cvss/epss 的条目改用更短的服务礼节间隔。
+    const delayFor = (): number => offline ? 0 : (scope === undefined || scope.includes("paper") ? Math.max(3000, requestedDelay) : Math.max(250, Math.min(requestedDelay, 1000)));
+    console.log(JSON.stringify({ mode: offline ? "fixture/offline" : "live", db_path: dbPath, unique_intel_ids: plan.unique_intel_ids, accepted_ids: plan.accepted_ids, already_enriched: plan.already_enriched, recorded_with_failed_dimensions: plan.recorded_with_failed_dimensions, pending: pending.length, selected_source: sourceArg ?? null, recheck_recorded: Boolean(recheckIds), selected_count: selected.length, batch_size: batch.length, delay_ms_between_live_items: delayFor(), dimensions: scope ?? ["paper","cvss","epss"], stepplan_f1_advisory_active: Boolean(paperReviewer), trace_id: traceId }));
     let processed = 0;
     let newlyProcessed = 0;
     const pendingIds = new Set(pending.map(item => item.intel_id));
     let consecutiveArxivFailures = 0;
     let stoppedForSourceFailure = false;
     for (let index = 0; index < batch.length; index++) {
-      if (index > 0 && delayMs > 0) await sleep(delayMs);
+      if (index > 0) await sleep(delayFor());
       const item = batch[index]!;
       const current = readIntelIndexSnapshot(dbPath).accepted.get(item.intel_id);
       if (!current || sha256Json(current.item) !== sha256Json(item)) throw new Error("最新情报/DQ 已变更或不放行；停止本批，不绕过隔离");
@@ -114,7 +119,7 @@ async function main(): Promise<void> {
       const dqParent = parents.find(record => record.causation_id === current.verdict_event.event_id && ["ingest.dq1", "ingest.page_dq1"].includes(record.stage));
       const fallbackEvents: FallbackEvent[] = [];
       const results = await runEnrichment([item], {
-        offline, bus, stateStore, traceId, causation_by_intel_id: { [item.intel_id]: current.intel_event.event_id },
+        offline, bus, stateStore, traceId, ...(scope ? { dimensions: scope } : {}), causation_by_intel_id: { [item.intel_id]: current.intel_event.event_id },
         ...(dqParent ? { lineage_parent_by_intel_id: { [item.intel_id]: dqParent.lineage_id } } : {}), onDegrade: event => { fallbackEvents.push(event); }, ...(paperReviewer ? { paperReviewer } : {}),
         onPaperReview: (intelId, outcome) => console.log(JSON.stringify({ type: "f1_stepfun_advisory", intel_id: intelId, status: outcome.status, ...(outcome.status === "suggested" ? { paper_ids: outcome.paper_ids, model_confidence: outcome.confidence } : { reason: outcome.reason }), applied: false })),
       });
