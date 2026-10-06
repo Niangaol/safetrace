@@ -1,0 +1,228 @@
+{
+  "generated_at": "2026-10-04T04:56:24.990Z",
+  "metric_version": "1.2.0",
+  "lag_definition": "lag = first_seen_at − published_at（秒）；按漏洞去重（cve_ids[0] 优先，退回 intel_id），取组内最早 first_seen_at",
+  "percentile_method": "nearest-rank（向上取整），空集返回 null",
+  "window": {
+    "start": "2026-10-01T02:32:24.896Z",
+    "end": "2026-10-04T04:56:24.896Z"
+  },
+  "monitor_start": "2026-10-01T02:51:31.422Z",
+  "sample_basis": "严格口径只计 published_at ≥ 监控起点的条目；参考口径计窗口内全部真实条目",
+  "data_basis": "live",
+  "overall": {
+    "n": 912,
+    "p50_seconds": 5217,
+    "p95_seconds": 17950,
+    "max_seconds": 28766,
+    "sla_6h_ratio": 0.9912
+  },
+  "by_source": [
+    {
+      "source_id": "nvd_cve",
+      "n": 907,
+      "p50_seconds": 5217,
+      "p95_seconds": 17950,
+      "max_seconds": 28766,
+      "sla_6h_ratio": 0.9912
+    },
+    {
+      "source_id": "cve_org",
+      "n": 126,
+      "p50_seconds": 2410,
+      "p95_seconds": 7318,
+      "max_seconds": 7319,
+      "sla_6h_ratio": 1
+    },
+    {
+      "source_id": "osv",
+      "n": 27,
+      "p50_seconds": 7347,
+      "p95_seconds": 25100,
+      "max_seconds": 28766,
+      "sla_6h_ratio": 0.9259
+    },
+    {
+      "source_id": "ubuntu_usn",
+      "n": 5,
+      "p50_seconds": 10179,
+      "p95_seconds": 18970,
+      "max_seconds": 18970,
+      "sla_6h_ratio": 1
+    }
+  ],
+  "reference": {
+    "overall": {
+      "n": 912,
+      "p50_seconds": 5217,
+      "p95_seconds": 17950,
+      "max_seconds": 28766,
+      "sla_6h_ratio": 0.9912
+    },
+    "by_source": [
+      {
+        "source_id": "nvd_cve",
+        "n": 907,
+        "p50_seconds": 5217,
+        "p95_seconds": 17950,
+        "max_seconds": 28766,
+        "sla_6h_ratio": 0.9912
+      },
+      {
+        "source_id": "cve_org",
+        "n": 126,
+        "p50_seconds": 2410,
+        "p95_seconds": 7318,
+        "max_seconds": 7319,
+        "sla_6h_ratio": 1
+      },
+      {
+        "source_id": "osv",
+        "n": 27,
+        "p50_seconds": 7347,
+        "p95_seconds": 25100,
+        "max_seconds": 28766,
+        "sla_6h_ratio": 0.9259
+      },
+      {
+        "source_id": "ubuntu_usn",
+        "n": 5,
+        "p50_seconds": 10179,
+        "p95_seconds": 18970,
+        "max_seconds": 18970,
+        "sla_6h_ratio": 1
+      }
+    ],
+    "note": "含上线前发布、本次才首次见到的历史条目：lag 里混入上游发布/更新延迟，不可写成「监测延迟」"
+  },
+  "by_source_note": "样本按漏洞去重（cve_ids[0] 优先，退回 intel_id），但来源取组内并集：一条被多个源见过的漏洞仍计入它每个来源，因此各源 n 之和可以大于 overall.n（这是归并口径，不是重复计数错误）",
+  "excluded": {
+    "fixture_rows": 80,
+    "out_of_window": 51611,
+    "published_before_monitor_start": 0,
+    "unparseable": 0,
+    "negative_lag": 0,
+    "duplicate_intel_rows": 18095
+  },
+  "collect": {
+    "sources_registered": 7,
+    "sources_active": 5,
+    "raw_items": 71712,
+    "intel_items": 6314,
+    "merge_ratio": 0.912,
+    "merge_ratio_note": "归并率 = 1 − 窗口内去重情报条数 / 窗口内累计解析条目数（两侧同跨度）；无运行日志时为 0，不用抓取批次数冒充分母"
+  },
+  "watermarks": [
+    {
+      "source": "cisa_kev",
+      "last_sync_at": "2026-10-04T04:39:21.325Z",
+      "last_full_sync_at": "2026-10-01T02:51:31.423Z",
+      "last_published_at": null,
+      "items_last_run": 0,
+      "success": false,
+      "error": "fixture（离线回放预置样本）",
+      "replaying_fixture": true,
+      "skipped_this_run": false
+    },
+    {
+      "source": "cve_org",
+      "last_sync_at": "2026-10-04T04:41:05.528Z",
+      "last_full_sync_at": "2026-10-01T02:40:39.277Z",
+      "last_published_at": "2026-10-04T04:16:43.680Z",
+      "items_last_run": 126,
+      "success": true,
+      "error": null,
+      "replaying_fixture": false,
+      "skipped_this_run": false
+    },
+    {
+      "source": "nvd_cve",
+      "last_sync_at": "2026-10-04T04:34:06.624Z",
+      "last_full_sync_at": "2026-10-01T02:39:22.714Z",
+      "last_published_at": "2026-10-04T04:16:43.680Z",
+      "items_last_run": 907,
+      "success": true,
+      "error": null,
+      "replaying_fixture": false,
+      "skipped_this_run": false
+    },
+    {
+      "source": "osv",
+      "last_sync_at": "2026-10-04T04:39:43.918Z",
+      "last_full_sync_at": "2026-10-01T02:40:12.869Z",
+      "last_published_at": "2026-10-02T08:17:00.677Z",
+      "items_last_run": 27,
+      "success": false,
+      "error": "fixture（离线回放预置样本）",
+      "replaying_fixture": true,
+      "skipped_this_run": false
+    },
+    {
+      "source": "ubuntu_usn",
+      "last_sync_at": "2026-10-04T04:41:06.799Z",
+      "last_full_sync_at": "2026-10-01T02:40:09.548Z",
+      "last_published_at": "2026-10-01T16:46:33.027Z",
+      "items_last_run": 5,
+      "success": true,
+      "error": null,
+      "replaying_fixture": false,
+      "skipped_this_run": false
+    }
+  ],
+  "queue_depth": 0,
+  "fallback_total": 83,
+  "uptime": {
+    "window_start": "2026-10-01T02:51:31.422Z",
+    "window_end": "2026-10-04T04:56:08.697Z",
+    "heartbeat_s": 1800,
+    "heartbeat_source": "explicit",
+    "heartbeats_expected": 149,
+    "heartbeats_observed": 869,
+    "coverage_ratio": 1,
+    "coverage_reliable": true,
+    "reliability_note": "期望节拍由调用方给定（1800s，取 active 源最小 poll_interval_s），覆盖率可作为运行证据",
+    "runs_total": 1419,
+    "failed_runs": 3,
+    "degraded_runs": 80,
+    "failures_by_source": {
+      "osv": 3
+    },
+    "degraded_by_source": {
+      "cisa_kev": 74,
+      "ubuntu_usn": 2,
+      "osv": 4
+    },
+    "longest_continuous_ms": 268477275,
+    "total_uptime_ms": 268477275,
+    "segments": [
+      {
+        "started_at": "2026-10-01T02:51:31.422Z",
+        "finished_at": "2026-10-04T04:56:08.697Z",
+        "duration_ms": 268477275,
+        "heartbeats": 869
+      }
+    ]
+  },
+  "coverage_gaps": [
+    {
+      "source_id": "cve_org",
+      "known_cves": 5147,
+      "verified_cves": 273,
+      "pending_cves": 4874,
+      "note": "每轮上限见 scheduler.nextCveSeeds；此处不复制常量"
+    },
+    {
+      "source_id": "osv",
+      "known_cves": 5147,
+      "verified_cves": 548,
+      "pending_cves": 4599,
+      "note": "每轮上限见 scheduler.nextCveSeeds；此处不复制常量"
+    }
+  ],
+  "run_log": {
+    "path": "D:\\documents\\code\\program\\项目\\SafeTrace\\safetrace\\tmp\\ingest-runs.jsonl",
+    "records": 1441,
+    "bad_lines": 0
+  },
+  "event_db": "D:\\documents\\code\\program\\项目\\SafeTrace\\safetrace\\var\\safetrace.sqlite"
+}
