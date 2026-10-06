@@ -19,6 +19,70 @@ export interface VulnItem {
   enriched: boolean
   summary?: string
   related?: { papers: unknown[]; pocs: unknown[] }
+  /**
+   * 预富化已知信息：来自本地 NVD / KEV / Ubuntu USN 离线文档的既存字段，不是模型生成结论。
+   * 老接口或演示模式不返回该字段，整块不渲染。
+   */
+  baseline?: BaselineFacts
+  /**
+   * 逐维缺口 / 已验证状态。status=missing 只表示本轮没拿到该维度，
+   * 不得在 UI 上换算成 0 分、低风险或“无风险”。
+   */
+  gaps?: GapEntry[]
+}
+
+/** baseline.references 的单条参考链接（最多 8 条，仅 http/https） */
+export interface BaselineReference {
+  url: string
+  tags: string[]
+}
+
+/** baseline.score_versions 的单条官方评分，按版本标注（v4.0 / v3.1 / v3.0 / v2） */
+export interface BaselineScoreVersion {
+  version: string
+  base: number | null
+  vector: string | null
+  source: string
+  metric_type: string
+  /** 后端显式标记：该 v3.1 指标已从本地原文复核并发布；缺省时前端用保守启发式 */
+  verified?: boolean
+}
+
+/** baseline.kev：CISA KEV 在野利用目录条目 */
+export interface BaselineKev {
+  listed: true
+  date_added: string
+  due_date: string | null
+  ransomware: boolean
+  required_action: string | null
+}
+
+/** baseline.usn：Ubuntu USN notice 与其修复包版本 */
+export interface BaselineUsn {
+  notice_id: string
+  packages: string[]
+}
+
+/** 预富化已知信息（详情页“已知信息与缺口”区块的第一半） */
+export interface BaselineFacts {
+  /** NVD 英文描述或 KEV shortDescription */
+  description: string | null
+  cwe: string[]
+  references: BaselineReference[]
+  score_versions: BaselineScoreVersion[]
+  kev?: BaselineKev | null
+  usn?: BaselineUsn[] | null
+  source_ids: string[]
+}
+
+/**
+ * 逐维缺口 / 已验证。dimension 现口径为 cvss_v31 / paper / epss / remediation；
+ * 后端新增维度时前端按未知维度原样展示，不阻断渲染。
+ */
+export interface GapEntry {
+  dimension: string
+  status: 'proven' | 'missing'
+  reason: string
 }
 
 export interface Paged<T> {

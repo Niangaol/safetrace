@@ -90,8 +90,12 @@ export function naturalConclusion(input: NaturalInput): string | null {
     }
   }
   if (input.askRemediation) {
+    const seenNotices = new Set<string>();
     for (const item of input.remediation ?? []) {
-      const fixed = (item.fixed_packages ?? []).map(p => p.name + (p.release ? " " + p.release + " 的 " + p.version : " " + p.version))
+      const noticeKey = (item.fixed_packages ?? []).map(p => p.name + "=" + p.version + "=" + (p.release ?? "")).join("|");
+      if (noticeKey && seenNotices.has(noticeKey)) continue;
+      if (noticeKey) seenNotices.add(noticeKey);
+      const fixed = [...new Set((item.fixed_packages ?? []).map(p => p.name + (p.release ? " " + p.release + " 的 " + p.version : " " + p.version)))]
       if (fixed.length) parts.push("厂商公告的修复版本：" + fixed.join("、") + "（以上为厂商声明，尚未验证）。")
       for (const action of item.actions ?? []) parts.push("机构 / 厂商建议：" + firstSentence(action) + "（以上为机构声明，尚未验证）。")
     }

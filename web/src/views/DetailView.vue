@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { getJson, IS_DEMO_MODE, BACKEND_DATA_MODE } from '../api'
-import type { EvidenceResponse, Evidence, Enrichment, VulnItem } from '../types'
+import type { BaselineFacts, BaselineScoreVersion, EvidenceResponse, Evidence, Enrichment, GapEntry, VulnItem } from '../types'
 import CountUpNumber from '../effects/CountUpNumber.vue'
 import RevealOnScroll from '../effects/RevealOnScroll.vue'
 
@@ -64,6 +64,56 @@ function toggle(dim: string) {
   openDims.value = next
 }
 
+// ── 预富化「已知信息与缺口」：全部读后端可选字段，缺字段就不渲染，不补造、不换算 ──
+const baseline = computed<BaselineFacts | null>(() => vuln.value?.baseline ?? null)
+const gapEntries = computed<GapEntry[]>(() => vuln.value?.gaps ?? [])
+const missingGaps = computed(() => gapEntries.value.filter(g => g.status !== 'proven'))
+const provenGaps = computed(() => gapEntries.value.filter(g => g.status === 'proven'))
+
+const GAP_LABEL: Record<string, string> = {
+  cvss_v31: 'CVSS v3.1 官方评分',
+  paper: '论文关联',
+  epss: 'EPSS 利用概率',
+  remediation: '修复版本',
+}
+function gapLabel(dimension: string): string {
+  return GAP_LABEL[dimension] ?? dimension + '（未知维度，按后端原样展示）'
+}
+/** 版本号一律带 v 前缀，避免只看分值分不清是哪一版口径 */
+function versionLabel(version: string): string {
+  const raw = (version ?? '').trim()
+  if (!raw) return '未标注版本'
+  return /^v/i.test(raw) ? raw : 'v' + raw
+}
+/** base 为 null 是缺口：显示“未提供分值”，绝不显示 0 或“无风险” */
+function scoreBaseLabel(base: number | null): string {
+  return base == null ? '未提供分值' : base.toFixed(1)
+}
+/** “已验证”只加在标注 NVD/NIST 来源的 v3.1 指标上，转引来源不加徽标 */
+function isVerifiedV31(score: BaselineScoreVersion): boolean {
+  if (typeof score.verified === 'boolean') return score.verified
+  return /3\.1/.test(score.version) && /nist|nvd/i.test(score.source + ' ' + score.metric_type)
+}
+const hasV31 = computed(() => (baseline.value?.score_versions ?? []).some(s => /3\.1/.test(s.version)))
+/** 没有 v3.1 时给一行缺口说明：优先用后端 reason，缺省才按本地 NVD 口径拼装 */
+const v31GapReason = computed(() => {
+  if (!baseline.value || hasV31.value) return ''
+  const backend = gapEntries.value.find(g => g.dimension === 'cvss_v31')
+  if (backend?.reason) return backend.reason
+  const others = (baseline.value.score_versions ?? []).map(s => versionLabel(s.version)).join('、')
+  return '本地 NVD 文档中没有该 CVE 的 v3.1 指标' + (others ? '（当前仅有 ' + others + '）' : '') + '；评分缺口不等于无风险，也不按 0 分处理。'
+})
+const baselineSourceLabel = computed(() => {
+  const ids = baseline.value?.source_ids ?? []
+  return ids.length ? ids.length + ' 个来源' : '离线文档'
+})
+function fmtDateTime(value: string | null | undefined): string {
+  if (!value) return '未提供'
+  return value.length > 10 ? value.slice(0, 19).replace('T', ' ') : value
+}
+function hostOf(url: string): string {
+  try { return new URL(url).host } catch { return url }
+}
 function renderValue(value: unknown): string {
   if (value === null || value === undefined) return '—'
   if (typeof value !== 'object') return String(value)
@@ -155,6 +205,97 @@ onMounted(async () => {
 
     </RevealOnScroll>
 
+    <!-- 已知信息与缺口：老接口 / 演示模式不返回 baseline 时整块不渲染。
+         缺失维度一律显式标成缺口，不换算成 0 分或“无风险”。 -->
+    <RevealOnScroll as="div" :delay="90">
+    <section v-if="baseline" class="panel baseline-panel" aria-label="已知信息与缺口">
+      <div class="panel-header">
+        <h3 class="fx-underline">已知信息与缺口</h3>
+        <span class="badge-count">{{ baselineSourceLabel }} · 缺口 {{ missingGaps.length }} · 已验证 {{ provenGaps.length }}</span>
+      </div>
+      <p class="muted baseline-note">预富化已知信息读自本地 NVD / KEV / Ubuntu USN 离线文档，是既存字段而非模型结论；“缺口”只说明本轮没拿到该维度，不代表无风险，也不按 0 分处理。</p>
+
+      <div class="baseline-grid">
+        <article v-if="baseline.description" class="baseline-card fx-sheen fx-lift" data-sheen>
+          <h4>官方描述</h4>
+          <p class="baseline-text">{{ baseline.description }}</p>
+          <small class="muted">取自 NVD 英文描述或 KEV shortDescription 原文口径，未做归并改写</small>
+        </article>
+
+        <article v-if="baseline.cwe.length" class="baseline-card fx-sheen fx-lift" data-sheen>
+          <h4>CWE 分类</h4>
+          <div class="baseline-tags">
+            <span v-for="c in baseline.cwe" :key="c" class="badge info">{{ c }}</span>
+          </div>
+          <small class="muted">仅列出官方文档给出的 CWE 编号</small>
+        </article>
+
+        <article v-if="baseline.references.length" class="baseline-card fx-sheen fx-lift" data-sheen>
+          <h4>参考链接</h4>
+          <ul class="baseline-refs">
+            <li v-for="r in baseline.references" :key="r.url">
+              <a :href="r.url" target="_blank" rel="noreferrer noopener">{{ hostOf(r.url) }} ↗</a>
+              <span v-if="r.tags.length" class="muted baseline-ref-tags">{{ r.tags.join(' / ') }}</span>
+            </li>
+          </ul>
+          <small class="muted">{{ baseline.references.length }} 条，仅 http/https；域名明文供人工核对上游</small>
+        </article>
+
+        <article class="baseline-card fx-sheen fx-lift" data-sheen>
+          <h4>官方评分（按版本）</h4>
+          <ul class="baseline-scores">
+            <li v-for="s in baseline.score_versions" :key="s.version + '|' + s.source + '|' + s.metric_type">
+              <span class="baseline-score-line">CVSS {{ versionLabel(s.version) }}：{{ scoreBaseLabel(s.base) }}<span class="muted">（{{ s.source }}，{{ s.metric_type }}）</span></span>
+              <span v-if="isVerifiedV31(s)" class="badge low" title="来源标注 NVD/NIST 的 v3.1 指标">已验证</span>
+            </li>
+            <li v-if="!baseline.score_versions.length" class="muted">本地文档未提供任何官方评分（缺口，不是 0 分）</li>
+          </ul>
+          <p v-if="v31GapReason" class="baseline-gap-note">
+            <span class="badge high">缺口</span>
+            <span>{{ v31GapReason }}</span>
+          </p>
+          <small class="muted">每行必须连版本一起读；不同版本分值不可混用，也不与详情页顶部的 CVSS 基础分互相覆盖</small>
+        </article>
+
+        <article v-if="baseline.kev?.listed" class="baseline-card fx-sheen fx-lift" data-sheen>
+          <h4>KEV 在野利用</h4>
+          <ul class="baseline-kv">
+            <li>列入日期：{{ fmtDateTime(baseline.kev.date_added) }}</li>
+            <li>修复截止：{{ fmtDateTime(baseline.kev.due_date) }}</li>
+            <li>涉及勒索软件：{{ baseline.kev.ransomware ? '是' : '未标注' }}</li>
+            <li v-if="baseline.kev.required_action">官方要求：{{ baseline.kev.required_action }}</li>
+          </ul>
+          <small class="muted">在野利用目录条目，不代表你的环境已被利用</small>
+        </article>
+
+        <article v-if="baseline.usn?.length" class="baseline-card fx-sheen fx-lift" data-sheen>
+          <h4>USN 修复版本</h4>
+          <div v-for="u in baseline.usn" :key="u.notice_id" class="baseline-usn">
+            <strong class="baseline-mono">{{ u.notice_id }}</strong>
+            <div class="baseline-tags">
+              <span v-for="p in u.packages" :key="p" class="baseline-pkg">{{ p }}</span>
+            </div>
+          </div>
+          <small class="muted">只读 Ubuntu notice 的版本口径，不代表已执行或已验证修复</small>
+        </article>
+
+        <article class="baseline-card baseline-card-gaps fx-sheen" data-sheen>
+          <h4>缺口与已验证（逐维）</h4>
+          <ul class="baseline-gaps">
+            <li v-for="g in gapEntries" :key="g.dimension + '|' + g.status" :class="g.status === 'proven' ? 'is-proven' : 'is-missing'">
+              <span class="badge" :class="g.status === 'proven' ? 'low' : 'high'">{{ g.status === 'proven' ? '已验证' : '缺失' }}</span>
+              <div class="baseline-gap-body">
+                <strong>{{ gapLabel(g.dimension) }}</strong>
+                <span class="baseline-gap-reason">{{ g.reason }}</span>
+              </div>
+            </li>
+            <li v-if="!gapEntries.length" class="muted baseline-gaps-empty">后端未返回逐维缺口字段（老接口口径）；缺口以上方各卡片标注为准，不代表全部维度已验证。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+    </RevealOnScroll>
+
     <RevealOnScroll as="div" :delay="120">
     <div class="panel fade-in">
       <div class="panel-header">
@@ -237,5 +378,5 @@ onMounted(async () => {
   </template>
 </template>
 <style scoped>
-.dimension-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:20px}.dimension-card{padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated);transition:transform .3s cubic-bezier(.22,.61,.36,1),border-color .3s}.dimension-card:hover{transform:translateY(-3px);border-color:var(--border-bright)}@media(prefers-reduced-motion:reduce){.dimension-card:hover{transform:none}}.dimension-card h3{margin:0 0 10px;font-size:15px}.dimension-card strong{font-size:12px;color:var(--accent)}.dimension-card p,.detail-note{font-size:12px;color:var(--muted);line-height:1.8}.dimension-card small{color:var(--muted)}.hash-proof,.dimension-value{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.8;font-family:monospace}.panel{overflow-x:auto}.panel :deep(a){overflow-wrap:anywhere}.panel>div>div:first-child{flex-wrap:wrap}@media(max-width:600px){.dimension-grid{grid-template-columns:1fr}.page-subtitle{flex-wrap:wrap}}
+.baseline-note{font-size:12px;color:var(--muted);line-height:1.8;margin:0 0 14px}.baseline-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;align-items:start}.baseline-card{padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated);min-width:0}.baseline-card h4{margin:0 0 10px;font-size:13px;color:var(--text-bright);display:flex;align-items:center;gap:8px;flex-wrap:wrap}.baseline-card-gaps{grid-column:1/-1}.baseline-text{margin:0;font-size:13px;line-height:1.85;color:var(--muted-light);white-space:pre-wrap;overflow-wrap:anywhere}.baseline-card small{display:block;margin-top:8px;font-size:11px;color:var(--muted);line-height:1.7}.baseline-tags{display:flex;flex-wrap:wrap;gap:6px}.baseline-pkg{padding:2px 8px;border:1px solid var(--border);border-radius:4px;background:var(--panel);font-family:'JetBrains Mono',monospace;font-size:11px;overflow-wrap:anywhere}.baseline-refs,.baseline-scores,.baseline-kv,.baseline-gaps{list-style:none;margin:0;padding:0}.baseline-refs li,.baseline-scores li,.baseline-kv li{font-size:12px;line-height:1.8;padding:3px 0;overflow-wrap:anywhere}.baseline-refs a{font-size:12px;overflow-wrap:anywhere}.baseline-ref-tags{font-size:11px;margin-left:6px}.baseline-score-line{font-family:'JetBrains Mono',monospace;font-size:12px;overflow-wrap:anywhere}.baseline-scores li{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.baseline-scores .badge{flex-shrink:0}.baseline-gap-note{margin:10px 0 0;font-size:12px;line-height:1.8;color:var(--high);display:flex;gap:8px;align-items:flex-start}.baseline-gap-note .badge{flex-shrink:0}.baseline-usn{margin-bottom:8px}.baseline-mono{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-bright);overflow-wrap:anywhere}.baseline-gaps li{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel);margin-bottom:8px}.baseline-gaps li:last-child{margin-bottom:0}.baseline-gaps li.is-missing{border-color:rgba(255,136,0,.35);background:rgba(255,136,0,.06)}.baseline-gaps li.is-proven{border-color:rgba(34,197,94,.3);background:rgba(34,197,94,.05)}.baseline-gaps .badge{flex-shrink:0}.baseline-gap-body{display:flex;flex-direction:column;gap:2px;min-width:0}.baseline-gap-body strong{font-size:12px}.baseline-gaps li.is-missing .baseline-gap-body strong{color:var(--high)}.baseline-gaps li.is-proven .baseline-gap-body strong{color:var(--low)}.baseline-gap-reason{font-size:12px;color:var(--muted-light);line-height:1.75;overflow-wrap:anywhere}.baseline-gaps-empty{font-size:12px;line-height:1.8;padding:4px 2px}@media(prefers-reduced-motion:reduce){.baseline-card,.baseline-panel{animation:none;transition:none}.baseline-card:hover{transform:none}}@media(max-width:600px){.baseline-grid{grid-template-columns:1fr}.baseline-card{padding:12px}}.dimension-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:20px}.dimension-card{padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated);transition:transform .3s cubic-bezier(.22,.61,.36,1),border-color .3s}.dimension-card:hover{transform:translateY(-3px);border-color:var(--border-bright)}@media(prefers-reduced-motion:reduce){.dimension-card:hover{transform:none}}.dimension-card h3{margin:0 0 10px;font-size:15px}.dimension-card strong{font-size:12px;color:var(--accent)}.dimension-card p,.detail-note{font-size:12px;color:var(--muted);line-height:1.8}.dimension-card small{color:var(--muted)}.hash-proof,.dimension-value{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.8;font-family:monospace}.panel{overflow-x:auto}.panel :deep(a){overflow-wrap:anywhere}.panel>div>div:first-child{flex-wrap:wrap}@media(max-width:600px){.dimension-grid{grid-template-columns:1fr}.page-subtitle{flex-wrap:wrap}}
 </style>

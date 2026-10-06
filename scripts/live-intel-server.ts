@@ -8,6 +8,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { pathToFileURL } from "node:url";
 import { readLiveKnowledgeView, liveIntelItem, liveEvidenceView } from "../src/qa/src/live-knowledge-view.js";
 import { readRemediationEvidence } from "../src/qa/src/remediation-reader.js";
+import { loadBaselineIndex, baselineForItem, baselineNarrative, type BaselineIndex } from "../src/qa/src/baseline-reader.js";
 import { naturalConclusion } from "./natural-answer.js";
 import { knowledgeGeneration } from "../src/qa/src/knowledge-generation.js";
 import type { LiveKnowledgeView } from "../src/qa/src/live-knowledge-view.js";
@@ -34,6 +35,8 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
   let qaCount=0;
   const activity=new ActivityStream(options.sqlitePath),settings=options.modelSettings;
   let cached: { key:string; view:LiveKnowledgeView } | undefined;
+  let baselineCache: { key:string; index:BaselineIndex } | undefined;
+  const readBaseline=async():Promise<BaselineIndex>=>{const key=await knowledgeGeneration(options);if(baselineCache?.key===key)return baselineCache.index;const index=await loadBaselineIndex({sqlitePath:options.sqlitePath,payloadRoots:options.payloadRoots});baselineCache={key,index};return index;};
   let building: { key:string; promise:Promise<LiveKnowledgeView> } | undefined;
   const read=options.readView??(async()=>{
     const key=await knowledgeGeneration(options);
@@ -72,7 +75,7 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
       if(itemRoute){
         const item=view.intel.find(i=>i.intel_id===decodeURIComponent(itemRoute[1]!));
         if(!item){json(res,404,{error:{message:"intelligence absent or latest DQ not released"},data_mode:"live"});return;}
-        if(!itemRoute[2]){json(res,200,liveIntelItem(view,item));return;}
+        if(!itemRoute[2]){const index=await readBaseline();const baseline=baselineForItem(index,item,view.verified.has(item.intel_id));json(res,200,{...liveIntelItem(view,item),baseline:baseline.facts,gaps:baseline.gaps});return;}
         const base=liveEvidenceView(view,item),guidance=await readRemediationEvidence({...options,intelIds:[item.intel_id],limit:1});
         const extra=guidance.evidence.length?[{dimension:"remediation",value:{guidance:guidance.evidence.map(e=>e.artifact)},source:[...new Set(guidance.evidence.map(e=>e.artifact.source_id))],
           evidence:guidance.evidence.map(e=>({evidence_id:e.chunk.chunk_id,source:e.artifact.source_id,url:e.artifact.source_url,snippet:e.chunk.text,artifact_sha256:e.chunk.provenance.sha256,original_sha256:e.artifact.source_sha256,parent_lineage_ids:e.parent_lineage_ids})),
@@ -94,14 +97,31 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
         const evidence=await index.search(retrievalRequest);event(res,{event:"stage",stage:"retrieve",hit:evidence.chunks.length});
         activity.publish({trace_id:trace,intel_id:null,stage:"knowledge",status:"success",at:new Date().toISOString(),label:"qa.retrieval",details:{artifact_count:evidence.chunks.length}});
         event(res,{event:"stage",stage:"generate",answer_mode:settings?.mode()??"template"});
+        const baselineIndex=await readBaseline().catch(()=>undefined);
+        const provenCves=new Set(view.intel.filter(i=>view.verified.has(i.intel_id)).flatMap(i=>i.cve_ids));
+        const gapLine=(()=>{
+          if(!baselineIndex||!plan.slots.cve_ids.length)return null;
+          try{
+            const item={cve_ids:plan.slots.cve_ids,source_ids:[]} as any;
+            const {gaps}=baselineForItem(baselineIndex,item,plan.slots.cve_ids.some(cve=>provenCves.has(cve)));
+            const missing=gaps.filter(g=>g.status==="missing");
+            if(!missing.length)return null;
+            return "维度缺口：" + missing.map(g=>{const label=({cvss_v31:"CVSS v3.1 官方评分",paper:"论文关联",epss:"EPSS 利用概率",remediation:"修复版本"} as Record<string,string>)[g.dimension]??g.dimension;return label+"（"+g.reason+"）";}).join("；") + "。以上缺口不代表无风险，也不按 0 分处理。";
+          }catch{return null;}
+        })();
         const natural=naturalConclusion({cve_id:plan.slots.cve_ids[0]??null,chunks:evidence.chunks,remediation:(guidance?.evidence??[]).map(item=>item.artifact),askRemediation:plan.intents.includes("remediation")});
                 let answerMode="template",answerModel="q4-template-v1",modelFallback=false,modelAttempts=0;let answer;
         try{const selected=settings?await settings.synthesizer(()=>{modelAttempts++;}):undefined;
           const modelEvidence=selected?.synth?settings!.modelEvidence(evidence,[...view.projection.chunks,...(guidance?.chunks??[])]):evidence;
           answer=await synthesizeAnswer(q,plan,modelEvidence,selected?.synth?{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id,model_version:"runtime-settings"}}:{});
-          if(selected?.synth && !answer.abstained && !answer.degraded_to){answerMode=selected.mode;answerModel=selected.model_id;}else if(selected?.synth&&!answer.abstained){answerMode="template_fallback";modelFallback=true;}
+          if(selected?.synth && !answer.abstained && !answer.degraded_to){answerMode=selected.mode;answerModel=selected.model_id;if(gapLine)answer={...answer,text_md:answer.text_md+"\n\n"+gapLine};}else if(selected?.synth&&!answer.abstained){answerMode="template_fallback";modelFallback=true;}
         }catch{answer=await synthesizeAnswer(q,plan,evidence);answerMode="template_fallback";modelFallback=true;}
-        if(!answer.text_md.includes("## 结论（自然语言）")&&natural)answer={...answer,text_md:"## 结论（自然语言）\n\n"+natural+"\n\n"+answer.text_md};
+        if(!answer.text_md.includes("## 结论（自然语言）")){
+          const extra=baselineIndex?baselineNarrative(baselineForItem(baselineIndex,{cve_ids:plan.slots.cve_ids,source_ids:[]} as any,false).facts):null;
+          let lead=[natural,natural&&extra&&!/修复版本/.test(natural)?extra:null].filter(Boolean).join("\n\n")||(extra&&!/修复版本/.test(extra)?extra:null);
+          if(gapLine)lead=[lead,gapLine].filter(Boolean).join("\n\n");
+          if(lead)answer={...answer,text_md:"## 结论（自然语言）\n\n"+lead+"\n\n"+answer.text_md};
+        }
         activity.publish({trace_id:trace,intel_id:null,stage:modelFallback?"fallback":"answer",status:modelFallback?"degraded":answer.abstained?"rejected":"success",at:new Date().toISOString(),label:"qa.answer_completed",details:{artifact_count:answer.citations.length,reason:modelFallback?"已回退规则模板；无其它云端自动降级":answer.abstained?"证据不足或保护门禁拒答":"引用已绑定检索证据"}});
         if(res.destroyed)return;
         event(res,{event:"stage",stage:"check"});

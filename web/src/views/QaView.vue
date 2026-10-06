@@ -79,6 +79,14 @@ onUnmounted(() => qa.stop())
 
 watch(() => qa.answer, scrollToBottom)
 watch(() => qa.citations.length, scrollToBottom)
+
+// ── 缺口提示 ─────────────────────────────────────────────
+// 只用后端已经给的信号：本轮降级 / 兜底原因 / 没有任何引用（证据不足）/
+// 或回答文本里真实出现的“缺口”字样。不自行推断缺口内容，拿不到就不显示。
+const showGapHint = computed(() => {
+  if (!qa.answer || qa.thinking) return false
+  return Boolean(qa.degraded || qa.fallbackReason.trim() || qa.answer.includes('缺口') || !qa.citations.length)
+})
 </script>
 
 <template>
@@ -144,6 +152,14 @@ watch(() => qa.citations.length, scrollToBottom)
         <span>本轮存在降级 / 证据限制：{{ answerModeLabel(qa.answerMode) }}。{{ qa.fallbackReason || '请核对回答中的限制与引用。' }} 数据来自{{ dataLabel }}；降级不算成功，缺少论文不能用漏洞摘要替代。</span>
       </div>
 
+      <!-- 缺口提示：只指路到情报详情页，不在问答区重述或补造缺口内容 -->
+      <div v-if="showGapHint" class="degraded-flag fx-in gap-hint" style="margin-bottom: 8px; padding: 8px 12px; background: rgba(251, 191, 36, 0.08); border-radius: var(--radius-sm); border: 1px solid rgba(251, 191, 36, 0.2); display: flex; align-items: center; gap: 8px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; flex-shrink: 0" aria-hidden="true">
+          <path d="M12 9v4 M12 17h.01 M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+        </svg>
+        <span>部分维度缺失（见情报详情页的已知信息与缺口）。</span>
+      </div>
+
       <!-- 错误 -->
       <div v-if="qa.error" style="color: var(--critical); font-size: 13px; padding: 12px; background: rgba(244, 63, 94, 0.08); border-radius: var(--radius-sm); border: 1px solid rgba(244, 63, 94, 0.2)">
         {{ qa.error }}
@@ -205,7 +221,7 @@ watch(() => qa.citations.length, scrollToBottom)
 .markdown-answer :deep(a:hover){color:#7dd3fc}
 .markdown-answer :deep(hr){border:0;border-top:1px solid var(--border);margin:14px 0}
 .generating-caret{margin-left:2px;color:var(--accent)}
-.link-host{display:block;font-size:10px;color:var(--muted);margin-top:2px}
-@media(prefers-reduced-motion:reduce){.markdown-answer{animation:none}.evidence{animation:none}}
+.link-host{display:block;font-size:10px;color:var(--muted);margin-top:2px}.gap-hint{flex-wrap:wrap;line-height:1.8}.gap-hint span{overflow-wrap:anywhere}
+@media(prefers-reduced-motion:reduce){.markdown-answer{animation:none}.evidence{animation:none}.gap-hint{animation:none}}
 .runtime-panel{border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:14px;background:var(--bg-elevated)}.runtime-panel>div{display:flex;flex-wrap:wrap;gap:10px 16px;margin-bottom:8px;font-size:12px}.runtime-panel p,.refusal-note{font-size:12px;color:var(--muted);line-height:1.8;margin:8px 0}.process-strip{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.process-strip span{padding:6px 12px;font-size:12px;border:1px solid var(--border);border-radius:20px;color:var(--muted)}.process-strip .current{color:var(--accent);border-color:var(--accent)}.toolbar{flex-wrap:wrap}.toolbar input{min-width:200px}.evidence a{overflow-wrap:anywhere}@media(max-width:600px){.toolbar input{width:100%;flex-basis:100%!important}.runtime-panel{padding:12px}}
 </style>
