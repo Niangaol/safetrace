@@ -37,6 +37,11 @@ export interface RunIngestOnceOpts {
   limit?: number;
   /** 调度器单源运行时可传入已持久化的 CVE IDs，作为 OSV/cve.org 查询种子。 */
   cve_ids?: string[];
+  /**
+   * 源特有入参（按 source_id 透传给对应采集器）。
+   * 目前仅 `nvd_cve` 支持：历史回补时传 `{ skipLastModWindow: true, pubWindow }`。
+   */
+  sourceOptions?: Record<string, Record<string, unknown>>;
 }
 
 export interface IngestRunResult {
@@ -108,6 +113,7 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
         offline: opts.offline,
         traceId,
         ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+        ...(opts.sourceOptions?.[runner.id] ?? {}),
         ...(discoveredCves.size > 0 ? { cveIds: candidateCveIds() } : {}),
         onNoData: (reason) => { noDataReason = reason; },
         emit: (event) => { sourceEvents.push(event); },

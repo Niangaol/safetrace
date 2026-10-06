@@ -76,6 +76,11 @@ export interface FetchNvdOpts extends FetchOpts {
   pubWindow?: { start: string; end: string };
   /** 只做 lastMod（对照实验/排障用）；默认两窗口都跑。 */
   skipPubWindow?: boolean;
+  /**
+   * 只做 pubDate（历史回补用）：跳过 lastMod 窗口，避免把近期已入库的几千条重新抓一遍。
+   * 默认 false；为 true 时 `window` 被忽略。历史回补必须显式传 pubWindow。
+   */
+  skipLastModWindow?: boolean;
 }
 
 type WindowKind = "lastMod" | "pubDate";
@@ -217,7 +222,7 @@ export async function fetchNvd(opts: FetchNvdOpts = {}): Promise<RawDoc | null> 
   const pubStart = opts.pubWindow?.start ?? new Date(Date.parse(pubEnd) - pubLookbackHours() * 3600_000).toISOString();
   const apiKey = process.env.NVD_API_KEY?.trim() ?? "";
 
-  const windows: WindowResult[] = [
+  const windows: WindowResult[] = opts.skipLastModWindow === true ? [] : [
     await fetchWindow(entry.url, apiKey, "lastMod", start, end, traceId, opts.emit),
   ];
   if (opts.skipPubWindow !== true) {
