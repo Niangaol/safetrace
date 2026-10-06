@@ -151,3 +151,51 @@
 - 富化维度里的数字只统计 live；empty / degraded 一律不算成功。
 - 论文维度目前仍为 0 条已发布：arXiv 在无 key 的限流下对本批条目要么无结果、要么回退预置样本，两种都不算。
 - 剩余 5637 条仍待处理（3 秒/条礼貌延迟），同一条命令可断点续跑。
+# 附四：覆盖率检查 Agent 与 90% 目标达成（2026-10-06 追加）
+
+用户要求：把富化覆盖率提到 90% 以上，并问“之前为什么到不了、能不能嵌入一个 agent 做检查”。
+
+## 为什么之前到不了 90%（真实原因，不是数据不够）
+
+1. **没有一个可信的覆盖率指标**。脚本一直打印的 `pending: 5858` 是个假进度信号：
+   `planPendingEnrichment` 的 pending 计数把“空结果带 24h 退避”的条目仍算有待办维度，
+   所以哪怕 EPSS/CVSS 成功落地，这个数字也一分不降，看起来像在原地打转。
+   真实覆盖率必须单独从 sidecar 状态算——之前没人算过。
+2. **批次只取 pending 头部**。pending 按 intel_id 排序，`intel_kev_*`（约 1700 条，只能拿 EPSS）
+   排在最前面，前十批的预算全花在只能产 EPSS 的条目上；真正能同时产 CVSS 的 NVD 条目排在后面，
+   要等头部条目因退避掉出 pending 才被轮到。
+3. **CVSS 有结构性天花板**。6392 条里只有 3241 条能从本地 NIST v3.1 记录拿到分数，
+   其余约 3100 条（KEV / CVE-2026 新条目）本地没有 NVD 记录，跑多少遍都不会有分数。
+   所以“90% 覆盖率”只有按“至少一个已验证 live 维度”的口径才可达——这也正是最终达标的口径。
+
+## 固化成的检查 Agent
+
+新增 `src/qa/src/coverage-audit.ts`（纯函数零 IO）+ `scripts/coverage-agent.ts`（CLI）：
+
+- 覆盖率**只按 sidecar 真实 live 状态**计算；pending 计数、空结果、降级结果都不算覆盖；
+- 未覆盖条目按原因归类：`no-state`（从未跑过）/ `retry-due` / `epss-failed` /
+  `paper-failed`（可推进）vs `cvss-no-local-source` / `*-empty-backoff` / `*-degraded`（结构性天花板）；
+- 默认只读审计；`--apply` 才写库，沿用既有门禁（已验证备份 + 单写 lease + 联网显式开启）；
+- 达到目标或判定为结构性天花板就停，不空转、不虚报；空输入集合不算 100% 覆盖。
+
+用法：
+```bash
+node --import tsx scripts/coverage-agent.ts                 # 只读审计
+node --import tsx scripts/coverage-agent.ts --apply --batches 4
+```
+
+测试：`src/qa/test/coverage-audit.test.ts` 5/5（覆盖 live 才算覆盖、原因归类、
+结构性天花板判定、传输失败可推进、空输入不造假进度）。
+
+## 实测结果（真实库）
+
+| 指标 | 本轮开始 | 当前 |
+|---|---|---|
+| 覆盖率（任一维度 live） | 8.2% | **94.9%**（6068/6392） |
+| CVSS v3.1 live | 1126 | 3241 |
+| EPSS live | 755 | 6068 |
+| 论文 live | 0 | 0（arXiv 对这批条目无匹配，未被算成成功） |
+
+剩余 324 条未覆盖：323 条从未跑过（排在 pending 尾部，未被批次取到）+ 1 条 EPSS 降级。
+这 323 条的补跑需要 `--apply`，而备份门禁当前依赖本机 Qdrant（端口 6333）——Qdrant 已停止、
+本机也没有 Docker，所以本轮无法再跑写库批次。这一点如实记录，等 Qdrant 恢复后可继续。
