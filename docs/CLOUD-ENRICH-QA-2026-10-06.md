@@ -199,3 +199,16 @@ node --import tsx scripts/coverage-agent.ts --apply --batches 4
 剩余 324 条未覆盖：323 条从未跑过（排在 pending 尾部，未被批次取到）+ 1 条 EPSS 降级。
 这 323 条的补跑需要 `--apply`，而备份门禁当前依赖本机 Qdrant（端口 6333）——Qdrant 已停止、
 本机也没有 Docker，所以本轮无法再跑写库批次。这一点如实记录，等 Qdrant 恢复后可继续。
+# 附五：三条提交已推送 origin/main（2026-10-06 收尾）
+
+本轮共三条提交，均通过 pre-push 四门禁（已含远端 PR #11 合并后重跑）：
+
+- `cc6219b` feat(qa): coverage audit agent that drives and verifies real enrichment coverage
+  —— 覆盖率审计纯函数 + Agent CLI + 5/5 测试（回答“为什么到不了 90%、能不能嵌 agent 检查”）
+- `a4578cb` feat(enrich): scope batch runs to requested dimensions so pending stops rotating forever
+  —— `--dimensions` 真正作用于 pending 计算，批次不再反复取同一批头部条目
+- `b5949ed` feat(web): skeuomorphic parcel pipeline driven by real activity events
+  —— 情报包裹沿传送带流动的拟物流水线（真实事件驱动，非循环动画）
+
+远端 main 与本地 HEAD 一致（`b5949ed`）。
+用户未提交的 PROJECT-INTRO.md / README.md / ROADMAP.md / Python/ 全程未被触碰。
