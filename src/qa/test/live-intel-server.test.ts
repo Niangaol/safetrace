@@ -37,7 +37,7 @@ test("live API lists only proven artifact values, cites enrichment in chat and r
     assert.ok(detail.enrichments.find((e:any)=>e.dimension==="paper").evidence[0].url.includes("arxiv.org/abs/2610.00001"));
     const metrics=await (await fetch(url+"/api/v1/metrics/overview")).json() as any;assert.equal(metrics.enrich.records,1);assert.equal(metrics.enrich.recorded_unverified,1);
     const reply=await fetch(url+"/api/v1/qa/chat",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({question:"CVE-2021-44228 paper Glass Lantern"})});const data=frames(await reply.text());
-    const done=data.find((e:any)=>e.event==="done");assert.equal(done.data_mode,"live");assert.equal(done.model_calls,0);assert.equal(done.answer_mode,"template");assert.equal(done.abstained,false);
+    const done=data.find((e:any)=>e.event==="done");assert.equal(done.data_mode,"live");assert.equal(done.model_calls,0);assert.equal(done.answer_mode,"template");assert.equal(done.abstained,false);assert.equal(done.final_review.status,"skipped");assert.match(done.final_review.reason,/未执行模型复核/);
     assert.ok(data.some((e:any)=>e.event==="citation"&&e.url.includes("arxiv.org/abs/2610.00001")));assert.ok(data.some((e:any)=>e.event==="token"&&e.text.includes("Glass Lantern")));
     assert.deepEqual(databaseBackupStats(path),before,"readonly API cannot migrate tables or append QA/model records to business DB");
     assert.equal((await fetch(url+"/api/v1/health",{headers:{origin:"https://foreign.example"}})).status,403);

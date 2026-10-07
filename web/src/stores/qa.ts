@@ -4,12 +4,28 @@ import { ref } from 'vue'
 import { getJson, streamChat } from '../api'
 import type { Citation, MetricsOverview } from '../types'
 
+export interface FinalReview {
+  status: 'accepted' | 'rejected' | 'failed' | 'skipped'
+  reason: string
+}
+
+function readFinalReview(value: unknown): FinalReview | null {
+  if (!value || typeof value !== 'object') return null
+  const review = value as Record<string, unknown>
+  if (typeof review.status !== 'string' || !['accepted', 'rejected', 'failed', 'skipped'].includes(review.status) || typeof review.reason !== 'string') return null
+  return { status: review.status as FinalReview['status'], reason: review.reason }
+}
+
 export const useQaStore = defineStore('qa', () => {
   const answer = ref('')
   const citations = ref<Citation[]>([])
   const stage = ref('')
   const thinking = ref(false)
   const degraded = ref(false)
+  const completed = ref(false)
+  const abstained = ref<boolean | null>(null)
+  const finalReview = ref<FinalReview | null>(null)
+  const requestId = ref(0)
   const answerMode = ref<'stepfun' | 'cloud' | 'local' | 'template' | 'template_fallback' | ''>('')
   const answerModelId = ref('')
   const fallbackReason = ref('')
@@ -26,6 +42,9 @@ export const useQaStore = defineStore('qa', () => {
     stage.value = ''
     thinking.value = true
     degraded.value = false
+    completed.value = false
+    abstained.value = null
+    finalReview.value = null
     answerMode.value = ''
     answerModelId.value = ''
     fallbackReason.value = ''
@@ -39,9 +58,11 @@ export const useQaStore = defineStore('qa', () => {
     stop()
     reset()
     const asked = question
+    const activeRequest = requestId.value
     abort = streamChat(
       { question, stream: true },
       (event) => {
+        if (activeRequest !== requestId.value || completed.value) return
         switch (event.event) {
           case 'stage':
             stage.value = event.stage
@@ -54,6 +75,9 @@ export const useQaStore = defineStore('qa', () => {
             answer.value += event.text ?? ''
             break
           case 'done':
+            completed.value = true
+            abstained.value = typeof event.abstained === 'boolean' ? event.abstained : null
+            finalReview.value = readFinalReview(event.final_review)
             thinking.value = false
             degraded.value = Boolean(event.degraded)
             answerMode.value = ['stepfun', 'cloud', 'local', 'template', 'template_fallback'].includes(event.answer_mode) ? event.answer_mode : 'template'
@@ -73,6 +97,7 @@ export const useQaStore = defineStore('qa', () => {
         }
       },
       (message) => {
+        if (activeRequest !== requestId.value || completed.value) return
         error.value = message
         thinking.value = false
       },
@@ -80,6 +105,7 @@ export const useQaStore = defineStore('qa', () => {
   }
 
   function stop() {
+    requestId.value += 1
     abort?.()
     abort = null
     thinking.value = false
@@ -90,5 +116,5 @@ export const useQaStore = defineStore('qa', () => {
     metrics.value = await getJson<MetricsOverview>('/metrics/overview')
   }
 
-  return { answer, citations, stage, thinking, degraded, answerMode, answerModelId, fallbackReason, llmLayers, layerFallbacks, error, history, lastCost, metrics, ask, stop, loadMetrics, reset }
+  return { answer, citations, stage, thinking, degraded, completed, abstained, finalReview, requestId, answerMode, answerModelId, fallbackReason, llmLayers, layerFallbacks, error, history, lastCost, metrics, ask, stop, loadMetrics, reset }
 })

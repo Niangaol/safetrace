@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 
 import { getJson, BACKEND_DATA_MODE, IS_DEMO_MODE } from '../api'
 import CompetitionFocus from '../components/CompetitionFocus.vue'
-import MarkdownBlock from '../components/MarkdownBlock.vue'
+import AnswerReport from '../components/AnswerReport.vue'
 import CountUpNumber from '../effects/CountUpNumber.vue'
 import { useQaStore } from '../stores/qa'
 import type { MetricsOverview } from '../types'
@@ -19,9 +19,9 @@ const chatScroll = ref<HTMLElement | null>(null)
 const STAGE_LABEL: Record<string, string> = {
   plan: '拆解问题',
   rewrite: '改写检索式',
-  retrieve: '混合检索',
-  generate: 'StepPlan / 模板生成',
-  check: '自检',
+  retrieve: '证据检索',
+  generate: '结论生成',
+  check: '引用校验 / 模型复核',
 }
 
 const LLM_LAYER_LABEL: Record<string, string> = {
@@ -38,10 +38,6 @@ const SUGGESTIONS = [
   'CVE-2099-4321 影响哪些版本？（拒答检查样例）',
 ]
 
-function hostOf(url: string): string {
-  try { return new URL(url).host } catch { return '本地证据' }
-}
-
 function answerModeLabel(mode: string): string {
   if (mode === "cloud") return "已启用云端模型"
   if (mode === "local") return "本地模型"
@@ -57,12 +53,12 @@ async function submit(q?: string) {
   qa.ask(text)
   question.value = ''
   await nextTick()
-  chatScroll.value?.scrollTo({ top: chatScroll.value.scrollHeight, behavior: 'smooth' })
+  chatScroll.value?.scrollTo({ top: chatScroll.value.scrollHeight, behavior: typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
 }
 
 function scrollToBottom() {
   nextTick(() => {
-    chatScroll.value?.scrollTo({ top: chatScroll.value.scrollHeight, behavior: 'smooth' })
+    chatScroll.value?.scrollTo({ top: chatScroll.value.scrollHeight, behavior: typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   })
 }
 
@@ -96,7 +92,7 @@ const showGapHint = computed(() => {
   <section class="runtime-panel" aria-label="问答运行模式">
     <div><strong>{{ dataLabel }}</strong><span>服务模式：{{ answerModeLabel(configuredMode) }}{{ runtime?.qa_model ? ' · ' + runtime.qa_model : '' }}</span><span v-if="runtime?.retrieval_mode">检索：{{ runtime.retrieval_mode }}</span></div>
     <div><strong>本轮回答</strong><span>{{ qa.answerMode ? answerModeLabel(qa.answerMode) : '尚未返回执行模式' }}{{ qa.answerModelId ? ' · ' + qa.answerModelId : '' }}</span></div>
-    <p>正式库当前默认使用 BM25 与规则模板；若后端启用模型，以服务模式和本轮回执为准。云模型会发送问题 / 查询内容，请勿输入敏感信息。历史提问仅供回看，不代表多轮语义已完成。</p>
+    <p>正式库当前默认使用 BM25 与规则模板；若后端启用模型，以服务模式和本轮回执为准。云模型会发送问题 / 查询内容，请勿输入敏感信息。通过安全门禁的模型摘要会额外进行一次证据复核与润色，可能增加调用费用和等待时间；失败保留规则结论。历史提问仅供回看，不代表多轮语义已完成。</p>
     <p v-if="qa.metrics">当前接口范围：<CountUpNumber :value="qa.metrics.collect.vulns" /> 条情报 / <CountUpNumber :value="qa.metrics.knowledge.chunks" /> 个检索块。结果数、检索得分和置信分都不是准确率。</p>
     <p v-if="qa.llmLayers.length">本轮模型层：{{ qa.llmLayers.map((layer) => LLM_LAYER_LABEL[layer] ?? layer).join('、') }}</p>
     <p v-if="qa.layerFallbacks.length">层内兜底：{{ qa.layerFallbacks.join('；') }}</p>
@@ -113,18 +109,21 @@ const showGapHint = computed(() => {
         <span class="muted" style="font-size: 12px">{{ qa.thinking ? '当前阶段' : '最后返回阶段' }}：{{ STAGE_LABEL[qa.stage] ?? qa.stage }}</span>
       </div>
 
-      <!-- 回答 -->
-      <div v-if="qa.answer" class="answer markdown-answer fx-in" style="background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 12px">
-        <MarkdownBlock :source="qa.answer" />
-        <span v-if="qa.thinking" class="fx-type-cursor generating-caret" aria-hidden="true"></span>
-      </div>
-      <div v-else-if="qa.thinking && !qa.stage" class="muted" style="padding: 24px; text-align: center">
-        <span class="spinner" style="margin-right: 8px"></span>
-        等待开始…
-      </div>
+      <!-- 固定 Vue 报告结构；模型只提供 Markdown 文本，不控制页面模板。 -->
+      <AnswerReport
+        v-if="qa.answer || qa.citations.length || qa.thinking || qa.completed"
+        :key="qa.requestId"
+        :answer="qa.answer"
+        :citations="qa.citations"
+        :thinking="qa.thinking"
+        :completed="qa.completed"
+        :abstained="qa.abstained"
+        :final-review="qa.finalReview"
+        :error="qa.error"
+      />
 
       <!-- 空状态 -->
-      <div v-if="!qa.answer && !qa.thinking && !qa.error" style="text-align: center; padding: 32px 16px">
+      <div v-if="!qa.answer && !qa.citations.length && !qa.completed && !qa.thinking && !qa.error" style="text-align: center; padding: 32px 16px">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width: 40px; height: 40px; color: var(--muted); margin-bottom: 8px">
           <circle cx="11" cy="11" r="8" />
           <path d="M21 21l-4.35-4.35" />
@@ -164,20 +163,6 @@ const showGapHint = computed(() => {
       <div v-if="qa.error" style="color: var(--critical); font-size: 13px; padding: 12px; background: rgba(244, 63, 94, 0.08); border-radius: var(--radius-sm); border: 1px solid rgba(244, 63, 94, 0.2)">
         {{ qa.error }}
       </div>
-
-      <!-- 引用 -->
-      <div v-if="qa.citations.length" style="margin-top: 16px">
-        <div class="label" style="margin-bottom: 8px">引用来源 · 检索匹配不等于结论已证实</div>
-        <div v-for="(c, i) in qa.citations" :key="c.id" class="evidence fx-in-left" :style="{ '--fx-delay': i * 70 + 'ms', marginBottom: '6px' }">
-          <div style="display: flex; align-items: center; gap: 8px">
-            <span class="badge info" style="min-width: 28px; text-align: center">[{{ i + 1 }}]</span>
-            <a :href="c.url" target="_blank" rel="noreferrer noopener" style="font-size: 12px">{{ c.title }}<span class="link-host">{{ hostOf(c.url) }} ↗</span></a>
-          </div>
-          <div class="snippet" style="margin-top: 4px">检索得分（非准确率） {{ c.score?.toFixed(4) ?? '—' }}</div>
-        </div>
-      </div>
-
-      <p v-if="qa.answer && !qa.thinking && !qa.citations.length" class="muted refusal-note">本轮没有引用。若回答是拒答 / 澄清，这是证据不足的边界；不要把无引用结论当作已验证事实。</p>
 
       <!-- 成本 -->
       <div v-if="qa.lastCost !== null" class="muted" style="font-size: 11px; margin-top: 8px; text-align: right">

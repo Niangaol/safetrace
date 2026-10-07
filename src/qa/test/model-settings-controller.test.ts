@@ -19,7 +19,8 @@ test("模型自然语言摘要必须与引用一致，否则整段作废",async(
  let mode="valid";
  const controller=new ModelSettingsController({store,runtime,testFetch:async(input,init)=>{const body=JSON.parse(String(init?.body??"{}"));if(String(input).endsWith("/models"))return Response.json({data:[{id:"test-model"}]});
   const quote="CVE-2025-12345 CVSS base 9.8";
-  const summary=mode==="valid"?"该漏洞的基础评分为 9.8，属于严重级别：攻击者可以通过网络远程发起攻击，不需要特殊权限，也不需要用户交互就能得手。官方已经给出修复版本，建议尽快升级；如果暂时无法升级，应先限制该组件的网络访问面，并持续关注厂商后续通告。":mode==="invented"?"该漏洞的基础评分为 7.5，并且会影响一百万台设备，属于严重级别：攻击者可以通过网络远程发起攻击，不需要特殊权限。建议尽快升级；如果暂时无法升级，应先限制该组件的网络访问面。":"该漏洞可被远程利用，属于严重级别，攻击者可以通过网络远程发起攻击，不需要特殊权限。修复方式详见 https://example.com/x 的公告，建议尽快升级到厂商最新版本以降低风险。"
+  const summary=mode==="valid"?"该漏洞的基础评分为 9.8，这是引用中明确提供的信息。现有引用只列出了漏洞编号和评分，没有给出具体攻击条件、利用情况或修复版本，因此这些问题还不能下结论，也不能把信息缺失理解为没有风险。":mode==="invented"?"该漏洞的基础评分为 7.5，并且会影响一百万台设备，属于严重级别：攻击者可以通过网络远程发起攻击，不需要特殊权限。建议尽快升级；如果暂时无法升级，应先限制该组件的网络访问面。":"该漏洞可被远程利用，属于严重级别，攻击者可以通过网络远程发起攻击，不需要特殊权限。修复方式详见 https://example.com/x 的公告，建议尽快升级到厂商最新版本以降低风险。"
+  if(body.messages?.[0]?.content?.includes("最后一道证据复核员")){const data=JSON.parse(body.messages[1].content);return Response.json({choices:[{message:{content:JSON.stringify({supported:true,issues:[],claims:[{text:data.draft,chunk_id:"chunk",quote}]})}}]});}
   assert.equal(body.model,"test-model");return Response.json({choices:[{message:{content:JSON.stringify({points:[{chunk_id:"chunk",quote}],summary})}}]});}});
  const server=createServer(async(req,res)=>{if(!await controller.handle(req,res,new URL(req.url??"/","http://127.0.0.1"))){res.writeHead(404);res.end();}});await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));const url="http://127.0.0.1:"+(server.address()as{port:number}).port+"/api/v1/settings/models";try{
   const initial=await(await fetch(url)).json()as any;const headers={"content-type":"application/json","x-safetrace-settings-token":initial.csrf_token};
@@ -36,5 +37,33 @@ test("模型自然语言摘要必须与引用一致，否则整段作废",async(
   mode="url";const withUrl=await synthesizeAnswer(questionFor(),classifyIntent({text:questionFor(),session_id:"s",turn_id:"t"}),controller.modelEvidence(evidence,evidence.chunks),selected.synth?{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id}}:{});
  }finally{await controller.dispose();await new Promise<void>(r=>{server.close(()=>r());server.closeAllConnections();});}
 }finally{await rm(dir,{recursive:true,force:true});}});
+
+test("final review failure/rejection discards draft; refusal and trust gates make no outbound calls",async()=>{
+ const dir=await mkdtemp(join(tmpdir(),"final-review-"));
+ try{
+  const store=new RuntimeSettingsStore(dir);store.save({expected_revision:0,cloud:{base_url:"https://api.example.com/v1",model_id:"test-model",api_key:"key"},local:{connection:"existing",base_url:"http://127.0.0.1:8080/v1",model_id:"local",selected_file_id:null,context_size:2048,gpu_layers:0}});store.apply(1,"cloud",true);
+  const runtime={status:async()=>({state:"stopped"}),dispose:async()=>{}} as unknown as LocalModelRuntime;
+  const quote="CVE-2025-12345 CVSS base 9.8";
+  const draft="该漏洞的基础评分为 9.8，这是引用中明确提供的信息。现有引用只列出了漏洞编号和评分，没有给出具体攻击条件、利用情况或修复版本，因此这些问题还不能下结论，也不能把信息缺失理解为没有风险。";
+  let reviewMode="accepted",calls=0;
+  const controller=new ModelSettingsController({store,runtime,testFetch:async(_input,init)=>{
+   const request=JSON.parse(String(init?.body));const reviewing=request.messages[0].content.includes("最后一道证据复核员");
+   const value=reviewing?(reviewMode==="failed"?"not JSON":JSON.stringify({supported:reviewMode!=="rejected",issues:reviewMode==="rejected"?["unsupported claim"]:[],claims:[{text:draft,chunk_id:"chunk",quote}]})):JSON.stringify({points:[{chunk_id:"chunk",quote}],summary:draft});
+   return Response.json({choices:[{message:{content:value}}]});
+  }});
+  const question="CVE-2025-12345 影响评估？",plan=classifyIntent({text:question,session_id:"s",turn_id:"t"});
+  const evidence={query_id:"q",chunks:[{chunk_id:"chunk",doc_type:"enrichment",text:quote,trust:"trusted",quality_score:1,score_sparse:1,provenance:{url:"https://nvd.nist.gov/vuln/detail/CVE-2025-12345",sha256:"a".repeat(64)}}],trace_id:"tr",model_id:"bm25",latency_ms:0,schema_version:"1.0"}as any;
+  for(const mode of ["accepted","rejected","failed"]){
+   reviewMode=mode;let status="unset";calls=0;
+   const selected=await controller.synthesizer(()=>calls++,review=>{status=review.status;});
+   const answer=await synthesizeAnswer(question,plan,evidence,{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id}});
+   assert.equal(calls,2);assert.equal(status,mode);assert.equal(answer.text_md.includes(draft),mode==="accepted");assert.ok(answer.text_md.includes("## 证据原文"));assert.equal(answer.citations[0]!.url,evidence.chunks[0].provenance.url);
+  }
+  calls=0;const selected=await controller.synthesizer(()=>calls++);
+  const opts={synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id}};
+  const refused=await synthesizeAnswer(question,plan,{...evidence,chunks:[]},opts);assert.equal(refused.abstained,true);assert.equal(calls,0);
+  const gated=await synthesizeAnswer(question,plan,{...evidence,chunks:[{...evidence.chunks[0],trust:"untrusted"}]},opts);assert.equal(gated.degraded_to,"template");assert.equal(calls,0);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
 
 test("un-applied managed model or load configuration cannot replace active snapshot",async()=>{const dir=await mkdtemp(join(tmpdir(),"managed-snapshot-"));try{const store=new RuntimeSettingsStore(dir),local={connection:"managed",base_url:"http://127.0.0.1:8090/v1",model_id:"safetrace-local-chat",selected_file_id:"aaa",context_size:2048,gpu_layers:0};store.save({expected_revision:0,cloud:{base_url:"",model_id:""},local});store.apply(1,"local",false);const runtime={status:async()=>({state:"ready",model_file_id:"bbb"}),catalog:async()=>[],dispose:async()=>{}} as unknown as LocalModelRuntime;const controller=new ModelSettingsController({store,runtime});await assert.rejects(controller.synthesizer(),/不一致/);local.selected_file_id="bbb";store.save({expected_revision:2,cloud:{base_url:"",model_id:""},local});await assert.rejects(controller.synthesizer(),/不一致/);assert.equal(store.active().local.selected_file_id,"aaa");}finally{await rm(dir,{recursive:true,force:true});}});

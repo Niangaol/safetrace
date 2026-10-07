@@ -110,8 +110,9 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
           }catch{return null;}
         })();
         const natural=naturalConclusion({cve_id:plan.slots.cve_ids[0]??null,chunks:evidence.chunks,remediation:(guidance?.evidence??[]).map(item=>item.artifact),askRemediation:plan.intents.includes("remediation")});
-                let answerMode="template",answerModel="q4-template-v1",modelFallback=false,modelAttempts=0;let answer;
-        try{const selected=settings?await settings.synthesizer(()=>{modelAttempts++;}):undefined;
+                let finalReview:import("./final-answer-review.js").FinalReview={status:"skipped",reason:"模板模式、拒答或安全门禁回退未执行模型复核"};
+        let answerMode="template",answerModel="q4-template-v1",modelFallback=false,modelAttempts=0;let answer;
+        try{const selected=settings?await settings.synthesizer(()=>{modelAttempts++;},review=>{finalReview=review;},()=>event(res,{event:"stage",stage:"check"})):undefined;
           const modelEvidence=selected?.synth?settings!.modelEvidence(evidence,[...view.projection.chunks,...(guidance?.chunks??[])]):evidence;
           answer=await synthesizeAnswer(q,plan,modelEvidence,selected?.synth?{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id,model_version:"runtime-settings"}}:{});
           if(selected?.synth && !answer.abstained && !answer.degraded_to){answerMode=selected.mode;answerModel=selected.model_id;if(gapLine)answer={...answer,text_md:answer.text_md+"\n\n"+gapLine};}else if(selected?.synth&&!answer.abstained){answerMode="template_fallback";modelFallback=true;}
@@ -129,7 +130,7 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
         event(res,{event:"stage",stage:"check"});
         for(const cite of answer.citations){const chunk=evidence.chunks.find(c=>c.chunk_id===cite.chunk_id);event(res,{event:"citation",id:cite.chunk_id,title:chunk?.doc_type??"evidence",url:cite.url,score:chunk?.score_sparse??chunk?.score_dense??0});}
         event(res,{event:"token",text:answer.text_md});qaCount++;
-        event(res,{event:"done",abstained:answer.abstained,confidence:answer.confidence,confidence_kind:"heuristic",degraded:modelFallback,degraded_to:answer.degraded_to??null,data_mode:"live",read_only:true,answer_mode:answerMode,answer_model_id:answerModel,retrieval_mode:"bm25",trace_id:trace,cost_cny:modelAttempts===0?0:null,model_calls:modelAttempts,model_attempts:modelAttempts,snapshot_seq:view.projection.watermark,stale_warning:answer.stale_warning??null});res.end();return;
+        event(res,{event:"done",final_review:finalReview,abstained:answer.abstained,confidence:answer.confidence,confidence_kind:"heuristic",degraded:modelFallback,degraded_to:answer.degraded_to??null,data_mode:"live",read_only:true,answer_mode:answerMode,answer_model_id:answerModel,retrieval_mode:"bm25",trace_id:trace,cost_cny:modelAttempts===0?0:null,model_calls:modelAttempts,model_attempts:modelAttempts,snapshot_seq:view.projection.watermark,stale_warning:answer.stale_warning??null});res.end();return;
       }
       json(res,404,{error:{message:"not found"},data_mode:"live"});
     }catch(error){if(res.headersSent){event(res,{event:"error",message:"readonly knowledge snapshot failed; no fixture fallback"});res.end();}else json(res,503,{error:{message:error instanceof Error?error.message:"readonly knowledge unavailable"},data_mode:"live"});}
