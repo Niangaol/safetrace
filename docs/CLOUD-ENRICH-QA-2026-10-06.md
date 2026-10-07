@@ -217,3 +217,128 @@ node --import tsx scripts/coverage-agent.ts --apply --batches 4
 **本轮最终状态**：origin/main = f8ddd4f（含 PR #11 合并）；覆盖率 94.9%（6068/6392）≥ 90% 目标；
 CVSS v3.1 live 3241、EPSS live 6068、论文 live 0（arXiv 对这批条目无匹配，未算成功）；
 剩余 324 条未覆盖（323 条从未跑过 + 1 条 EPSS 降级），补跑需 Qdrant（6333）恢复后才能走 --apply 备份门禁。
+# 附六：论文维度“做起来”的真实试跑（2026-10-07）
+
+用户选择把论文维度真正做起来。下面是实测数据，不含估计。
+
+## 为什么要先修查询构造
+
+原实现用**整段标题做 arXiv 精确短语匹配**。实测：
+```
+"CVE-2021-44228"                                  → 0 条
+"Samsung Mobile Out-of-Bounds Write Vulnerability"→ 0 条
+"log4j"                                           → 5 条（含真实相关论文）
+```
+所以 paper live = 0 的主因是**查询形式**，不是 arXiv 没有数据。
+
+## 修好查询后立刻暴露的第二个问题
+
+改成按产品词检索后，判相关率变成 **100%**——但这是假的：
+- 查 `multiple`（来自产品名 "Multiple Products"）召回 arXiv:1701.02303 等 5 篇，
+  全部判“相关”，而这些论文与 2026 年的 KEV 漏洞毫无关系。
+- 查 `core`/`commerce`/`orchestrator` 同理。
+
+也就是说：**让数字涨起来很容易，涨起来的那部分是假的。** 这类描述性产品词
+（multiple/core/commerce/orchestrator/secure/switches…）必须先剔除。
+
+## 第三层：锚定门槛本身也不对
+
+原逻辑里“共用一个产品词”就算相关，且 `relevance_score>0` 的门槛跑在 CVE 锚点
+**之前**——论文明明提到该 CVE，却会因为检索词不在标题里被提前丢掉。
+
+改成三层判据（逐层变严）：
+1. 论文正文出现该 CVE 编号 → 相关（最强，且优先于相关性打分）；
+2. 多词产品名全部出现 → 相关；
+3. 产品锚点词 + 机制词或漏洞类词 → 相关；
+4. 只共用描述词 → 不相关。
+
+## 试跑结果（只读，不写库）
+
+**样本 A：KEV 新 CVE，16 条**
+
+| 结果 | 条数 |
+|---|---|
+| 无可用身份锚点（不发检索） | 9 |
+| arXiv 零召回 | 6 |
+| 有判相关的论文 | 1 |
+
+**样本 B：2021–2022 历史条目，16 条**
+
+| 结果 | 条数 |
+|---|---|
+| 无可用身份锚点 | 9 |
+| 有召回 | 7（共 25 篇） |
+| 判相关 | 13 篇 |
+| 判不相关 | 12 篇 |
+
+即约 7/16 能拿到至少一篇判相关的论文，召回来的论文约一半被判断为不相关。
+**这个维度对绝大多数条目的真实答案是“找不到”，不是“没试”。**
+
+## 代码与测试
+
+- `src/enrich/src/f1-papers.ts`：新增 `buildPaperQuery`、`paperAnchorTerms`、
+  `isDistinctiveAnchor`、`DESCRIPTIVE_PRODUCT_TERMS`；锚定改为三层判据并把 CVE
+  锚点提前；查询与判断统计写进 sidecar reason（召回/判相关/判不相关）。
+- `src/enrich/src/index.ts`：`searchPapers` 改用 `buildPaperQuery(item)`；
+  paper 维度 reason 附带判断统计。
+- `src/enrich/test/f1-paper-judgement.test.ts`：6/6，覆盖描述词剔除、查询构造、
+  描述词共现不判相关、CVE 锚点优先、产品短语、单词+漏洞语境、词表自洽。
+
+## 仍未解决：写库被 Qdrant 挡住
+
+跑真实批次需要 `--apply`，其前置门禁 `requireVerifiedBackup` →
+`createVerifiedBackup` 固定要连本机 Qdrant（6333）做独立恢复校验。当前：
+- Qdrant 已停止；
+- 本机没有 qdrant 可执行文件、也没有 Docker。
+
+所以这轮只能做**只读试跑 + 代码修复 + 测试**，没有把论文写进正式库。
+等 Qdrant 可用后再跑 `node --import tsx scripts/coverage-agent.ts --apply --batches N`。
+# 附七：论文相关性判定修复与“为什么是 0”的最终定位（2026-10-07）
+
+用户追问论文维度为什么一直是 0。定位结论：**判定逻辑有四个缺陷，不是没数据**。已推送 `origin/main` → `ad1c8d4`（581/581，无 skip，本地与远端一致）。
+
+## 四个缺陷（按发现顺序）
+
+1. **检索方式不可能召回**：原实现用整段标题做 arXiv 精确短语匹配。实测：
+   `CVE-2021-44228` → 0 条；`Samsung Mobile Out-of-Bounds Write Vulnerability` → 0 条；
+   `log4j` → 5 条。arXiv 全文检索不收录厂商标题原文。
+2. **描述性产品词被当成身份**：改成产品词检索后判相关率 100%，但查 `multiple`
+   （来自产品名 "Multiple Products"）召回的全是不相关旧论文。multiple / core /
+   commerce / orchestrator / secure / switches 这类词必须剔除（含复数）。
+3. **最强锚点排错位置**：“论文正文出现该 CVE 编号”本应是最强证据，却跑在词重合度
+   门槛之后，导致论文明明点了 CVE 仍被丢。现已提前，并把编号计入 evidence_terms、
+   按真实重合度重算分。
+4. **检索与打分互相打架**：改了查询后相关度全变 0，因为分数是拿“检索词”和论文算的。
+   现已分离：检索用产品锚点（保命中），打分用 标题+产品+CVE（保准确）。
+
+## 锚定改为三层（逐层变严）
+
+1. 论文正文出现该 CVE 编号 → 相关（最强）；
+2. 多词产品名完整出现 → 相关；
+3. 产品锚点词 + 机制词或漏洞类词 → 相关；
+4. 只共用描述词 → 不相关。
+
+## 真实试跑（16 条一组，只读不写库）
+
+| 样本 | 无可用锚点 | 零召回 | 判相关论文 |
+|---|---|---|---|
+| KEV 新 CVE（16 条） | 9 | 6 | 1 |
+| 2021–2022 历史（16 条） | 9 | — | 7（召回 25 篇中判相关 13、判不相关 12） |
+
+**这个维度对多数条目的真实答案是“找不到”，不是“没试”。**
+
+## 代码与测试
+
+- `src/enrich/src/f1-papers.ts`：新增 `buildPaperQuery`、`paperAnchorTerms`、
+  `isDistinctiveAnchor`、`DESCRIPTIVE_PRODUCT_TERMS`、`MECHANISM_TERMS`；
+  `searchPapers` 增加 `relevanceContext`；锚定三层判据 + CVE 锚点定价。
+- `src/enrich/test/f1-paper-judgement.test.ts` 6/6（描述词剔除、查询构造、
+  描述词共现不判相关、CVE 锚点优先、产品短语、单词+漏洞语境、词表自洽）。
+- `src/enrich/test/f6.test.ts`：离线 fixture 断言保持 2 篇，新增
+  “CVE 编号必须进 evidence_terms”，并断言低分通用词论文排在后。
+
+## 仍待用户决策
+
+跑真实批次需 `--apply`，其前置门禁要连本机 Qdrant（6333）做独立恢复校验；
+当前 Qdrant 停摆且本机无 qdrant 可执行文件与 Docker。未绕过门禁写库。
+若要继续，需先恢复 Qdrant，或由用户拍板改用不禁用向量库的备份口径。
