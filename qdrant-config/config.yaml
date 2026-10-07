@@ -1,0 +1,11 @@
+storage:
+  storage_path: ./qdrant-storage
+  snapshots_path: ./qdrant-storage/snapshots
+  performance:
+    max_search_threads: 2
+service:
+  host: 127.0.0.1
+  http_port: 6333
+  grpc_port: 6334
+  enable_tls: false
+telemetry_disabled: true

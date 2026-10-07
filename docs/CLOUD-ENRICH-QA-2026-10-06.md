@@ -342,3 +342,55 @@ CVSS v3.1 live 3241、EPSS live 6068、论文 live 0（arXiv 对这批条目无�
 跑真实批次需 `--apply`，其前置门禁要连本机 Qdrant（6333）做独立恢复校验；
 当前 Qdrant 停摆且本机无 qdrant 可执行文件与 Docker。未绕过门禁写库。
 若要继续，需先恢复 Qdrant，或由用户拍板改用不禁用向量库的备份口径。
+
+---
+
+# 附八：Qdrant 接通与向量链路实测（2026-10-07）
+
+用户要求“连接 Qrant”。结论：**Qdrant 已连通并通过真实向量链路验收**，过程中还修掉一个回答层的自相矛盾问题。
+
+## 接通过程与三个真实卡点
+
+1. **二进制位置**：Qdrant 真实二进制在 `third_party/qdrant/qdrant.exe`（工作区内），数据在
+   `qdrant-storage/`（1.1 GB，两个集合各 5237 点）。此前误判为 `D:\AgentPrograms\qdrant`
+   （那是空 storage），曾起过一次空库实例，已清掉。
+2. **新版 CLI 去掉了 `--storage-dir`**：qdrant 1.19.1 只接受 `--uri` / `--config-path`，
+   README 里记的 `./qdrant --storage-dir ./qdrant-storage` 已失效。改用新增的
+   `qdrant-config/config.yaml`（`storage.storage_path: ./qdrant-storage`）+ `--config-path`
+   启动，成功加载 `safetrace_intel_demo` 与 `safetrace_sources` 两个真实集合，
+   与 `scripts/local/up.ps1` 使用的 `QDRANT__STORAGE__STORAGE_PATH` 环境变量口径一致。
+3. **端口被残留实例占用**：先 `taskkill //F //IM qdrant.exe` 清掉，再起即通。
+
+同时按同一路径起好了本地 bge-m3 嵌入服务（`:8081/v1`，1024 维，`local_embed` provider）。
+
+## 真实向量链路验收（scripts/verify-vector-pipeline.ts）
+
+```
+[verify] embedding 模型: bge-m3 维度: 1024 版本: gguf-q8_0
+[verify] embedding 推理通过： 3 条 / 1024 维 / provider local_embed
+[verify] Qdrant 写入通过： {"status":"indexed","chunks":3}
+[verify] 语义召回通过： chk_verify-1(0.8138) > intel_kev_cve_2021_44228(0.6605) > intel_kev_cve_2021_45046(0.6138)
+[verify] 清理验证点后集合剩余 5237 点
+[verify] 真实向量链路验收通过：embedding 推理 + Qdrant 写入 + 语义召回
+```
+
+语义召回复核了库内**真实情报点**（CVE-2021-44228 / CVE-2021-45046），排序与分数正确。
+
+## 修掉的 bug：自然语言结论与拒答自相矛盾
+
+实测发现同一回答里同时出现“自信的自然语言结论”和“证据不足，本次不予作答（abstained）”。
+根因是自然语言结论层没有判断 `abstained` 就前置拼接。已加红线守卫 `if(!answer.abstained && ...)`。
+修后实测：具体问题作答并带自然语言结论；模糊问题干净拒答且不再叠加任何结论。
+
+## 顺带修：向量验收脚本清理断言写死空集合
+
+原断言 `remaining < chunks.length` 假设集合为空；生产集合有 5237 点时会误报“未清理干净”。
+改为与**写入前基线**比较：`assert.equal(remaining, baselineCount)`。
+
+## 仍未解决（环境限制，非代码问题）
+
+应用后端/前端无法由我在后台常驻：后台任务里 esbuild 会 `spawn EPERM`
+（`node --import tsx` 依赖 esbuild 起子进程）。前台命令可正常启动并已验证
+（health: live / 6392 情报 / 7745 块 / 已验证工件 1333）。
+Qdrant(:6333) 与 bge-m3 嵌入(:8081) 是独立可执行文件，不受此限制，已在后台常驻。
+需由用户在自己的终端按 README 命令启动前后端。

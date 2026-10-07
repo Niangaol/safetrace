@@ -116,7 +116,9 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
           answer=await synthesizeAnswer(q,plan,modelEvidence,selected?.synth?{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id,model_version:"runtime-settings"}}:{});
           if(selected?.synth && !answer.abstained && !answer.degraded_to){answerMode=selected.mode;answerModel=selected.model_id;if(gapLine)answer={...answer,text_md:answer.text_md+"\n\n"+gapLine};}else if(selected?.synth&&!answer.abstained){answerMode="template_fallback";modelFallback=true;}
         }catch{answer=await synthesizeAnswer(q,plan,evidence);answerMode="template_fallback";modelFallback=true;}
-        if(!answer.text_md.includes("## 结论（自然语言）")){
+        // 红线：拒答就是拒答。自然语言结论只能加成在“作答”的答案上；
+        // abstained 时再叠加一段自信结论会自相矛盾（实测出现过），也让“证据不足”的提示失效。
+        if(!answer.abstained && !answer.text_md.includes("## 结论（自然语言）")){
           const extra=baselineIndex?baselineNarrative(baselineForItem(baselineIndex,{cve_ids:plan.slots.cve_ids,source_ids:[]} as any,false).facts):null;
           let lead=[natural,natural&&extra&&!/修复版本/.test(natural)?extra:null].filter(Boolean).join("\n\n")||(extra&&!/修复版本/.test(extra)?extra:null);
           if(gapLine)lead=[lead,gapLine].filter(Boolean).join("\n\n");

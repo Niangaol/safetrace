@@ -57,6 +57,9 @@ for (const v of emb.vectors) {
 console.log("[verify] embedding 推理通过：", emb.vectors.length, "条 /", emb.vectors[0]!.length, "维 / provider", emb.provider);
 
 // ---- 2. 真实写入 Qdrant（走六道闸门的正门） ----
+// 记下写入前的点数：清理断言要跟这个基线比，不能假设集合是空的
+// （生产集合里本来就有真实数据，写死“删完应 < 写入数”会误报）。
+const baselineCount = ((await (await fetch(QDRANT_URL.replace(/\/+$/, "") + "/collections/" + encodeURIComponent(COLLECTION))).json()) as { result?: { points_count?: number } }).result?.points_count ?? 0;
 const parentLineage = await bus.recordLineage({
   trace_id: traceId,
   parent_lineage_ids: [],
@@ -118,7 +121,7 @@ const del = await fetch(QDRANT_URL.replace(/\/+$/, "") + "/collections/" + encod
   body: JSON.stringify({ points: chunks.map((c) => numericId(c.chunk_id)) }),
 });
 const remaining = ((await (await fetch(QDRANT_URL.replace(/\/+$/, "") + "/collections/" + encodeURIComponent(COLLECTION))).json()) as { result?: { points_count?: number } }).result?.points_count;
-assert.ok((remaining ?? 1) < chunks.length, "验证点未清理干净，剩余 " + remaining + "（>= 写入数 " + chunks.length + "）");
+assert.equal(remaining, baselineCount, "验证点未清理干净：写入前 " + baselineCount + " 点，删除后 " + remaining + " 点；本次写入 " + chunks.length + " 点应全部删除");
 console.log("[verify] 清理验证点后集合剩余", remaining, "点");
 
 console.log("");
