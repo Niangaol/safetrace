@@ -286,9 +286,11 @@ test("runEnrichment：离线全 fixture 跑通 F1+F4+F6 并上总线", async () 
   const papers = r.artifacts.papers;
   assert.ok(papers !== undefined && papers.length === 2);
   assert.equal(papers[0]!.paper_id, "arXiv:2112.00507");
-  assert.ok(papers[0]!.relevance_score > papers[1]!.relevance_score);
+  assert.ok(papers[0]!.relevance_score > papers[1]!.relevance_score, "真相关排在前");
+  assert.ok(papers[1]!.relevance_score < 0.4, "只共用通用词的排在后面且低分");
   assert.ok(papers[0]!.relevance_score > 0.4);
   assert.ok(papers[0]!.evidence_terms !== undefined && papers[0]!.evidence_terms.includes("log4shell"));
+  assert.ok(papers[0]!.evidence_terms!.includes("44228"), "CVE 编号是最强锚点，必须进证据词");
 
   // F6：论文证据 1 + 单源 0.6 -> 覆盖率 0.8 -> 0.92；同分无冲突
   assert.equal(r.enrichment_score, 0.92);

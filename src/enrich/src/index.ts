@@ -19,7 +19,7 @@ import {
   type ScoreSourceInput,
   type EpssLookup,
 } from "./f4-cvss.js";
-import { searchPapers, anchoredPapers } from "./f1-papers.js";
+import { searchPapers, anchoredPapers, buildPaperQuery } from "./f1-papers.js";
 import type { PaperReviewOutcome, PaperReviewPort } from "./stepfun-paper-review.js";
 import {
   computeEnrichmentScore,
@@ -97,7 +97,7 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   const runCvss = due("cvss") || prior("cvss")?.dependency_hash !== scoreDependency;
   const runEpss = due("epss");
   if (!runPaper && !runCvss && !runEpss && !needsReceipt) return summarizeEnrichment(item, { papers: (prior("paper")?.artifact ?? []) as PaperLink[], scoreAssessment: (prior("cvss")?.artifact ?? null) as ScoreAssessment | null });
-  const states: Array<{ dimension: EnrichmentDimension; status: EnrichmentStatus; reason: string; artifact: unknown }> = [];
+  const states: Array<{ dimension: EnrichmentDimension; status: EnrichmentStatus; reason: string; artifact: unknown; judgement?: string }> = [];
   let paperProvenance: EnrichmentDimensionState["provenance"];
   let paperMetadataUnknown = false;
   let epssReceipt: EpssLookup | undefined;
@@ -119,7 +119,9 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   const f1FallbackStart = fallbackRefs.length;
   let papersRes: Awaited<ReturnType<typeof searchPapers>>;
   try {
-    papersRes = runPaper ? await searchPapers(item.title, { offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit }) : { papers: (prior("paper")?.artifact ?? []) as PaperLink[], ...(prior("paper")?.status === "degraded" ? { degraded_to: "fixture" } : {}) };
+    const paperQuery = runPaper ? buildPaperQuery(item) : "";
+    const paperContext = [item.title, item.entities.product ?? "", item.cve_ids.join(" ")].filter(Boolean).join(" ");
+    papersRes = runPaper ? await searchPapers(paperQuery, { offline: ctx.offline, fetchImpl: ctx.fetchImpl, traceId, emit, relevanceContext: paperContext }) : { papers: (prior("paper")?.artifact ?? []) as PaperLink[], ...(prior("paper")?.status === "degraded" ? { degraded_to: "fixture" } : {}) };
     if (runPaper) {
       if (!papersRes.degraded_to) {
         const related = anchoredPapers(item, papersRes.papers, papersRes.paper_records);
@@ -127,7 +129,7 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
         paperMetadataUnknown = related.length > papersRes.papers.length;
         if (papersRes.source_evidence && papersRes.paper_records) paperProvenance = { query_url: papersRes.source_evidence.url, sha256: papersRes.source_evidence.sha256, text: papersRes.source_evidence.text, paper_records: papersRes.paper_records };
       }
-      states.push({ dimension: "paper", status: papersRes.degraded_to ? "degraded" : papersRes.papers.length ? "live" : paperMetadataUnknown ? "unknown" : "empty", reason: papersRes.degraded_to ? "fixture paper replay; not real success" : papersRes.papers.length ? "entity/topic candidates with original arXiv metadata; heuristic relevance, not accuracy" : paperMetadataUnknown ? "candidate publication metadata/identity unverified" : "no related candidates; empty backoff", artifact: papersRes.papers });
+      states.push({ dimension: "paper", status: papersRes.degraded_to ? "degraded" : papersRes.papers.length ? "live" : paperMetadataUnknown ? "unknown" : "empty", reason: papersRes.degraded_to ? "fixture paper replay; not real success" : papersRes.papers.length ? "entity/topic candidates with original arXiv metadata; heuristic relevance, not accuracy" : paperMetadataUnknown ? "candidate publication metadata/identity unverified" : "no related candidates; empty backoff", artifact: papersRes.papers, judgement: papersRes.degraded_to ? undefined : "判断：召回 " + (papersRes.paper_records ? Object.keys(papersRes.paper_records).length : 0) + " 篇，判相关 " + papersRes.papers.length + " 篇，判不相关 " + Math.max(0, (papersRes.paper_records ? Object.keys(papersRes.paper_records).length : 0) - papersRes.papers.length) + " 篇" });
     }
   } catch {
     await ctx.bus?.recordLineage({

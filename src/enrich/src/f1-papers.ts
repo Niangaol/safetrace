@@ -36,6 +36,12 @@ export interface SearchPapersOptions {
   offline?: boolean;
   fetchImpl?: HttpFetcher;
   traceId?: string;
+  /**
+   * 相关度打分用的上下文（默认等于检索短语）。
+   * 检索短语为了命中率用产品锚点，打分上下文用标题+产品+CVE——
+   * 否则“查得到”和“算得准”会互相打架（实测产品词查询让所有论文 relevance 归零）。
+   */
+  relevanceContext?: string;
   /** FallbackEvent 落库/上总线回调。 */
   emit?: (event: FallbackEvent) => void | Promise<void>;
 }
@@ -67,7 +73,7 @@ export async function searchPapers(query: string, opts: SearchPapersOptions = {}
   const q = query.trim().replace(/\s+/g, " ");
   if (!q) throw new Error("searchPapers: query 不能为空");
   const traceId = opts.traceId ?? nextId("tr");
-  if (isOffline(opts.offline)) return replayFixture(q, "offline_flag", traceId, opts.emit);
+  if (isOffline(opts.offline)) return replayFixture(q, "offline_flag", traceId, opts.emit, opts.relevanceContext);
   const injectedFetcher = opts.fetchImpl !== undefined;
   const cacheKey = q.toLocaleLowerCase();
   const cached = ARXIV_SUCCESS_CACHE.get(cacheKey);
@@ -86,7 +92,8 @@ export async function searchPapers(query: string, opts: SearchPapersOptions = {}
       if (res.ok) {
         const xml = await res.text();
         if (Buffer.byteLength(xml) > 2 * 1024 * 1024 || !/^\s*(?:<\?xml[^?]*\?>\s*)?<feed\b/i.test(xml) || !/(?:<\/feed>|<feed[^>]*\/>)\s*$/i.test(xml)) throw new Error("arXiv response is not bounded Atom XML");
-        const result: PapersResult = { papers: parseArxivAtom(xml, q), paper_records: arxivPaperRecords(xml), source_evidence: { url, sha256: sha256(xml), text: xml } };
+        const scoringContext = opts.relevanceContext?.trim() ? opts.relevanceContext.trim() : q;
+        const result: PapersResult = { papers: parseArxivAtom(xml, scoringContext), paper_records: arxivPaperRecords(xml), source_evidence: { url, sha256: sha256(xml), text: xml } };
         if (!injectedFetcher) ARXIV_SUCCESS_CACHE.set(cacheKey, { result: structuredClone(result), expires_at: Date.now() + 6 * 3600_000 });
         return result;
       }
@@ -98,7 +105,7 @@ export async function searchPapers(query: string, opts: SearchPapersOptions = {}
       if (attempt < 2) await wait(1000 * (attempt + 1));
     }
   }
-  return replayFixture(q, lastTrigger, traceId, opts.emit);
+  return replayFixture(q, lastTrigger, traceId, opts.emit, opts.relevanceContext);
 }
 
 
@@ -229,6 +236,7 @@ async function replayFixture(
   trigger: string,
   traceId: string,
   emit?: (event: FallbackEvent) => void | Promise<void>,
+  relevanceContext?: string,
 ): Promise<PapersResult> {
   const d = await degrade({
     layer: "L3",
@@ -240,7 +248,8 @@ async function replayFixture(
     emit,
   });
   const xml = await readFile(ARXIV_FIXTURE_URL, "utf8");
-  return { papers: parseArxivAtom(xml, query), degraded_to: d.degraded_to };
+  const scoringContext = relevanceContext?.trim() ? relevanceContext.trim() : query;
+  return { papers: parseArxivAtom(xml, scoringContext), degraded_to: d.degraded_to };
 }
 
 export function arxivPaperRecords(xml: string): NonNullable<PapersResult["paper_records"]> {
@@ -257,15 +266,87 @@ export function arxivPaperRecords(xml: string): NonNullable<PapersResult["paper_
 }
 const GENERIC_PAPER_TERMS=new Set(["remote","code","execution","vulnerability","vulnerabilities","security","flaw","flaws","allows","allow","arbitrary","attacker","attackers","attack","attacks","could","can","the","and","with","for","from","through","product","products","software","version","versions","server","servers","application","applications","issue","issues","apache","microsoft","google","ubuntu","linux","windows","overflow","buffer","denial","service","use","using","affected","affects","exploit","exploitation","of","in","to"]);
 /** Entity/identifier anchor is necessary, not a guarantee of scientific relevance. */
-export function anchoredPapers(item: Pick<IntelItem,"title"|"entities"|"cve_ids">, papers: PaperLink[], records: PapersResult["paper_records"] = {}): PaperLink[] {
+export const PRODUCT_ALIASES: Record<string,string[]> = { "log4j-core": ["log4j", "log4j2"], "apache log4j2": ["log4j2", "log4j"], "langchain-core": ["langchain"], "langchain_core": ["langchain"] };
+export const MECHANISM_TERMS = new Set(["memory","corruption","heap","stack","integer","out","bounds","read","write","access","control","privilege","escalation","authentication","bypass","improper","incorrect","validation","handling","management","information","disclosure"]);
+/**
+ *  identity 锚点：产品名优先（log4j 这样的产品词是身份），机制词（out-of-bounds 等）不是身份。
+ *  产品缺失时才退回到标题里区分度高的词。锚点是“必要条件”，不是“相关”的保证。
+ */
+export function paperAnchorTerms(item: Pick<IntelItem,"title"|"entities"|"cve_ids">): { productTerms: string[]; anchors: string[] } {
   // A known product is mandatory when available: mechanism words such as memory/corruption are not product identity.
   const product=(item.entities.product??"").toLowerCase().trim();
-  const productAliases: Record<string,string[]> = { "log4j-core": ["log4j", "log4j2"], "apache log4j2": ["log4j2", "log4j"], "langchain-core": ["langchain"], "langchain_core": ["langchain"] };
-  const productTerms=[...(product.match(/[a-z][a-z0-9._+-]*/g)??[]), ...(productAliases[product]??[])];
+  const productTerms=[...(product.match(/[a-z][a-z0-9._+-]*/g)??[]), ...(PRODUCT_ALIASES[product]??[])];
   const anchorText=productTerms.length ? productTerms.join(" ") : item.title;
-  const mechanismTerms=new Set(["memory","corruption","heap","stack","integer","out","bounds","read","write","access","control","privilege","escalation","authentication","bypass","improper","incorrect","validation","handling","management","information","disclosure"]);
-  const anchors=[...new Set(anchorText.toLowerCase().match(/[a-z][a-z0-9._+-]*/g)??[])].filter(t=>t.length>=3&&!GENERIC_PAPER_TERMS.has(t)&&!mechanismTerms.has(t));
-  return papers.filter(p=>{
+  const anchors=[...new Set(anchorText.toLowerCase().match(/[a-z][a-z0-9._+-]*/g)??[])].filter(t=>t.length>=3&&!GENERIC_PAPER_TERMS.has(t)&&!MECHANISM_TERMS.has(t));
+  return { productTerms: [...new Set(productTerms)], anchors: [...new Set(anchors)] };
+}
+/**
+ *  arXiv 查询词：**不能用整段标题做精确短语匹配**（实测：任何标题短语都返回 0 条，
+ *  因为 arXiv 全文检索不收录厂商标题原文）。要用身份锚点拼查询——产品词优先，
+ *  因为实测产品词（log4j）能稳定召回真实论文，而 CVE 编号短语常常召不回。
+ */
+/**
+ * 描述性/皮钦产品词表：KEV 的 product 字段大量是 "Multiple Products"、"Core"、
+ * "Commerce and Magento" 这类**类别词**，不是产品身份。用它们做 arXiv 检索会召回
+ * 同名旧论文（实测判相关率 100%，全是假阳性），所以必须先剔除。
+ */
+export const DESCRIPTIVE_PRODUCT_TERMS = new Set([
+  "multiple","products","product","core","commerce","orchestrator","server","servers","client","clients",
+  "manager","platform","platforms","device","devices","system","systems","software","app","apps","application",
+  "framework","library","module","plugin","plugins","service","services","suite","tool","tools","web","cloud",
+  "stack","engine","agent","host","hosts","node","nodes","gateway","proxy","router","switch","firewall",
+  "console","desktop","mobile","phone","tablet","browser","editor","viewer","player","runtime","kernel",
+  "driver","firmware","hardware","chip","cpu","gpu","memory","storage","database","cache","queue",
+  "protocol","interface","api","sdk","library","component","components","engine","extension",
+  "switches","gateways","routers","clusters","containers","endpoints","tenants","workspaces",
+  "secure","security","virtual","private","public","managed","advanced","enterprise","unified",
+]);
+/** 真正的身份锚点：长度够、不是描述词、不是机制词、不是通用安全词。 */
+export function isDistinctiveAnchor(term: string): boolean {
+  const t = term.toLowerCase().trim();
+  if (t.length < 4) return false;
+  if (DESCRIPTIVE_PRODUCT_TERMS.has(t)) return false;
+  // 复数形式同样没有区分度（GS1900 Series Switches → switches）。
+  if (t.endsWith("s") && DESCRIPTIVE_PRODUCT_TERMS.has(t.slice(0, -1))) return false;
+  if (GENERIC_PAPER_TERMS.has(t)) return false;
+  if (MECHANISM_TERMS.has(t)) return false;
+  // "out-of-bounds"/"use_after_free" 这类连字符机制词整体不是身份：拆开后每一段都必须有区分度。
+  const parts = t.split(/[^a-z0-9]+/).filter(Boolean);
+  if (parts.length > 1 && parts.every(part => !isDistinctiveAnchor(part))) return false;
+  return true;
+}
+export function buildPaperQuery(item: Pick<IntelItem,"title"|"entities"|"cve_ids">): string {
+  const { productTerms, anchors } = paperAnchorTerms(item);
+  const preferred = productTerms.length ? productTerms : anchors;
+  // 皮钦产品词不是身份：用它们检索只会召回同名旧论文（实测 100% 假阳性）。
+  // "multiple products"/"core"/"commerce" 这类描述性词组必须先被剔除。
+  const distinctive = preferred.filter(isDistinctiveAnchor);
+  if (!distinctive.length) return "";
+  // 只取区分度最高的一个身份词做短语检索：多词 AND 会进一步压低召回（实测 0 条）。
+  const primary = distinctive.slice().sort((a, b) => b.length - a.length)[0]!;
+  return primary;
+}
+/**.Entity/identifier anchor is necessary, not a guarantee of scientific relevance. */
+export function anchoredPapers(item: Pick<IntelItem,"title"|"entities"|"cve_ids">, papers: PaperLink[], records: PapersResult["paper_records"] = {}): PaperLink[] {
+  const { productTerms, anchors } = paperAnchorTerms(item);
+  // 只用“区分度足够”的锚点做判断：描述性产品词（multiple/core/commerce）
+  // 与任何论文共现都不构成相关性（实测 100% 假阳性）。
+  const strongAnchors = anchors.filter(isDistinctiveAnchor);
+  // CVE 锚点命中的论文要把该编号计入证据词并据实重算相关度：
+  // 检索词没出现在论文里 relevance_score 会是 0，但这篇论文明确点了该 CVE，
+  // 是最强证据；把它当 0 分挡在投影门外是错的（实测弄丢真相关论文）。
+  const upgraded = new Map<PaperLink, PaperLink>();
+  const kept = papers.filter(p=>{
+    // CVE 编号是最强锚点，必须先于相关性打分判断：否则论文明明提到该 CVE，
+    // 却会因为“检索词没出现在标题里”被词重合度门槛提前丢掉。
+    const body0=(p.title+" "+(records[p.paper_id]?.summary??"")).toLowerCase();
+    const words0=new Set(body0.match(/[a-z0-9][a-z0-9._+-]*/g)??[]);
+    const cveTerm=item.cve_ids.slice(0,1).find(c=>words0.has(c.toLowerCase()));
+    if(cveTerm!==undefined){
+      const rel=relevanceOf(cveTerm,body0);
+      upgraded.set(p,compact({...p,relevance_score:round2(Math.max(p.relevance_score,rel.score)),evidence_terms:[...new Set([...(p.evidence_terms??[]),...rel.terms])]}));
+      return true;
+    }
     if(!(p.relevance_score>0))return false;
     const proof=records[p.paper_id];
     const body=(p.title+" "+(proof?.summary??"")).toLowerCase();
@@ -279,7 +360,21 @@ export function anchoredPapers(item: Pick<IntelItem,"title"|"entities"|"cve_ids"
     ];
     const applicable=focuses.filter(([query])=>query.test(context));
     if (applicable.length && !applicable.every(([,candidate])=>candidate.test(body))) return false;
-    return item.cve_ids.slice(0,1).some(c=>words.has(c.toLowerCase())) || (applicable.length > 0 && productTerms.length === 0)
-      || anchors.some(a=>words.has(a)||p.evidence_terms?.includes(a));
+    // 相关性判据（三层，逐层变严）：
+    //  1) 论文正文出现该 CVE 编号——最强锚点；
+    //  2) 论文出现完整产品短语（多词产品名的全部词都出现，顺序不限）；
+    //  3) 论文出现区分度足够的产品锚点词，且同时命中至少一个机制词或漏洞类词。
+    // 只共用 "core"/"multiple" 这类描述词的一律判不相关。
+    const cveHit = item.cve_ids.slice(0,1).some(c=>words.has(c.toLowerCase()));
+    if (cveHit) return true;
+    if (!strongAnchors.length) return applicable.length > 0 && productTerms.length === 0;
+    const anchorHit = strongAnchors.some(a=>words.has(a)||p.evidence_terms?.includes(a));
+    if (!anchorHit) return false;
+    const productPhrase = productTerms.length > 1 && productTerms.every(t=>words.has(t.toLowerCase()));
+    if (productPhrase) return true;
+    const mechanismHit = [...MECHANISM_TERMS].some(m=>words.has(m));
+    const vulnClassHit = /vulnerab|exploit|cve|security flaw|attack/.test(body);
+    return mechanismHit || vulnClassHit;
   });
+  return kept.map(p=>upgraded.get(p)??p);
 }
