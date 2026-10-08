@@ -10,7 +10,8 @@
     "smoke:data-source": "node scripts/smoke-data-source.mjs",
     "smoke:activity": "node scripts/smoke-activity.mjs",
     "smoke:effects": "node scripts/smoke-effects.mjs",
-    "smoke:markdown": "node scripts/smoke-markdown.mjs"
+    "smoke:markdown": "node scripts/smoke-markdown.mjs",
+    "smoke:adaptive-ui": "node scripts/smoke-adaptive-ui.mjs"
   },
   "dependencies": {
     "echarts": "^5.5.1",
