@@ -45,20 +45,21 @@ test("final review failure/rejection discards draft; refusal and trust gates mak
   const runtime={status:async()=>({state:"stopped"}),dispose:async()=>{}} as unknown as LocalModelRuntime;
   const quote="CVE-2025-12345 CVSS base 9.8";
   const draft="该漏洞的基础评分为 9.8，这是引用中明确提供的信息。现有引用只列出了漏洞编号和评分，没有给出具体攻击条件、利用情况或修复版本，因此这些问题还不能下结论，也不能把信息缺失理解为没有风险。";
-  let reviewMode="accepted",calls=0;
+  let reviewMode="accepted",calls=0,uiMalicious=false;
   const controller=new ModelSettingsController({store,runtime,testFetch:async(_input,init)=>{
    const request=JSON.parse(String(init?.body));const reviewing=request.messages[0].content.includes("最后一道证据复核员");
-   const value=reviewing?(reviewMode==="failed"?"not JSON":JSON.stringify({supported:reviewMode!=="rejected",issues:reviewMode==="rejected"?["unsupported claim"]:[],claims:[{text:draft,chunk_id:"chunk",quote}]})):JSON.stringify({points:[{chunk_id:"chunk",quote}],summary:draft});
+   const value=reviewing?(reviewMode==="failed"?"not JSON":JSON.stringify({supported:reviewMode!=="rejected",issues:reviewMode==="rejected"?["unsupported claim"]:[],claims:[{text:draft,chunk_id:"chunk",quote}]})):JSON.stringify({points:[{chunk_id:"chunk",quote}],summary:draft,ui:{version:1,blocks:[{type:"evidence",evidence_ids:[uiMalicious?"unknown":"chunk"]}]}});
    return Response.json({choices:[{message:{content:value}}]});
   }});
   const question="CVE-2025-12345 影响评估？",plan=classifyIntent({text:question,session_id:"s",turn_id:"t"});
   const evidence={query_id:"q",chunks:[{chunk_id:"chunk",doc_type:"enrichment",text:quote,trust:"trusted",quality_score:1,score_sparse:1,provenance:{url:"https://nvd.nist.gov/vuln/detail/CVE-2025-12345",sha256:"a".repeat(64)}}],trace_id:"tr",model_id:"bm25",latency_ms:0,schema_version:"1.0"}as any;
   for(const mode of ["accepted","rejected","failed"]){
    reviewMode=mode;let status="unset";calls=0;
-   const selected=await controller.synthesizer(()=>calls++,review=>{status=review.status;});
+   let ui:any;const selected=await controller.synthesizer(()=>calls++,review=>{status=review.status;},undefined,plan=>{ui=plan;});
    const answer=await synthesizeAnswer(question,plan,evidence,{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id}});
-   assert.equal(calls,2);assert.equal(status,mode);assert.equal(answer.text_md.includes(draft),mode==="accepted");assert.ok(answer.text_md.includes("## 证据原文"));assert.equal(answer.citations[0]!.url,evidence.chunks[0].provenance.url);
+   assert.deepEqual(ui,{version:1,blocks:[{type:"evidence",evidence_ids:["chunk"]}]});assert.equal(calls,2);assert.equal(status,mode);assert.equal(answer.text_md.includes(draft),mode==="accepted");assert.ok(answer.text_md.includes("## 证据原文"));assert.equal(answer.citations[0]!.url,evidence.chunks[0].provenance.url);
   }
+  uiMalicious=true;let invalidUi:unknown="unset";const badUi=await controller.synthesizer(undefined,undefined,undefined,plan=>{invalidUi=plan;});await synthesizeAnswer(question,plan,evidence,{synth:badUi.synth,synthesizer:{provider:badUi.provider,model_id:badUi.model_id}});assert.equal(invalidUi,null,"unknown UI IDs never escape to renderer");
   calls=0;const selected=await controller.synthesizer(()=>calls++);
   const opts={synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id}};
   const refused=await synthesizeAnswer(question,plan,{...evidence,chunks:[]},opts);assert.equal(refused.abstained,true);assert.equal(calls,0);

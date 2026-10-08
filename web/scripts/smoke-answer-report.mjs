@@ -107,8 +107,9 @@ for (const status of ['accepted', 'rejected', 'failed', 'skipped']) {
 // API mock drives the genuine store with done, reset, stop and late events.
 globalThis.__qaStreams = []
 const apiMock = moduleUrl('export const getJson = async () => ({}); export function streamChat(body, event, error) { globalThis.__qaStreams.push({ event, error }); return () => {}; }')
+const uiUrl = moduleUrl(transpile(readFileSync(resolve(root, 'src/qa-ui.ts'), 'utf8')))
 const storeSource = readFileSync(resolve(root, 'src/stores/qa.ts'), 'utf8')
-const { useQaStore } = await import(moduleUrl(imports(transpile(storeSource), { vue: vueUrl, pinia: url('node_modules/pinia/dist/pinia.mjs'), '../api': apiMock })))
+const { useQaStore } = await import(moduleUrl(imports(transpile(storeSource), { vue: vueUrl, pinia: url('node_modules/pinia/dist/pinia.mjs'), '../api': apiMock, '../qa-ui': uiUrl })))
 setActivePinia(createPinia())
 const qa = useQaStore()
 qa.ask('first')

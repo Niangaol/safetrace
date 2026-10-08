@@ -1,0 +1,153 @@
+// Offline contract + real Vue/store regression. No API, model calls or browser dependency.
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import ts from 'typescript'
+import { parse, compileScript } from 'vue/compiler-sfc'
+import { createRenderer, nextTick } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
+const root = fileURLToPath(new URL('../', import.meta.url))
+const source = path => readFileSync(resolve(root, path), 'utf8')
+const url = path => pathToFileURL(resolve(root, path)).href
+const moduleUrl = text => 'data:text/javascript;base64,' + Buffer.from(text).toString('base64')
+const transpile = text => ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
+function imports(text, map) { for (const [name, target] of Object.entries(map)) text = text.replaceAll("from '" + name + "'", 'from ' + JSON.stringify(target)).replaceAll('from "' + name + '"', 'from ' + JSON.stringify(target)); return text }
+const uiUrl = moduleUrl(transpile(source('src/qa-ui.ts')))
+const { readUiEvent, readUiStatus, safeUiUrl, groupComparison, shouldSendOnEnter, isNearBottom } = await import(uiUrl)
+const item = (id = 'e1', cve = 'CVE-2021-44228') => ({ id, doc_type: 'advisory', text: 'Source evidence, not a summary.', url: 'https://example.org/evidence', cve_id: cve })
+const envelope = (type = 'evidence') => ({ event: 'ui', document: { version: 1, source: 'model', blocks: [{ id: 'b1', type, items: [item()] }] } })
+assert.deepEqual(readUiEvent(envelope()), envelope().document)
+let cases = 0
+function rejects(mutate) { const value = envelope(); mutate(value); assert.equal(readUiEvent(value), null, JSON.stringify(value)); cases++ }
+for (const key of ['actions', 'style', 'script', 'onClick', '__proto__']) rejects(value => { Object.defineProperty(value.document.blocks[0], key, { value: 'untrusted', enumerable: true }) })
+rejects(value => { value.extra = 1 })
+rejects(value => { value.document.version = 2 })
+rejects(value => { value.document.source = 'invented' })
+rejects(value => { value.document.style = {} })
+rejects(value => { value.document.blocks = [] })
+rejects(value => { value.document.blocks = Array.from({ length: 5 }, (_, i) => ({ id: 'b' + i, type: 'evidence', items: [item('i' + i)] })) })
+rejects(value => { value.document.blocks.push(value.document.blocks[0]) })
+rejects(value => { value.document.blocks[0].type = 'execute' })
+rejects(value => { value.document.blocks[0].items = [] })
+rejects(value => { value.document.blocks[0].items = Array.from({ length: 6 }, (_, i) => item('i' + i)) })
+rejects(value => { value.document.blocks[0].items.push(item()) })
+rejects(value => { value.document.blocks.push({ id: 'b2', type: 'comparison', items: [item()] }) })
+rejects(value => { value.document.blocks[0].items[0].text = 'a'.repeat(1201) })
+rejects(value => { value.document.blocks[0].items[0].text = 1 })
+rejects(value => { delete value.document.blocks[0].items[0].cve_id })
+rejects(value => { value.document.blocks[0].items[0].cve_id = 'from prose' })
+rejects(value => { value.document.blocks[0].items[0].url = 'javascript:alert(1)' })
+for (const unsafe of ['javascript:alert(1)', 'data:text/html,x', 'file:///x', '//example.org', 'https://user:pass@example.org', ' https://example.org', 'https://exam\u200bple.org', 'https:\\example.org']) assert.equal(safeUiUrl(unsafe), null)
+for (const good of ['http://example.org', 'https://example.org/evidence']) assert.equal(safeUiUrl(good), good)
+assert.equal(readUiEvent(null), null)
+assert.equal(readUiEvent([]), null)
+assert.equal(readUiEvent({ event: 'ui', document: Object.create(null) }), null)
+const max = envelope(); max.document.blocks = Array.from({ length: 4 }, (_, b) => ({ id: 'b' + b, type: 'evidence', items: Array.from({ length: 5 }, (_, i) => ({ ...item(b + '-' + i), text: 'a'.repeat(1200) })) }))
+assert.ok(readUiEvent(max))
+const unbound = { ...item('e2', null), text: 'Mentions CVE-2021-45046 but has no binding' }
+assert.equal(groupComparison([item(), unbound])[1].cve, null)
+assert.equal(readUiStatus({ status: 'accepted', reason: '' }).status, 'accepted')
+assert.equal(readUiStatus({ status: ['accepted'], reason: '' }), null)
+assert.equal(readUiStatus({ status: 'fallback', reason: '', action: 'exec' }), null)
+const key = { key: 'Enter', shiftKey: false, isComposing: false }
+assert.equal(shouldSendOnEnter(key, false), true)
+for (const event of [{ ...key, shiftKey: true }, { ...key, isComposing: true }, { ...key, keyCode: 229 }, { ...key, key: 'a' }]) assert.equal(shouldSendOnEnter(event, false), false)
+assert.equal(shouldSendOnEnter(key, true), false)
+assert.equal(isNearBottom({ scrollHeight: 1000, scrollTop: 0, clientHeight: 400 }), false)
+assert.equal(isNearBottom({ scrollHeight: 1000, scrollTop: 550, clientHeight: 400 }), true)
+const vueUrl = url('node_modules/vue/index.mjs')
+function compile(path, map = {}) { const text = source(path); assert.doesNotMatch(text.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, ''), /v-html|innerHTML/); const { descriptor } = parse(text, { filename: path }); return moduleUrl(imports(transpile(compileScript(descriptor, { id: path, inlineTemplate: true }).content), { vue: vueUrl, '../qa-ui': uiUrl, ...map })) }
+const { default: AdaptiveAnswer } = await import(compile('src/components/AdaptiveAnswer.vue'))
+const node = (type, text = '') => ({ type, text, children: [], props: {}, parent: null, style: {}, scrollHeight: 1000, scrollTop: 600, clientHeight: 400, scrollCalls: 0, focus() {}, scrollTo(args) { this.scrollCalls++; this.scrollTop = args.top } })
+const renderer = createRenderer({ createElement: type => node(type), createText: text => node('#text', text), createComment: text => node('#comment', text), setText: (el, text) => { el.text = text }, setElementText: (el, text) => { el.children = []; el.text = text }, parentNode: el => el.parent, nextSibling: el => el.parent?.children[el.parent.children.indexOf(el) + 1] ?? null, patchProp: (el, key, old, value) => { el.props[key] = value }, insert: (el, parent, anchor = null) => { if (el.parent) el.parent.children.splice(el.parent.children.indexOf(el), 1); el.parent = parent; const i = anchor ? parent.children.indexOf(anchor) : -1; if (i < 0) parent.children.push(el); else parent.children.splice(i, 0, el) }, remove: el => { if (el.parent) el.parent.children.splice(el.parent.children.indexOf(el), 1) } })
+const flatten = el => [el, ...el.children.flatMap(flatten)]
+const textOf = el => el.type === '#comment' ? '' : el.text + el.children.map(textOf).join('')
+const doc = { version: 1, source: 'rules', blocks: [{ id: 'b1', type: 'comparison', items: [item(), unbound] }, { id: 'b2', type: 'checklist', items: [{ ...item('e3'), doc_type: 'paper', text: '<script>alert(1)</script> repair evidence' }] }] }
+const target = node('root'); const app = renderer.createApp(AdaptiveAnswer, { document: doc }); app.mount(target)
+assert.match(textOf(target), /未绑定漏洞的证据/)
+assert.match(textOf(target), /不会执行修复/)
+assert.equal(flatten(target).some(el => el.type === 'script'), false)
+assert.equal(flatten(target).find(el => el.type === 'a').props.rel, 'noreferrer noopener')
+const checkbox = () => flatten(target).find(el => el.type === 'input' && el.props.type === 'checkbox')
+checkbox().props.onChange({ target: { checked: true } }); await nextTick(); assert.equal(checkbox().props.checked, true)
+flatten(target).find(el => el.type === 'select').props.onChange({ target: { value: 'paper' } }); await nextTick()
+assert.doesNotMatch(textOf(target), /Mentions CVE/)
+flatten(target).find(el => el.type === 'button').props.onClick(); await nextTick()
+assert.match(textOf(target), /Mentions CVE/)
+assert.equal(checkbox().props.checked, false)
+app.unmount()
+globalThis.__adaptiveStreams = []
+const apiMock = moduleUrl('export const getJson=async()=>({}); export function streamChat(body,event,error){const stream={body,event,error,aborted:false};globalThis.__adaptiveStreams.push(stream);return ()=>{stream.aborted=true}}')
+const { useQaStore } = await import(moduleUrl(imports(transpile(source('src/stores/qa.ts')), { vue: vueUrl, pinia: url('node_modules/pinia/dist/pinia.mjs'), '../qa-ui': uiUrl, '../api': apiMock })))
+setActivePinia(createPinia()); const qa = useQaStore()
+qa.ask('independent first'); let stream = globalThis.__adaptiveStreams.at(-1)
+assert.deepEqual(stream.body, { question: 'independent first', stream: true })
+stream.event({ event: 'stage', stage: 'retrieve' }); stream.event({ event: 'token', text: 'Refusal and gap text must remain.' }); stream.event({ event: 'citation', id: 'c1', title: 'Source', url: 'https://example.org', score: .5 }); stream.event(envelope('comparison'))
+assert.ok(qa.ui); assert.equal(qa.turns[0].stages.length, 1)
+stream.event({ event: 'done', abstained: true, final_review: { status: 'rejected', reason: 'insufficient evidence' }, cost_cny: .01, answer_mode: 'cloud', ui_status: { status: 'accepted', reason: 'validated' } })
+const first = JSON.parse(JSON.stringify(qa.turns[0]))
+qa.ask('independent second'); const second = globalThis.__adaptiveStreams.at(-1)
+assert.deepEqual(JSON.parse(JSON.stringify(qa.turns[0])), first)
+assert.equal(qa.turns[0].citations.length, 1); assert.equal(qa.turns[0].lastCost, .01); assert.equal(qa.turns[0].abstained, true)
+second.event({ event: 'token', text: 'partial answer' }); qa.stop(); second.event({ event: 'done' }); second.event(envelope()); second.event({ event: 'token', text: 'stale' })
+assert.equal(qa.turns[1].stopped, true); assert.equal(qa.turns[1].completed, false); assert.equal(qa.turns[1].answer, 'partial answer')
+qa.ask('malformed UI'); stream = globalThis.__adaptiveStreams.at(-1); stream.event({ event: 'token', text: 'full natural answer' }); const bad = envelope(); bad.document.blocks[0].style = {}; stream.event(bad); stream.event({ event: 'done', ui_status: { status: 'accepted', reason: '' } }); assert.equal(qa.ui, null); assert.equal(qa.answer, 'full natural answer'); assert.ok(qa.uiError)
+// fallback 只在服务端规则布局（source=rules）时保留；来源是 model 视为不受信
+for (const [status, source] of [['fallback', 'rules'], ['fallback', 'model'], ['skipped', 'rules'], [null, 'rules']]) {
+  qa.ask('fallback'); stream = globalThis.__adaptiveStreams.at(-1)
+  const doc = envelope(); if (source) doc.document.source = source
+  stream.event(doc)
+  stream.event({ event: 'done', ui_status: status ? { status, reason: '服务端规则布局' } : undefined })
+  assert.equal(!!qa.ui, status === 'fallback' && source === 'rules', status + '/' + source)
+  assert.equal(!qa.ui || qa.uiStatus?.status === status, true)
+}
+qa.ask('duplicate UI'); stream = globalThis.__adaptiveStreams.at(-1); stream.event(envelope()); stream.event(envelope()); assert.equal(qa.ui, null)
+qa.ask('network failure'); stream = globalThis.__adaptiveStreams.at(-1); stream.error('disconnected'); stream.event({ event: 'done' }); assert.equal(qa.turns.at(-1).error, 'disconnected'); assert.equal(qa.completed, false)
+qa.newConversation(); assert.equal(qa.turns.length, 0); assert.equal(qa.history.length, 0); assert.equal(qa.thinking, false); stream.event(envelope()); assert.equal(qa.ui, null)
+// Compile the actual workspace and exercise its native composer + scroll events.
+const markdownUrl = moduleUrl(transpile(source('src/markdown.ts')))
+const markdownBlockUrl = compile('src/components/MarkdownBlock.vue', { '../markdown': markdownUrl })
+const reportUrl = compile('src/components/AnswerReport.vue', { '../markdown': markdownUrl, './MarkdownBlock.vue': markdownBlockUrl })
+const storeUrl = moduleUrl(imports(transpile(source('src/stores/qa.ts')), { vue: vueUrl, pinia: url('node_modules/pinia/dist/pinia.mjs'), '../qa-ui': uiUrl, '../api': apiMock }))
+const workspaceApi = moduleUrl("export const IS_DEMO_MODE=true; export const BACKEND_DATA_MODE={value:'fixture'};export const getJson=async()=>({})")
+const { default: QaView } = await import(compile('src/views/QaView.vue', { '../api': workspaceApi, '../stores/qa': storeUrl, '../markdown': markdownUrl, '../components/MarkdownBlock.vue': markdownBlockUrl, '../components/AnswerReport.vue': reportUrl, '../components/AdaptiveAnswer.vue': compile('src/components/AdaptiveAnswer.vue') }))
+const workspace = node('root'); const workspaceApp = renderer.createApp(QaView); workspaceApp.mount(workspace)
+const el = type => flatten(workspace).find(el => el.type === type)
+const button = label => flatten(workspace).find(el => el.type === 'button' && textOf(el).includes(label))
+const input = value => el('textarea').props.onInput({ target: { value } })
+let prevented = 0
+const enter = overrides => el('textarea').props.onKeydown({ ...key, preventDefault() { prevented++ }, ...overrides })
+input('a multiline\nquestion'); await nextTick()
+const before = globalThis.__adaptiveStreams.length
+enter({ shiftKey: true }); enter({ isComposing: true }); enter({ keyCode: 229 }); el('textarea').props.onCompositionstart(); enter({}); await nextTick()
+assert.equal(globalThis.__adaptiveStreams.length, before)
+el('textarea').props.onCompositionend(); enter({}); await nextTick(); await nextTick()
+assert.equal(globalThis.__adaptiveStreams.length, before + 1)
+assert.equal(globalThis.__adaptiveStreams.at(-1).body.question, 'a multiline\nquestion')
+assert.equal(el('textarea').props.value, '')
+assert.equal(prevented, 1)
+let live = globalThis.__adaptiveStreams.at(-1)
+live.event({ event: 'stage', stage: 'retrieve' }); live.event({ event: 'token', text: 'Full answer with refusal and gap. 缺口' }); await nextTick(); await nextTick()
+const scroll = flatten(workspace).find(el => el.props.class === 'conversation-scroll')
+scroll.scrollTop = 0; scroll.props.onScroll(); await nextTick()
+const scrollCalls = scroll.scrollCalls
+live.event({ event: 'token', text: ' stream update' }); await nextTick(); await nextTick()
+assert.equal(scroll.scrollCalls, scrollCalls, 'reading earlier history must not auto-scroll')
+assert.ok(button('回到最新'))
+button('停止').props.onClick(); await nextTick()
+assert.match(textOf(workspace), /已停止接收/)
+input('second independent question'); enter({}); await nextTick(); await nextTick()
+assert.equal(scroll.scrollCalls, scrollCalls, 'sending while reading earlier does not force scroll')
+assert.match(textOf(workspace), /a multiline/)
+assert.match(textOf(workspace), /Full answer with refusal/)
+button('回到最新').props.onClick(); await nextTick(); await nextTick(); assert.ok(scroll.scrollCalls > scrollCalls)
+live = globalThis.__adaptiveStreams.at(-1); live.event({ event: 'done', abstained: true, final_review: { status: 'rejected', reason: 'insufficient' } }); await nextTick()
+assert.match(textOf(workspace), /已拒答 · 后端最终回执/)
+const audit = flatten(workspace).filter(el => el.type === 'details' && el.props.class === 'audit-details')
+assert.ok(audit.length === 2 && audit.every(el => !el.props.open), 'audit is collapsed by default')
+button('新对话').props.onClick(); await nextTick(); assert.doesNotMatch(textOf(workspace), /Full answer with refusal/)
+workspaceApp.unmount()
+delete globalThis.__adaptiveStreams
+const view = source('src/views/QaView.vue'); assert.doesNotMatch(view, /v-html|innerHTML|localStorage\.setItem/); assert.match(view, /shouldSendOnEnter/); assert.match(view, /following\.value/); assert.match(view, /<textarea/); assert.match(view, /<AnswerReport/)
+console.log('PASS adaptive UI: ' + cases + ' malformed contracts, bounds, safe URLs, null CVE grouping, real component filters/reset/checklist/XSS, IME/newline/scroll policy, per-turn receipts, fallback, stop/error/late events, independent requests and clearing')

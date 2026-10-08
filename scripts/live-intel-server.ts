@@ -111,8 +111,9 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
         })();
         const natural=naturalConclusion({cve_id:plan.slots.cve_ids[0]??null,chunks:evidence.chunks,remediation:(guidance?.evidence??[]).map(item=>item.artifact),askRemediation:plan.intents.includes("remediation")});
                 let finalReview:import("./final-answer-review.js").FinalReview={status:"skipped",reason:"模板模式、拒答或安全门禁回退未执行模型复核"};
+        let modelUiPlan:import("./intelligent-ui.js").UiPlan|null=null;
         let answerMode="template",answerModel="q4-template-v1",modelFallback=false,modelAttempts=0;let answer;
-        try{const selected=settings?await settings.synthesizer(()=>{modelAttempts++;},review=>{finalReview=review;},()=>event(res,{event:"stage",stage:"check"})):undefined;
+        try{const selected=settings?await settings.synthesizer(()=>{modelAttempts++;},review=>{finalReview=review;},()=>event(res,{event:"stage",stage:"check"}),ui=>{modelUiPlan=ui;}):undefined;
           const modelEvidence=selected?.synth?settings!.modelEvidence(evidence,[...view.projection.chunks,...(guidance?.chunks??[])]):evidence;
           answer=await synthesizeAnswer(q,plan,modelEvidence,selected?.synth?{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id,model_version:"runtime-settings"}}:{});
           if(selected?.synth && !answer.abstained && !answer.degraded_to){answerMode=selected.mode;answerModel=selected.model_id;if(gapLine)answer={...answer,text_md:answer.text_md+"\n\n"+gapLine};}else if(selected?.synth&&!answer.abstained){answerMode="template_fallback";modelFallback=true;}
@@ -129,8 +130,19 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
         if(res.destroyed)return;
         event(res,{event:"stage",stage:"check"});
         for(const cite of answer.citations){const chunk=evidence.chunks.find(c=>c.chunk_id===cite.chunk_id);event(res,{event:"citation",id:cite.chunk_id,title:chunk?.doc_type??"evidence",url:cite.url,score:chunk?.score_sparse??chunk?.score_dense??0});}
+        let uiStatus:import("./intelligent-ui.js").UiStatus={status:"skipped",reason:"拒答或安全筛查未通过，不生成交互组件"};
+        if(!answer.abstained&&!(answer.injection_guard?.flags?.length)){
+          const {compileUi,ruleUiPlan}=await import("./intelligent-ui.js");
+          const useModel=!!modelUiPlan&&!modelFallback;
+          let document=useModel?compileUi(modelUiPlan!,evidence,"model"):null;
+          const accepted=!!document;
+          if(!document)document=compileUi(ruleUiPlan(q,evidence),evidence,"rules");
+          // 模型返回空计划 = 本轮用文字回答更合适，状态如实记为 skipped，不当成 accepted
+          uiStatus=accepted&&document?.blocks.length?{status:"accepted",reason:"模型只编排白名单组件；显示内容由服务端绑定检索原文"}:accepted?{status:"skipped",reason:"模型未选择交互组件，保持文字回答"}:{status:"fallback",reason:"未取得合法模型组件计划；使用规则布局或文字回答"};
+          if(document?.blocks.length)event(res,{event:"ui",document});
+        }
         event(res,{event:"token",text:answer.text_md});qaCount++;
-        event(res,{event:"done",final_review:finalReview,abstained:answer.abstained,confidence:answer.confidence,confidence_kind:"heuristic",degraded:modelFallback,degraded_to:answer.degraded_to??null,data_mode:"live",read_only:true,answer_mode:answerMode,answer_model_id:answerModel,retrieval_mode:"bm25",trace_id:trace,cost_cny:modelAttempts===0?0:null,model_calls:modelAttempts,model_attempts:modelAttempts,snapshot_seq:view.projection.watermark,stale_warning:answer.stale_warning??null});res.end();return;
+        event(res,{event:"done",ui_status:uiStatus,final_review:finalReview,abstained:answer.abstained,confidence:answer.confidence,confidence_kind:"heuristic",degraded:modelFallback,degraded_to:answer.degraded_to??null,data_mode:"live",read_only:true,answer_mode:answerMode,answer_model_id:answerModel,retrieval_mode:"bm25",trace_id:trace,cost_cny:modelAttempts===0?0:null,model_calls:modelAttempts,model_attempts:modelAttempts,snapshot_seq:view.projection.watermark,stale_warning:answer.stale_warning??null});res.end();return;
       }
       json(res,404,{error:{message:"not found"},data_mode:"live"});
     }catch(error){if(res.headersSent){event(res,{event:"error",message:"readonly knowledge snapshot failed; no fixture fallback"});res.end();}else json(res,503,{error:{message:error instanceof Error?error.message:"readonly knowledge unavailable"},data_mode:"live"});}

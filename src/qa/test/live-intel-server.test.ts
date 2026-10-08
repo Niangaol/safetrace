@@ -38,6 +38,7 @@ test("live API lists only proven artifact values, cites enrichment in chat and r
     const metrics=await (await fetch(url+"/api/v1/metrics/overview")).json() as any;assert.equal(metrics.enrich.records,1);assert.equal(metrics.enrich.recorded_unverified,1);
     const reply=await fetch(url+"/api/v1/qa/chat",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({question:"CVE-2021-44228 paper Glass Lantern"})});const data=frames(await reply.text());
     const done=data.find((e:any)=>e.event==="done");assert.equal(done.data_mode,"live");assert.equal(done.model_calls,0);assert.equal(done.answer_mode,"template");assert.equal(done.abstained,false);assert.equal(done.final_review.status,"skipped");assert.match(done.final_review.reason,/未执行模型复核/);
+    assert.equal(done.ui_status.status,"fallback");const ui=data.find((e:any)=>e.event==="ui");assert.equal(ui.document.source,"rules");assert.ok(ui.document.blocks[0].items.every((item:any)=>typeof item.text==="string"&&item.url.startsWith("https:")));
     assert.ok(data.some((e:any)=>e.event==="citation"&&e.url.includes("arxiv.org/abs/2610.00001")));assert.ok(data.some((e:any)=>e.event==="token"&&e.text.includes("Glass Lantern")));
     assert.deepEqual(databaseBackupStats(path),before,"readonly API cannot migrate tables or append QA/model records to business DB");
     assert.equal((await fetch(url+"/api/v1/health",{headers:{origin:"https://foreign.example"}})).status,403);
@@ -50,7 +51,7 @@ test("live API lists only proven artifact values, cites enrichment in chat and r
     await bus.publish("dq.verdicts",{...run.verdicts[0]!,verdict:"quarantine"},{trace_id:run.trace_id,causation_id:run.causation_by_intel_id[item.intel_id]});
     assert.equal((await fetch(url+"/api/v1/vulns/"+item.intel_id)).status,404);
     const after=frames(await (await fetch(url+"/api/v1/qa/chat",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({question:"paper Glass Lantern"})})).text());
-    assert.equal(after.find((e:any)=>e.event==="done").abstained,true);assert.equal(after.filter((e:any)=>e.event==="citation").length,0);
+    assert.equal(after.find((e:any)=>e.event==="done").abstained,true);assert.equal(after.filter((e:any)=>e.event==="citation").length,0);assert.equal(after.filter((e:any)=>e.event==="ui").length,0);assert.equal(after.find((e:any)=>e.event==="done").ui_status.status,"skipped");
   }finally{globalThis.fetch=originalFetch;if(server)await close(server);keys.forEach((key,index)=>{if(saved[index]===undefined)delete process.env[key];else process.env[key]=saved[index];});states.close();store.close();await rm(root,{recursive:true,force:true});}
 });
 test("live API missing source stays failed without silently serving fixture",async()=>{
