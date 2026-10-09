@@ -1,6 +1,8 @@
 /**
  * Y2 · NVD CVE API 2.0 适配器：
- * descriptions → title/summary；weaknesses → entities.cwe；configurations.cpeMatch → cpes/product/vendor；
+ * descriptions → title/summary；weaknesses → entities.cwe；
+ * configurations.cpeMatch → cpes/product/vendor，且 versionStart/End* 与 version 边界 → entities.version_range
+ * （与 cveorg/OSV 同文本格式，F2 资产匹配的 parseRange 可直接解析；提不出的不猜，置空并留痕）；
  * metrics（cvssMetricV31 等）与 references[] 在 IntelItem 契约中无承载字段，只登记 warning，留待 F 线回读 payload_ref。
  */
 import { SCHEMA_VERSION, nowIso } from "@safetrace/shared";
@@ -36,9 +38,18 @@ function weaknessValues(weaknesses: unknown[]): string[] {
   return out;
 }
 
-/** configurations[].nodes[].cpeMatch[].criteria（剔除 vulnerable=false 的非受影响项）。 */
-function cpeCriteria(configurations: unknown[]): string[] {
-  const out: string[] = [];
+interface CpeMatch {
+  criteria: string;
+  version: string;
+  startIncluding: string;
+  startExcluding: string;
+  endIncluding: string;
+  endExcluding: string;
+}
+
+/** configurations[].nodes[].cpeMatch[]（剔除 vulnerable=false 的非受影响项）。 */
+function cpeMatches(configurations: unknown[]): CpeMatch[] {
+  const out: CpeMatch[] = [];
   for (const conf of configurations) {
     const nodes = (conf as Record<string, unknown>).nodes;
     if (!Array.isArray(nodes)) continue;
@@ -49,11 +60,53 @@ function cpeCriteria(configurations: unknown[]): string[] {
         const rec = m as Record<string, unknown>;
         if (rec.vulnerable === false) continue;
         const criteria = str(rec.criteria);
-        if (criteria.startsWith("cpe:")) out.push(criteria);
+        if (!criteria.startsWith("cpe:")) continue;
+        out.push({
+          criteria,
+          version: str(rec.version),
+          startIncluding: str(rec.versionStartIncluding),
+          startExcluding: str(rec.versionStartExcluding),
+          endIncluding: str(rec.versionEndIncluding),
+          endExcluding: str(rec.versionEndExcluding),
+        });
       }
     }
   }
   return out;
+}
+
+/** 版本边界字面量：只接受数字点分版本（可带 v 前缀）；通配符与预发布混排不猜，返回 null。 */
+function versionLiteral(value: string): string | null {
+  const match = /^v?(\d+(?:\.\d+){0,7})$/.exec(value.trim());
+  return match ? (match[1] ?? null) : null;
+}
+
+/**
+ * cpeMatch 版本边界 → version_range 文本（与 cveorg/OSV 同格式，F2 parseRange 可直接解析）：
+ * - 精确 version（非通配）→ 裸版本字面量（等价 =a），优先于边界；
+ * - start/end 四类边界 → ">=a <b" 组合（同一 match 内 AND，数组多条间 OR）；
+ * - 边界含通配符/非数字时该边界跳过，整条提不出则不留（不臆造区间）。
+ */
+function versionRangesFromCpe(matches: readonly CpeMatch[]): string[] {
+  const ranges: string[] = [];
+  for (const m of matches) {
+    const exact = versionLiteral(m.version);
+    if (exact !== null) {
+      ranges.push(exact);
+      continue;
+    }
+    const tokens: string[] = [];
+    const startIncluding = versionLiteral(m.startIncluding);
+    const startExcluding = versionLiteral(m.startExcluding);
+    const endIncluding = versionLiteral(m.endIncluding);
+    const endExcluding = versionLiteral(m.endExcluding);
+    if (startIncluding !== null) tokens.push(">=" + startIncluding);
+    if (startExcluding !== null) tokens.push(">" + startExcluding);
+    if (endIncluding !== null) tokens.push("<=" + endIncluding);
+    if (endExcluding !== null) tokens.push("<" + endExcluding);
+    if (tokens.length > 0) ranges.push(tokens.join(" "));
+  }
+  return [...new Set(ranges)];
 }
 
 /** 从 CPE 2.3 字符串解析 vendor/product（cpe:2.3:part:vendor:product:version:...）。 */
@@ -114,10 +167,15 @@ export async function parseNvd(raw: RawDoc): Promise<ParseResult> {
     else if (!pub.hadTz) warnings.push(cveId + " published 无时区后缀，已按 UTC 归一化");
     const cwe = [...new Set(weaknessValues(Array.isArray(c.weaknesses) ? c.weaknesses : []))].filter((x) => /^CWE-\d+$/.test(x));
     if (cwe.length === 0) warnings.push(cveId + " 无 weaknesses/CWE，entities.cwe 置空");
-    const cpes = [...new Set(cpeCriteria(Array.isArray(c.configurations) ? c.configurations : []))];
+    const cpeMatchList = cpeMatches(Array.isArray(c.configurations) ? c.configurations : []);
+    const cpes = [...new Set(cpeMatchList.map((m) => m.criteria))];
+    const versionRange = versionRangesFromCpe(cpeMatchList);
     const firstCpe = cpes[0];
     const vp = firstCpe === undefined ? { vendor: null, product: null } : cpeVendorProduct(firstCpe);
     if (cpes.length === 0) warnings.push(cveId + " 响应无 configurations/CPE，entities.product/vendor/cpes 置空");
+    if (cpes.length > 0 && versionRange.length === 0) {
+      warnings.push(cveId + " CPE 无可解析版本边界，entities.version_range 置空");
+    }
     if (!metricsWarned && c.metrics !== undefined) {
       warnings.push("NVD metrics（cvssMetricV31 等）已读取但 IntelItem 契约无分数字段，留待 F4 富化回读 payload_ref");
       metricsWarned = true;
@@ -135,7 +193,7 @@ export async function parseNvd(raw: RawDoc): Promise<ParseResult> {
       ...(desc === "" ? {} : { summary: desc }),
       published_at: pub.iso ?? "",
       first_seen_at: nowIso(),
-      entities: { product: vp.product, vendor: vp.vendor, version_range: [], cwe, cpes },
+      entities: { product: vp.product, vendor: vp.vendor, version_range: versionRange, cwe, cpes },
       raw_refs: [raw.payload_ref],
       source_reliability: NVD_RELIABILITY,
       schema_version: SCHEMA_VERSION,

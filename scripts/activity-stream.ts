@@ -1,9 +1,9 @@
 import {DatabaseSync} from "node:sqlite";
 import type {IncomingMessage,ServerResponse} from "node:http";
 import type {LineageRecord} from "@safetrace/shared";
-export type ActivityStage="collect"|"normalize"|"dedupe"|"quality"|"paper"|"score"|"knowledge"|"answer"|"review"|"fallback";
+export type ActivityStage="collect"|"normalize"|"dedupe"|"quality"|"paper"|"score"|"knowledge"|"answer"|"review"|"fallback"|"assets";
 export interface ActivityItem{event:"activity";id:string;sequence:number;trace_id:string;intel_id:string|null;stage:ActivityStage;status:string;at:string;label:string;origin:"live"|"recorded";details:{source_id?:string;source_type?:string;elapsed_ms?:number;artifact_count?:number;reason?:string}}
-function stage(name:string):ActivityStage {if(/fallback/.test(name))return"fallback";if(/review/.test(name))return"review";if(/dq1|quality/.test(name))return"quality";if(/dedupe/.test(name))return"dedupe";if(/parse|construct|normalize/.test(name))return"normalize";if(/fetch|snapshot|raw_publish|publish_raw/.test(name))return"collect";if(/f1/.test(name))return"paper";if(/f4|cvss|remediation/.test(name))return"score";if(/f6|index/.test(name))return"knowledge";return"answer";}
+function stage(name:string):ActivityStage {if(/fallback/.test(name))return"fallback";if(/review/.test(name))return"review";if(/dq1|quality/.test(name))return"quality";if(/dedupe/.test(name))return"dedupe";if(/parse|construct|normalize/.test(name))return"normalize";if(/fetch|snapshot|raw_publish|publish_raw/.test(name))return"collect";if(/f1/.test(name))return"paper";if(/f4|cvss|remediation/.test(name))return"score";if(/f6|index/.test(name))return"knowledge";if(/assets/.test(name))return"assets";return"answer";}
 function safeId(value:unknown):string|undefined {return typeof value==="string"&&/^[A-Za-z0-9_.:/-]{1,200}$/.test(value)?value:undefined;}
 export class ActivityStream {
  private seq=0;private journal:ActivityItem[]=[];private clients=new Set<ServerResponse>();private timer:ReturnType<typeof setInterval>|undefined;private lastDb=0;private initialized=false;private dbStatus="unknown";private tickCount=0;

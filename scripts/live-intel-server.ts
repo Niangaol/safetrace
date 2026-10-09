@@ -18,6 +18,7 @@ import { buildRetrievalRequest } from "../src/qa/src/cli.js";
 import { synthesizeAnswer } from "../src/qa/src/q4-answer.js";
 import { nextId } from "@safetrace/shared";
 import { readIngestDiagnostics } from "./ingest-diagnostics.js";
+import { handleAssetsRequest } from "./assets-api.js";
 
 function json(res:ServerResponse,status:number,body:unknown){res.writeHead(status,{"content-type":"application/json; charset=utf-8","cache-control":"no-store"});res.end(JSON.stringify(body));}
 function event(res:ServerResponse,data:unknown){if(!res.destroyed)res.write("data: "+JSON.stringify(data)+"\n\n");}
@@ -51,6 +52,8 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
     try{
       if(settings && await settings.handle(req,res,url))return;
       if(req.method==="GET"&&path==="/api/v1/activity/stream"){activity.attach(req,res,url);return;}
+      // 资产线（A 线）自带路由与写门禁（localOrigin），必须位于只读 405 之前
+      if(await handleAssetsRequest(req,res,url,path,{readView:read,publishActivity:(e)=>activity.publish(e),localOrigin}))return;
       const isChat=req.method==="POST"&&path==="/api/v1/qa/chat";
       let q: string | undefined;
       if(isChat) { try { q=await question(req); } catch { json(res,400,{error:{message:"invalid JSON question or size"},data_mode:"live"}); return; } }

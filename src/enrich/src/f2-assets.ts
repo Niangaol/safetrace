@@ -27,8 +27,8 @@ export interface AssetMatch {
   };
 }
 
-type Version = bigint[];
-type Constraint = { operator: "<" | "<=" | ">" | ">=" | "="; version: Version };
+export type Version = bigint[];
+export type Constraint = { operator: "<" | "<=" | ">" | ">=" | "="; version: Version };
 
 /**
  * 对 IntelItem 与显式传入的资产清单做确定性比较。产品名只做大小写和标点归一，
@@ -107,12 +107,12 @@ function result(
   };
 }
 
-function normalizeName(value: string | null): string {
+export function normalizeName(value: string | null): string {
   return value?.normalize("NFKC").toLocaleLowerCase("en-US").replace(/[^a-z0-9]/g, "") ?? "";
 }
 
 /** 仅接受数字点分版本；预发布、构建号及生态专用版本均保持 unknown。 */
-function parseVersion(value: string): Version | null {
+export function parseVersion(value: string): Version | null {
   const normalized = value.trim().replace(/^v(?=\d)/i, "");
   if (!/^\d+(?:\.\d+){0,7}$/.test(normalized)) return null;
   try {
@@ -123,7 +123,7 @@ function parseVersion(value: string): Version | null {
 }
 
 /** 单条范围中的比较条件按 AND 处理；数组中的多条范围按 OR 处理。 */
-function parseRange(value: string): Constraint[] | null {
+export function parseRange(value: string): Constraint[] | null {
   const tokens = value.replaceAll(",", " ").trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return null;
   const constraints: Constraint[] = [];
@@ -164,7 +164,7 @@ function isSatisfiable(constraints: Constraint[]): boolean {
   return comparison < 0 || (comparison === 0 && lower.inclusive && upper.inclusive);
 }
 
-function compareVersions(left: Version, right: Version): number {
+export function compareVersions(left: Version, right: Version): number {
   const length = Math.max(left.length, right.length);
   for (let index = 0; index < length; index += 1) {
     const a = left[index] ?? 0n;
@@ -175,7 +175,7 @@ function compareVersions(left: Version, right: Version): number {
   return 0;
 }
 
-function satisfies(version: Version, constraint: Constraint): boolean {
+export function satisfies(version: Version, constraint: Constraint): boolean {
   const comparison = compareVersions(version, constraint.version);
   switch (constraint.operator) {
     case "<": return comparison < 0;

@@ -8,7 +8,9 @@
       "@safetrace/gateway": ["src/gateway/src/index.ts"],
       "@safetrace/ingest": ["src/ingest/src/index.ts"],
       "@safetrace/enrich": ["src/enrich/src/index.ts"],
-      "@safetrace/qa": ["src/qa/src/index.ts"]
+      "@safetrace/qa": ["src/qa/src/index.ts"],
+      "@safetrace/assets": ["src/assets/src/index.ts"],
+      "@safetrace/assets": ["src/assets/src/index.ts"]
     }
   },
   "include": ["src/*/src/**/*.ts", "src/*/test/**/*.ts", "scripts/**/*.ts", "global.d.ts"],

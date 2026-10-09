@@ -18,6 +18,8 @@
 | `qa.answers` | Answer（内联） | Q4 | 前端/编排层 | 带引用与推理链的答案 |
 | `decision.replies` | DecisionReply.json | D4 | Y5/Q1/Q3 | 结构化决策回复，decided_by 必填 |
 | `fallback.events` | FallbackEvent（内联） | FB1 各层 | A1 | 兜底事件，兜底透明率 100% 的证据源 |
+| `asset.scans` | AssetScanRun（内联） | A 线扫描器 | 前端 / A1 | 本地资产扫描轮次摘要（仓库/组件计数与显式降级） |
+| `asset.alerts` | AssetAlertRecord（内联） | A 线匹配器 | 前端 / A1 | 组件命中情报受影响版本区间产生的提醒（按 component_key+cve_id 去重） |
 
 ## 降级标记（红线：禁止静默兜底）
 
@@ -82,6 +84,40 @@
   "degraded_to": "string?",
   "stale_warning": { "threshold_days": 0, "oldest_published_at": "ISO-8601?", "unknown_published_at": 0, "note": "string" }?,
   "injection_guard": { "screened": false, "max_score": "0-1?", "flags": ["instruction_override"], "untrusted_evidence": 0, "note": "string" }?
+}
+
+// AssetScanRun（asset.scans）
+{
+  "run_id": "string",
+  "started_at": "ISO-8601",
+  "finished_at": "ISO-8601",
+  "roots": ["string"],
+  "status": "ok | partial",
+  "degraded_to": "git_unavailable | timeout | read_error | repo_limit | component_limit | null",
+  "note": "string?",
+  "repo_count": 0,
+  "component_count": 0,
+  "skipped": [{ "path": "string", "reason": "string" }]
+}
+
+// AssetAlertRecord（asset.alerts）
+{
+  "alert_id": "string",
+  "created_at": "ISO-8601",
+  "component_key": "string（ecosystem:归一化组件名，与 cve_id 共同去重）",
+  "ecosystem": "npm | pypi | go | cargo | maven | composer | gem | docker | github-actions",
+  "name": "string",
+  "version": "string（空 = 未锁定）",
+  "repo_path": "string",
+  "cve_id": "string",
+  "intel_id": "string",
+  "severity": "string?（展示层富化，匹配器不产出）",
+  "matched_rule": "string",
+  "matched_ranges": ["string"],
+  "reason": "string",
+  "vendor_unverified": true,
+  "status": "new | seen",
+  "first_run_id": "string"
 }
 
 // FallbackEvent（fallback.events）

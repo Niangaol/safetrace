@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { mockCollectStatus, mockEvidence, mockMetrics, mockVuln, mockVulnsPage, mockQaResponse } from './mock'
+import { mockCollectStatus, mockEvidence, mockMetrics, mockVuln, mockVulnsPage, mockQaResponse, mockAssetsOverview, mockAssetsRepos, mockAssetsComponents, mockAssetsAlerts, mockAssetsScanResult } from './mock'
 
 const BASE = '/api/v1'
 // VITE_DEMO_MODE=true 时才使用前端内置静态 mock；默认请求本地实链 API。
@@ -112,6 +112,108 @@ export function streamChat(
   return () => controller.abort()
 }
 
+// ── 本地资产扫描（A 线） ──────────────────────────────
+
+export interface AssetAlert {
+  alert_id: string
+  created_at: string
+  name: string
+  version: string
+  repo_path: string
+  cve_id: string
+  intel_id: string
+  severity: string | null
+  title: string | null
+  matched_rule: string
+  matched_ranges: string[]
+  reason: string
+  vendor_unverified: boolean
+  status: 'new' | 'seen'
+}
+
+export interface AssetsOverview {
+  scope: string
+  data_mode: string
+  last_run: {
+    run_id: string
+    finished_at: string
+    repo_count: number
+    component_count: number
+    status: string
+    degraded_to: string | null
+    note: string | null
+    roots: string[]
+  } | null
+  repo_count: number
+  component_count: number
+  alert_count: number
+  unread_count: number
+  by_ecosystem: Record<string, number>
+  alerts: AssetAlert[]
+}
+
+export interface AssetRepo {
+  repo_id: string
+  path: string
+  remote_url: string | null
+  branch: string | null
+  head_commit: string | null
+  head_commit_at: string | null
+  is_git: boolean
+  git_note: string | null
+  languages: string[]
+  frameworks: string[]
+  manifests: string[]
+  component_count: number
+}
+
+export interface AssetComponent {
+  ecosystem: string
+  name: string
+  version: string
+  constraint_raw: string
+  version_is_range_floor: boolean
+  source_file: string
+  repo_path: string
+}
+
+export interface AssetsScanResult {
+  scope: string
+  run_id: string
+  status: string
+  degraded_to: string | null
+  note: string | null
+  repo_count: number
+  component_count: number
+  skipped: number
+  affected: number
+  new_alerts: number
+}
+
+export function getAssetsOverview() {
+  return getJson<AssetsOverview>('/assets/overview')
+}
+
+export function getAssetsRepos() {
+  return getJson<{ run_id: string | null; repos: AssetRepo[] }>('/assets/repos')
+}
+
+export function getAssetsComponents(params?: Record<string, string | number | undefined>) {
+  return getJson<{ total: number; rows: AssetComponent[] }>('/assets/components', params)
+}
+
+export function getAssetsAlerts(status?: 'new' | 'seen') {
+  return getJson<{ alerts: AssetAlert[]; unread_count: number }>('/assets/alerts', status ? { status } : undefined)
+}
+
+export function postAssetsScan(roots?: string[]) {
+  return postJson<AssetsScanResult>('/assets/scan', roots ? { roots } : {})
+}
+
+export function postAlertsRead(ids?: string[]) {
+  return postJson<{ updated: number; unread_count: number }>('/assets/alerts/read', ids ? { ids } : {})
+}
+
 // ── mock 实现 ──────────────────────────────────────
 
 function mockGet<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
@@ -122,6 +224,10 @@ function mockGet<T>(path: string, params?: Record<string, string | number | bool
       else if (path.startsWith('/vulns/') && path.includes('/evidence')) resolve(mockEvidence(path.split('/')[2]) as T)
       else if (path.startsWith('/vulns/')) resolve(mockVuln(path.split('/')[2]) as T)
       else if (path === '/vulns') resolve(mockVulnsPage(params) as T)
+      else if (path === '/assets/overview') resolve(mockAssetsOverview as T)
+      else if (path === '/assets/repos') resolve(mockAssetsRepos as T)
+      else if (path === '/assets/components') resolve(mockAssetsComponents as T)
+      else if (path === '/assets/alerts') resolve(mockAssetsAlerts.length && params?.status === 'seen' ? (mockAssetsAlerts.filter((a) => a.status === 'seen') as T) : ({ alerts: mockAssetsAlerts, unread_count: mockAssetsOverview.unread_count } as T))
       else resolve({} as T)
     }, 300 + Math.random() * 200)
   })
@@ -129,7 +235,11 @@ function mockGet<T>(path: string, params?: Record<string, string | number | bool
 
 function mockPost<T>(path: string, body: unknown): Promise<T> {
   return new Promise((resolve) => {
-    setTimeout(() => resolve({} as T), 200)
+    setTimeout(() => {
+      if (path === '/assets/scan') resolve(mockAssetsScanResult as T)
+      else if (path === '/assets/alerts/read') resolve({ updated: 1, unread_count: 0 } as T)
+      else resolve({} as T)
+    }, 200)
   })
 }
 

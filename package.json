@@ -10,7 +10,8 @@
     "src/gateway",
     "src/ingest",
     "src/enrich",
-    "src/qa"
+    "src/qa",
+    "src/assets"
   ],
   "engines": {
     "node": ">=24"
@@ -41,6 +42,7 @@
     "enrich:captured:cvss": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/reconcile-captured-cvss.ts",
     "remediation:preview": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/remediation-preview.ts",
     "ingest:once": "tsx scripts/ingest-once.ts",
+    "assets:scan": "node --import tsx scripts/assets-scan.ts",
     "enrich:pending": "node --env-file-if-exists=.env.local --import tsx scripts/enrich-pending.ts",
     "review:queue": "tsx scripts/review-queue.ts",
     "page:demo": "tsx scripts/demo-page-ingest.ts",

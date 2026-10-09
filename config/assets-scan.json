@@ -1,0 +1,15 @@
+{
+  "_comment": "本地资产扫描配置。roots 支持相对路径（相对本仓库根）与绝对路径；limits 见 src/assets/src/scanner.ts 的 DEFAULT_SCAN_LIMITS；skipDirNames 追加默认跳过名单。",
+  "roots": [".", ".."],
+  "limits": {
+    "maxDepth": 6,
+    "maxRepos": 400,
+    "maxReposPerRoot": 100,
+    "maxComponents": 5000,
+    "manifestDepth": 5,
+    "maxManifestFilesPerRepo": 60,
+    "maxManifestBytes": 1048576,
+    "timeoutMs": 120000
+  },
+  "skipDirNames": []
+}

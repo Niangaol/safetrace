@@ -6,7 +6,7 @@ import ParcelPipeline from './ParcelPipeline.vue'
 import { ACTIVITY_STAGES, ACTIVITY_STATUSES } from '../activity-types'
 import type { ActivityCard, ActivityEvent, ActivityStage, ActivityStreamEvent } from '../activity-types'
 
-const stageNames: Record<ActivityStage, string> = { collect: '来源接收', normalize: '规范整理', dedupe: '去重分流', quality: '质量盖章', paper: '论文关联', score: '证据评分', knowledge: '结果 / 索引发布', answer: '问答出站', review: '人工复核', fallback: '降级旁路' }
+const stageNames: Record<ActivityStage, string> = { collect: '来源接收', normalize: '规范整理', dedupe: '去重分流', quality: '质量盖章', paper: '论文关联', score: '证据评分', knowledge: '结果 / 索引发布', answer: '问答出站', review: '人工复核', fallback: '降级旁路', assets: '本地资产扫描' }
 const rules: Record<ActivityStage, string> = {
  collect: 'source_id / source_type 标识来源；intel_id=null 为来源批次，不代表已产生情报。',
  normalize: 'trace_id 追踪同一处理链；intel_id 绑定具体情报。仅展示后端真实规范化状态。',
@@ -18,6 +18,7 @@ const rules: Record<ActivityStage, string> = {
  answer: '真实 QA 活动共享 sequence 与 trace_id；elapsed_ms 只表示后端报告的本阶段耗时。',
  review: '人工复核分支为只读展示；本工作台不提交审批、不触发 mutation。',
  fallback: '降级旁路不是成功捷径；展示 reason，保留失败与拒收印章。',
+  assets: '本地资产扫描事件：只读 manifest 与 git 元信息；新增提醒数以存储层去重为准。',
 }
 const statusNames = { success: '本阶段通过', degraded: '降级', failed: '失败', review: '待复核', rejected: '拒收', running: '处理中' }
 const connection = ref<'waiting' | 'connected' | 'disconnected'>('waiting')

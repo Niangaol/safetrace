@@ -70,6 +70,83 @@ test("adapters：NVD fixture 全解析（descriptions/weaknesses → 字段）",
   assert.ok(warnings.some((w) => w.includes("references")));
 });
 
+test("adapters：NVD cpeMatch 版本边界 → version_range（区间 + 精确版本，非 vulnerable 项剔除）", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "safetrace-nvd-range-"));
+  try {
+    const p = path.join(dir, "nvd-ranges.json");
+    await writeFile(
+      p,
+      JSON.stringify({
+        vulnerabilities: [
+          {
+            cve: {
+              id: "CVE-2024-12345",
+              published: "2024-01-01T00:00:00.000Z",
+              descriptions: [{ lang: "en", value: "demo range extraction" }],
+              vulnStatus: "Analyzed",
+              configurations: [
+                {
+                  nodes: [
+                    {
+                      cpeMatch: [
+                        { vulnerable: true, criteria: "cpe:2.3:a:vendor:prod:1.0:*:*:*:*:*:*:*", versionStartIncluding: "1.0", versionEndExcluding: "2.0" },
+                        { vulnerable: true, criteria: "cpe:2.3:a:vendor:prod:2.5:*:*:*:*:*:*:*", version: "2.5" },
+                        { vulnerable: true, criteria: "cpe:2.3:a:vendor:prod:3.0:*:*:*:*:*:*:*", versionStartIncluding: "3.0-beta", versionEndIncluding: "*" },
+                        { vulnerable: false, criteria: "cpe:2.3:a:vendor:prod:9.9:*:*:*:*:*:*:*", version: "9.9" },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const { items, warnings } = await parseNvd(rawDocFor(p, "nvd_cve", "nvd_cve"));
+    assert.equal(items.length, 1);
+    const it = items[0]!;
+    assert.deepEqual(it.entities.version_range, [">=1.0 <2.0", "2.5"], "区间与精确版本都要提；含通配/预发布的边界不猜");
+    assert.equal(it.entities.product, "prod");
+    assert.equal(it.entities.vendor, "vendor");
+    assert.equal(it.entities.cpes.length, 3, "vulnerable=false 的条目不进 cpes");
+    assert.ok(!warnings.some((w) => w.includes("configurations")), "有 CPE 不该报无 configurations");
+    assert.ok(!warnings.some((w) => w.includes("version_range")), "提得出区间就不该告警");
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("adapters：NVD 有 CPE 但提不出版本边界时置空并留痕", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "safetrace-nvd-norange-"));
+  try {
+    const p = path.join(dir, "nvd-norange.json");
+    await writeFile(
+      p,
+      JSON.stringify({
+        vulnerabilities: [
+          {
+            cve: {
+              id: "CVE-2024-54321",
+              published: "2024-01-01T00:00:00.000Z",
+              descriptions: [{ lang: "en", value: "no range" }],
+              vulnStatus: "Analyzed",
+              configurations: [{ nodes: [{ cpeMatch: [{ vulnerable: true, criteria: "cpe:2.3:a:vendor:prod:*:*:*:*:*:*:*:*" }] }] }],
+            },
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const { items, warnings } = await parseNvd(rawDocFor(p, "nvd_cve", "nvd_cve"));
+    assert.deepEqual(items[0]!.entities.version_range, []);
+    assert.ok(warnings.some((w) => w.includes("CVE-2024-54321") && w.includes("version_range")), warnings.join("；"));
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test("adapters：OSV fixture 全解析（aliases 分拣 + ranges → version_range）", async () => {
   const { items, warnings } = await parseOsv(rawDocFor(fixture("osv.sample.json"), "osv", "osv"));
   assert.equal(items.length, 1);

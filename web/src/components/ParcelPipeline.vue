@@ -15,7 +15,7 @@ const mediaChange=()=>{reduced.value=media?.matches??false};media?.addEventListe
 const stopMotion=onMotionIntensityChange(value=>{motion.value=value})
 const moving=computed(()=>parcels.value.some(p=>p.moving))
 const chosen=computed(()=>parcels.value.find(p=>p.key===selected.value))
-const names:Record<ActivityStage,string>={collect:'采集',normalize:'解析',dedupe:'去重',quality:'质量闸门',paper:'论文富化',score:'风险富化',knowledge:'入库',answer:'问答',review:'隔离 / 复核',fallback:'失败 / 降级'}
+const names:Record<ActivityStage,string>={collect:'采集',normalize:'解析',dedupe:'去重',quality:'质量闸门',paper:'论文富化',score:'风险富化',knowledge:'入库',answer:'问答',review:'隔离 / 复核',fallback:'失败 / 降级',assets:'资产扫描'}
 const statuses={success:'本阶段通过',running:'处理中',review:'待复核',rejected:'拒收',failed:'失败',degraded:'降级'}
 const machines: {stage:ActivityStage;name:string;sub:string;x:number;y:number}[]=[
  {stage:'collect',name:'多源采集',sub:'原文接收',x:80,y:85},{stage:'normalize',name:'解析台',sub:'字段规范化',x:220,y:85},{stage:'dedupe',name:'归并台',sub:'CVE 去重',x:360,y:85},{stage:'quality',name:'质检闸门',sub:'放行 / 隔离',x:500,y:85},

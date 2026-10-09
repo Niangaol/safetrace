@@ -5,6 +5,7 @@ import type {
   Paged,
   VulnItem,
 } from './types'
+import type { AssetAlert, AssetComponent, AssetRepo, AssetsOverview, AssetsScanResult } from './api'
 
 export const mockMetrics: MetricsOverview = {
   collect: { raw_items: 5230, vulns: 1284, merge_ratio: 0.754, sources: 7 },
@@ -174,6 +175,139 @@ export function mockEvidence(id: string): EvidenceResponse {
       ],
     },
   }
+}
+
+// ── 本地资产扫描（A 线）demo 数据 ──
+// 口径：静态演示专用样本，标注 demo，不代表任何真实扫描结果。
+
+export const mockAssetsAlerts: AssetAlert[] = [
+  {
+    alert_id: 'al_demo_001',
+    created_at: '2026-10-08T21:14:00+08:00',
+    name: 'vllm',
+    version: '0.6.1',
+    repo_path: 'D:\\AgentPrograms\\demo-inference',
+    cve_id: 'CVE-2026-12345',
+    intel_id: 'intel_demo_vllm',
+    severity: 'critical',
+    title: 'vLLM 远程代码执行漏洞（API 注入）',
+    matched_rule: '< 0.6.2',
+    matched_ranges: ['< 0.6.2'],
+    reason: '组件版本满足受影响版本规则（厂商身份未经本地核实）',
+    vendor_unverified: true,
+    status: 'new',
+  },
+  {
+    alert_id: 'al_demo_002',
+    created_at: '2026-10-08T21:14:00+08:00',
+    name: 'langchain',
+    version: '0.1.9',
+    repo_path: 'D:\\AgentPrograms\\demo-agent',
+    cve_id: 'CVE-2026-12344',
+    intel_id: 'intel_demo_langchain',
+    severity: 'high',
+    title: 'LangChain SSRF 漏洞（工具链注入）',
+    matched_rule: '< 0.2.0',
+    matched_ranges: ['< 0.2.0'],
+    reason: '组件版本满足受影响版本规则（厂商身份未经本地核实）',
+    vendor_unverified: true,
+    status: 'seen',
+  },
+]
+
+export const mockAssetsOverview: AssetsOverview = {
+  scope: 'assets',
+  data_mode: 'fixture',
+  last_run: {
+    run_id: 'run_demo',
+    finished_at: '2026-10-08T21:13:40+08:00',
+    repo_count: 3,
+    component_count: 12,
+    status: 'ok',
+    degraded_to: null,
+    note: null,
+    roots: ['D:\\AgentPrograms'],
+  },
+  repo_count: 3,
+  component_count: 12,
+  alert_count: 2,
+  unread_count: 1,
+  by_ecosystem: { npm: 8, pypi: 3, docker: 1 },
+  alerts: mockAssetsAlerts.filter((a) => a.status === 'new'),
+}
+
+export const mockAssetsRepos: { run_id: string | null; repos: AssetRepo[] } = {
+  run_id: 'run_demo',
+  repos: [
+    {
+      repo_id: 'repo_demo_1',
+      path: 'D:\\AgentPrograms\\demo-agent',
+      remote_url: 'https://github.com/demo/agent.git',
+      branch: 'main',
+      head_commit: '9f2c1ab',
+      head_commit_at: '2026-10-07T10:00:00+08:00',
+      is_git: true,
+      git_note: null,
+      languages: ['Python'],
+      frameworks: ['LangChain', 'FastAPI'],
+      manifests: ['requirements.txt', 'Dockerfile'],
+      component_count: 6,
+    },
+    {
+      repo_id: 'repo_demo_2',
+      path: 'D:\\AgentPrograms\\demo-inference',
+      remote_url: null,
+      branch: 'main',
+      head_commit: '31aa77c',
+      head_commit_at: '2026-10-06T15:30:00+08:00',
+      is_git: true,
+      git_note: '未配置 origin 远程',
+      languages: ['Python', 'Docker'],
+      frameworks: ['PyTorch'],
+      manifests: ['requirements.txt'],
+      component_count: 4,
+    },
+    {
+      repo_id: 'repo_demo_3',
+      path: 'D:\\AgentPrograms\\demo-web',
+      remote_url: 'https://github.com/demo/web.git',
+      branch: 'dev',
+      head_commit: null,
+      head_commit_at: null,
+      is_git: false,
+      git_note: null,
+      languages: ['Node.js'],
+      frameworks: ['Vue', 'Vite'],
+      manifests: ['package.json'],
+      component_count: 2,
+    },
+  ],
+}
+
+export const mockAssetsComponents: { total: number; rows: AssetComponent[] } = {
+  total: 12,
+  rows: [
+    { ecosystem: 'pypi', name: 'langchain', version: '0.1.9', constraint_raw: '>=0.1.9', version_is_range_floor: true, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-agent' },
+    { ecosystem: 'pypi', name: 'fastapi', version: '0.110.0', constraint_raw: '==0.110.0', version_is_range_floor: false, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-agent' },
+    { ecosystem: 'pypi', name: 'vllm', version: '0.6.1', constraint_raw: '==0.6.1', version_is_range_floor: false, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-inference' },
+    { ecosystem: 'pypi', name: 'torch', version: '', constraint_raw: '*', version_is_range_floor: true, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-inference' },
+    { ecosystem: 'npm', name: 'vue', version: '3.5.13', constraint_raw: '^3.5.0', version_is_range_floor: true, source_file: 'package.json', repo_path: 'D:\\AgentPrograms\\demo-web' },
+    { ecosystem: 'npm', name: 'vite', version: '6.0.5', constraint_raw: '^6.0.0', version_is_range_floor: true, source_file: 'package.json', repo_path: 'D:\\AgentPrograms\\demo-web' },
+    { ecosystem: 'docker', name: 'nginx', version: '1.25', constraint_raw: '1.25', version_is_range_floor: false, source_file: 'Dockerfile', repo_path: 'D:\\AgentPrograms\\demo-agent' },
+  ],
+}
+
+export const mockAssetsScanResult: AssetsScanResult = {
+  scope: 'assets',
+  run_id: 'run_demo',
+  status: 'ok',
+  degraded_to: null,
+  note: null,
+  repo_count: 3,
+  component_count: 12,
+  skipped: 0,
+  affected: 2,
+  new_alerts: 1,
 }
 
 export const mockQaResponse = {

@@ -1,4 +1,4 @@
-export const ACTIVITY_STAGES = ['collect', 'normalize', 'dedupe', 'quality', 'paper', 'score', 'knowledge', 'answer', 'review', 'fallback'] as const
+export const ACTIVITY_STAGES = ['collect', 'normalize', 'dedupe', 'quality', 'paper', 'score', 'knowledge', 'answer', 'review', 'fallback', 'assets'] as const
 export const ACTIVITY_STATUSES = ['success', 'degraded', 'failed', 'review', 'rejected', 'running'] as const
 export type ActivityStage = typeof ACTIVITY_STAGES[number]
 export type ActivityStatus = typeof ACTIVITY_STATUSES[number]

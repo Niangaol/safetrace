@@ -12,6 +12,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { SqliteEventStore } from "@safetrace/shared";
+import { AssetsStore, autoMatchIntel, defaultAssetsDbPath } from "@safetrace/assets";
 import { runIngestScheduler, defaultDbPath, type RunRecord } from "../scheduler.js";
 import { activeSourceIds } from "../registry.js";
 
@@ -23,6 +24,36 @@ const valueOf = (flag: string): string | undefined => {
 };
 
 let stopping = false;
+
+/** 资产自动匹配节流：同一组件同一 CVE 的告警在存储层去重，这里只控匹配频率。 */
+const AUTO_MATCH_INTERVAL_MS = 15 * 60_000;
+let lastAutoMatchAt = 0;
+
+/**
+ * 新情报入库后与最新资产快照做确定性匹配，命中即落告警。
+ * 纪律：失败只记日志不打断采集（显式失败）；无快照时明说"先跑一次扫描"。
+ */
+async function autoMatch(eventStore: SqliteEventStore, force: boolean): Promise<void> {
+  const now = Date.now();
+  if (!force && now - lastAutoMatchAt < AUTO_MATCH_INTERVAL_MS) return;
+  lastAutoMatchAt = now;
+  const assets = new AssetsStore(defaultAssetsDbPath());
+  try {
+    const report = await autoMatchIntel(eventStore, assets);
+    if (report.skipped_reason !== null) {
+      console.log("[assets] 自动匹配跳过：" + report.skipped_reason);
+      return;
+    }
+    console.log(
+      "[assets] 自动匹配：情报=" + report.items_read + " 组件=" + report.components +
+        " 命中=" + report.affected + " 新增提醒=" + report.new_alerts,
+    );
+  } catch (error) {
+    console.log("[assets] 自动匹配失败（不打断采集）：" + (error instanceof Error ? error.message : String(error)));
+  } finally {
+    assets.close();
+  }
+}
 
 function log(record: RunRecord): void {
   const bits = [
@@ -60,6 +91,9 @@ async function main(): Promise<number> {
   const sourceArg = valueOf("--source") ?? args.find((a) => a.startsWith("--source="))?.slice("--source=".length);
   const sourceIds = sourceArg !== undefined && sourceArg !== "" ? sourceArg.split(",").map((s) => s.trim()).filter((s) => s !== "") : undefined;
   if (sourceIds !== undefined) console.log("[ingest] 限定源=" + sourceIds.join(","));
+  // 启动即匹配一次（幂等）：让"常驻模式"下的历史情报也能对照最新快照产出提醒
+  await autoMatch(store, true);
+
   const summary = await runIngestScheduler({
     store,
     offline: has("--offline"),
@@ -67,7 +101,10 @@ async function main(): Promise<number> {
     ...(has("--once") ? { maxCycles: 1 } : {}),
     ...(Number.isFinite(cycleMs) && cycleMs > 0 ? { checkIntervalMs: cycleMs } : {}),
     shouldStop: () => stopping,
-    onRecord: log,
+    onRecord: async (record) => {
+      log(record);
+      if (record.merged > 0) await autoMatch(store, false);
+    },
   });
 
   const ok = summary.records.filter((r) => r.ok).length;
