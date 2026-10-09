@@ -185,3 +185,14 @@ npm run trace:lineage -- manual
 自动化检查：`npm test`、`npm run typecheck`、`npm run validate:contracts`。未调用实际 Firecrawl 或云 chat/网页抽取；已按用户提供服务信息进行两次单文本 embedding 验证，计费由服务方决定（首次响应报告 22 tokens），未做批量索引。
 
 实施状态、负责人、依赖和验收以 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) / [`docs/TASKS.md`](docs/TASKS.md) 为准。
+
+## 9. 本地资产扫描与多分组监控（A 线，2026-10-09）
+
+按分组监控本机 git 仓库/项目目录：每组独立扫描根目录、独立技术栈快照（var/assets.sqlite）；新情报入库后自动比对，命中受影响组件即生成提醒（Web 铃铛 + /assets 页 + CLI + watch 常驻匹配）。
+
+```bash
+npm run assets:scan -- --list-groups     # 列分组（含仓库/组件/未读统计）
+npm run assets:scan                      # 扫描所有启用分组 + 匹配 + 落库
+```
+
+分组可在 Web 资产页「分组管理」维护（config/assets-scan.json 仅在空库时播种一次）。设计与合规边界（只读本地、零网络探测、不猜结论、降级显式）见 [`docs/ASSET-SCAN.md`](docs/ASSET-SCAN.md)。已知限制：存量 NVD 情报需重跑该源后 version_range 才入库（适配器已修复，见文档 §4）。
