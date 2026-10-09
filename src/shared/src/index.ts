@@ -7,5 +7,6 @@ export * from "./degrade.js";
 export * from "./schema.js";
 export * from "./time.js";
 export * from "./injection-screen.js";
+export * from "./trace.js";
 export * from "./llm-context.js";
 export * from "./enrichment-state.js";

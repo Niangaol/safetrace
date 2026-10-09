@@ -60,7 +60,7 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 2. **问答索引独立于采集结果**：Q2 检索 fixture 证据索引，尚未接入本次采集产物（"列表里有、问答答不了"的错位已知）。
 3. **StepPlan 接入范围已扩到适用层**：Q1/Q2/Q4 仍按需调用并回退原规则/模板；新增 A-02 `npm run qa:decision:serve`（仅监听 `127.0.0.1:8317`）；默认先用精确匹配 `public_facts.rule_candidate` 的本地规则结果，只有规则弃权且显式 public opt-in、allowlist 事实、单选题和上游校准概率表齐备才触发 StepPlan，最终 `calibrated_prob` 来自上游而非模型自评。决策角色 profiles 默认 private；当前 QA UI 尚无 `calibrated_option_probabilities` 的业务生产者，只有调用方按该子 schema 显式提供概率/候选时才会给出决策，否则转人工/挂起。受控网页抽取可在 `PAGE_INGEST_ENABLED=true`、`SAFETRACE_INGEST_LLM_ENABLED=true`、精确 host/元数据和 StepPlan key 均具备时，规则失败后尝试模型；页面须经本地 A-04 heuristic/hash attestation，候选仍经引用校验与 DQ1。F1 另有 opt-in 的标题/规则词项二次建议，只记 lineage/CLI，不改变论文分数/顺序或 F4/F6。新增数据库 ctx 管理：`llm_context_sets`/`llm_context_blocks` 按 task_key+role+data_domain 组装每层提示词，稳定规则在前、易变事实在后以命中 prompt-prefix 缓存，版本不可变、lineage 只留 hash，缺 active ctx 时 fail-closed 不发请求；运维用 `npm run llm:context`（list/show/put/activate/deactivate）。A-04 是有界启发式、不是完整防护保证；不要发送未知/敏感内容。默认 `config/models.yml` 仍离线；Q2 仍检索 fixture；费用尚未计量。本轮新增的 A-02/采集/F1 路径仅用 mock 测试，未做真实云端调用。
 4. **F2 资产定位是 Mock**：20 条合成演示资产，不接真实清单/扫描（合规红线：不扫未授权目标）。
-5. **A-04 仅部分落地，完整安全闭环仍未完成**：新增共享本地启发式筛查并接到 Q1/Q2/Q4、A-02 public projection、受控网页抽取与 F1 reviewer；网页模型调用需显式 opt-in、exact-host、24k cap、hash-bound attestation，F1 只送论文标题/规则词项且建议不写入评分。检测器只覆盖已知模式，不能保证发现所有 prompt injection；`QualityVerdict.injection_score/injection_flags` 仍未由 DQ1 填充，混淆/多阶段攻击与全链路恶意样本验收仍待做。不要报告 A-04/E-04 已完成。
+5. **A-04 启发式已全链路落地，但完整安全闭环仍未完成（2026-10-09 更新）**：共享本地启发式筛查已接到 Q1/Q2/Q4、A-02 public projection、受控网页抽取与 F1 reviewer；网页模型调用需显式 opt-in、exact-host、24k cap、hash-bound attestation，F1 只送论文标题/规则词项且建议不写入评分。DQ1（gate 1.1.0）现已填 `QualityVerdict.injection_score/injection_flags`：命中 → verdict 至少 review（人工复核、pipeline 不放行），无法筛查 → fail-closed 至少 review 且不填字段（缺省=未筛查）；`fixtures/injection/` 有十类对抗样本 + 2 良性对照，`src/ingest/test/injection.test.ts` 15 条 + `src/qa/test/injection.test.ts` 6 条反向验收全绿。检测器只覆盖已知模式，**不能保证发现所有 prompt injection**；元内容误判（描述攻击手法的正常内容）会转 review 而非 quarantine（数据不丢、人工可判）。**仍待做**：更强证据 envelope/出处界线核查、完整 tool 权限边界审计、E-04 隔离区落库。不得把 A-04 表述为"防护保证"。
 6. **72h 连续运行证据未产生**：调度器/看板代码已合入，端到端实测待 XueXuhang 补跑。
 7. **E-02 最新 SQLite trace 是修复前历史**：其 OSV/cve.org 为 no_new_data，代码现已传入 CVE IDs，但历史事件不回写。真实端到端内存探测（不写 SQLite）已证明 KEV→OSV/cve.org 各抓取并解析 1 条，且两条都与 KEV 对应 CVE 归并；正式比较表仍待补。
 8. **富化未完成且 fallback 不等于成功**：最后记录的持久 trace 为 1098/3727（29.5%），其中 1074 条 arXiv 论文为 fixture 降级；本轮未重跑该 SQLite 数据库，数字仍是历史观测。PowerShell 在线补跑：`$env:SAFETRACE_ENRICH_OFFLINE="false"; npm run enrich:pending -- --limit=20`。额外设置 `SAFETRACE_ENRICH_LLM_ENABLED=true` 且 planner/key 为 StepPlan 时，F1 仅对 live 且规则排序含糊的候选生成建议；建议不改变已发布结果。已产生 fixture 结果不会自动覆盖。
@@ -88,7 +88,8 @@ npm run dev --prefix web                # 窗口 B：127.0.0.1:5173
 | 1 | **E-02 持久化验收与富化收尾**：真实 pipeline 已用 MemoryEventStore 验证 OSV/cve.org 都取到 CVE 并归并；正式 SQLite/fixture 对比尚缺。避免再向 `var/safetrace.sqlite` 盲目全量重跑，优先用 disposable `SQLITE_PATH=tmp/...`；未富化项用 `npm run enrich:pending -- --limit=20` | `docs/TASKS.md` E-02、`docs/E-02-REAL-RUN-2026-10-01.md` |
 | 2 | **P-07 其余浏览器手动验收**：Log4Shell 带引用问答 / CVE-2099-4321 拒答 / “嗯”澄清 + 截图录屏；采集诊断页本轮已用 Tabbit 目视验证，但不能代替整套 P-07 验收 | 本文件 §1、`docs/P07-DEMO-PLAN.md` §2 |
 | 3 | **D6（10/3）契约冻结三线 sign-off**：C-01~C-06 代码侧早已完成，卡在签字 | `docs/TASKS.md` §4 |
-| 4 | **A-04 / E-04 安全加固**：DQ1 隔离落库、注入检测、Q4 入口闸门（禁砍，最迟 D9–D11） | `docs/TASKS.md` §5 |
+| 4 | **A-04 / E-04 安全加固收尾**：DQ1 注入筛查已落地（2026-10-09），剩隔离区落库（E-04）、证据 envelope 界线核查与工具权限边界审计 | `docs/TASKS.md` §5 |
+| 4b | **A-06 自愈已落地**（2026-10-09）：`npm run selfheal:drill` 全链路 + 冒烟第 [9] 段；剩真实 Langfuse 面板验收与 72h 常驻证据（E-07） | `docs/TASKS.md` A-06 |
 | 5 | compose 最小验证（Qdrant + Postgres + demo 全栈）——D16 彩排前 | 台账 E-05 降级口径 |
 | 6 | D 系列文档口径同步（README/PROJECT-INTRO 与代码不符的 12 处） | 台账 §7 |
 

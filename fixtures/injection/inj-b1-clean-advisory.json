@@ -1,0 +1,30 @@
+{
+  "_comment": "A-04 良性对照 1/2：真实公告文风，不得误报",
+  "intel_id": "intel_inj_b1",
+  "cve_ids": [
+    "CVE-2026-0001"
+  ],
+  "source_ids": [
+    "security_blog"
+  ],
+  "title": "Apache Log4j2 JNDI features used in configuration do not protect against attacker-controlled LDAP endpoints",
+  "summary": "Affected versions 2.0-beta9 through 2.14.1 allow remote code execution via crafted log messages. Upgrade to 2.15.0 or later and rotate any credentials that may have been exposed.",
+  "published_at": "2026-09-01T00:00:00Z",
+  "first_seen_at": "2026-09-01T01:00:00Z",
+  "entities": {
+    "product": "example-product",
+    "vendor": "example-vendor",
+    "version_range": [
+      "< 2.4.1"
+    ],
+    "cwe": [
+      "CWE-74"
+    ],
+    "cpes": []
+  },
+  "raw_refs": [
+    "payload.json"
+  ],
+  "source_reliability": 0.5,
+  "schema_version": "1.0"
+}

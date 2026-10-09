@@ -88,14 +88,17 @@ export class EventBus {
     return this.opts.store.appendReviewCaseDecision(decision);
   }
 
-  private async deliver<T>(env: Envelope<T>): Promise<void> {
+  /** 投递一次；返回是否全部处理器成功（A-06 死信重投据此销档）。 */
+  private async deliver<T>(env: Envelope<T>): Promise<boolean> {
     const set = this.handlers.get(env.topic);
-    if (!set || set.size === 0) return;
+    if (!set || set.size === 0) return true;
+    let ok = true;
     for (const handler of set) {
       try {
         await handler(env.payload, env);
         this.deliveryFailures.delete(env.event_id);
       } catch (err) {
+        ok = false;
         const n = (this.deliveryFailures.get(env.event_id) ?? 0) + 1;
         this.deliveryFailures.set(env.event_id, n);
         const max = this.opts.maxRetries ?? 3;
@@ -107,6 +110,18 @@ export class EventBus {
         // L1 层语义：投递失败不阻断生产者（重试与死信由总线负责登记）
       }
     }
+    return ok;
+  }
+
+  /**
+   * 重投单条已入库事件（A-06 自愈：死信修复后的恢复手段）。
+   * 与 replay 的区别：不重新 append（事件已持久、生产者副作用不重放），只对订阅者再投递一次；
+   * 全部处理器成功 → 清除死信标记；仍然失败 → 保留死信并累计失败次数（可再次退避重投）。
+   */
+  async redeliver<T>(env: Envelope<T>): Promise<boolean> {
+    const ok = await this.deliver(env);
+    if (ok) await this.opts.store.clearDeadLetter(env.event_id);
+    return ok;
   }
 
   /** 重放：从 store 按主题重读并重新投递（死信修复后的恢复手段）。 */

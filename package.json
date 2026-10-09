@@ -35,6 +35,7 @@
     "new-branch": "bash scripts/new-branch.sh",
     "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/commit-msg .githooks/pre-push",
     "trace:lineage": "tsx scripts/trace-lineage.ts",
+    "selfheal:drill": "node --import tsx scripts/selfheal-drill.ts",
     "backup:intel": "node --import tsx scripts/backup-intel.ts",
     "knowledge:preview": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/knowledge-preview.ts",
     "serve:live": "node --import tsx scripts/live-intel-server.ts",

@@ -1,15 +1,22 @@
 /**
- * DQ1 · 数据质量闸门（gate_version 1.0.0，对齐 02-report 3.8）：
+ * DQ1 · 数据质量闸门（gate_version 1.1.0，对齐 02-report 3.8）：
  * 硬红线命中即 quarantine（与分数无关）：CVE 状态 REJECT/RESERVED/DISPUTED、
  * 时间戳早于 1999 或晚于 now+5min（含不可解析）、关键 5 字段全部为空、POC 链接存在但无 sha256。
  * 分档：>=0.90 pass；0.70-0.90 degrade；0.50-0.70 review；<0.50 quarantine。
  * 五维权重随 gate_version 版本化，同版本同输入必须同输出（可复算）。
+ *
+ * gate 1.1.0（A-04 注入防护落地，纯追加、不改五维权重与红线口径）：
+ * - 对 title+summary 跑共享本地启发式 screenPromptInjection（确定性、离线、有界），
+ *   结果写入契约 C-03 的 injection_score / injection_flags（缺省 = 未筛查，禁止当作已筛查干净）；
+ * - 命中注入迹象 → verdict 至少为 review（路由人工复核，pipeline 不放行进 intel.items），
+ *   不直接 quarantine：启发式有误判空间，宁可转人工也不可错放，也不可错杀；
+ * - 筛查无法运行（输入为空/超限/形状非法）→ 不填注入字段（如实标注未筛查）且 verdict 至少 review（fail-closed）。
  */
-import { parseLoose } from "@safetrace/shared";
+import { parseLoose, screenPromptInjection } from "@safetrace/shared";
 import type { DqFlag, DqVerdict, IntelItem, QualityVerdict } from "@safetrace/shared";
 import { hasTzSuffix, isRedlineCveStatus, str } from "./common.js";
 
-export const GATE_VERSION = "1.0.1";
+export const GATE_VERSION = "1.1.0";
 
 /** 五维权重（structure/completeness/consistency/timeliness/sourcing）。 */
 const WEIGHTS = { structure: 0.15, completeness: 0.2, consistency: 0.3, timeliness: 0.15, sourcing: 0.2 } as const;
@@ -269,6 +276,17 @@ export function assessQualityVerdict(item: IntelItem, opts: AssessOpts = {}): Qu
   let verdict: DqVerdict = score >= 0.9 ? "pass" : score >= 0.7 ? "degrade" : score >= 0.5 ? "review" : "quarantine";
   if (redline) verdict = "quarantine"; // 硬红线与分数无关
 
+  // —— A-04 注入筛查（gate 1.1.0）：共享本地启发式，只扫人类可读文本 ——
+  // 只扫 title+summary：IntelItem 的其余字段是标识符/枚举/引用，不是自然语言指令载体；
+  // 原始正文在 raw.docs 侧由受控页面闸门另行筛查，不在这里重复展开。
+  const injection = screenPromptInjection([str(item.title), str(item.summary)]);
+  const injectionSuspicious = injection.screened && injection.flags.length > 0;
+  if (injectionSuspicious || !injection.screened) {
+    // 命中迹象 → 至少 review（人工复核后由复核人改判）；无法筛查 → fail-closed 同样至少 review。
+    // quarantine 仍只由硬红线决定：启发式误杀会丢数据，review 保留可复核性。
+    if (verdict === "pass" || verdict === "degrade") verdict = "review";
+  }
+
   const result: QualityVerdict = {
     item_id: item.intel_id,
     item_kind: "intel",
@@ -284,6 +302,11 @@ export function assessQualityVerdict(item: IntelItem, opts: AssessOpts = {}): Qu
     verdict,
     gate_version: GATE_VERSION,
   };
+  // C-03 契约位：screened=false 时不填（缺省 = 未筛查），调用方不得当作"已筛查且干净"。
+  if (injection.screened) {
+    result.injection_score = injection.max_score;
+    result.injection_flags = injection.flags;
+  }
   if (verdict === "quarantine") result.quarantine_ref = "dq_quarantine:" + item.intel_id;
   if (verdict === "review" && opts.reviewer !== undefined) {
     result.reviewer = opts.reviewer;

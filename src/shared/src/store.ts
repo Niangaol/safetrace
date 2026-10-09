@@ -100,10 +100,12 @@ export interface EventStore {
   readIntelAdmissionEvents?(): IntelAdmissionEvent[];
   /** Synchronous cross-store work while Intel writers are reserved; no Intel content is written. */
   withIntelAdmissionSnapshot?<T>(operation:(events:IntelAdmissionEvent[])=>T): T;
-  /** 标记事件为死信（超过重试上限）。 */
+  /** 标记事件为死信（超过重投上限）。 */
   markDeadLetter(eventId: string, reason: string): Promise<void>;
   /** 死信队列内容（A1 看板消费）。 */
   deadLetters(): Promise<Array<{ event_id: string; reason: string; envelope: Envelope }>>;
+  /** 死信重投成功后的销档（A-06 selfheal dead_letter_drain 消费）。 */
+  clearDeadLetter(eventId: string): Promise<void>;
   appendLineage(record: LineageRecord): Promise<boolean>;
   readLineage(traceId: string, offset?: number, limit?: number): Promise<LineageRecord[]>;
   getLastGoodPageSnapshot(sourceUrl: string): Promise<StoredPageSnapshot | undefined>;
@@ -413,6 +415,10 @@ export class SqliteEventStore implements EventStore {
     }));
   }
 
+  async clearDeadLetter(eventId: string): Promise<void> {
+    this.db.prepare("DELETE FROM dead_letters WHERE event_id = ?").run(eventId);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -530,6 +536,10 @@ export class MemoryEventStore implements EventStore {
 
   async deadLetters() {
     return [...this.dead];
+  }
+
+  async clearDeadLetter(eventId: string): Promise<void> {
+    this.dead = this.dead.filter((d) => d.event_id !== eventId);
   }
 
   close(): void { /* 内存实现无资源可释放 */ }

@@ -17,13 +17,14 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { MemoryEventStore, MemoryEventStore as Store, EventBus, sha256, sha256Json } from "@safetrace/shared";
+import { MemoryEventStore, MemoryEventStore as Store, EventBus, degrade, sha256, sha256Json } from "@safetrace/shared";
 import type { Answer, DecisionReply, DecisionRequest, FallbackEvent, IntelItem, QueryTurn } from "@safetrace/shared";
 import { runIngestOnce } from "@safetrace/ingest";
 import { runEnrichment } from "@safetrace/enrich";
 import {
   AGENT_ROLES,
   MemoryIndex,
+  SelfHealAgent,
   classifyIntent,
   indexChunks,
   readFixtureChunks,
@@ -280,6 +281,64 @@ async function main(): Promise<number> {
   check(silent.length === 0, "零静默兜底（fallback.events 全部 user_visible，共 " + fallbackSeen.length + " 条）");
   const degradedAnswers = answers.filter((a) => (a.degraded_to ?? "") !== "");
   console.log("  带 degraded_to 标记的答案：" + degradedAnswers.length + " 条");
+
+  // ---------- 9) A-06 自愈：fallback 登记 + 死信退避重投 + 健康看板 ----------
+  console.log("\n[9] A1 自愈（fallback 登记 / 死信指数退避重投 / healthcheck）");
+  const selfheal = new SelfHealAgent({ bus, store, backoff: { baseMs: 1000, maxMs: 60_000, maxAttempts: 8 } });
+  selfheal.subscribeFallbackEvents();
+  // 新产生的一次显式降级必须被自愈 Agent 登记（兜底透明率 100% 的运行时证据）
+  await degrade({
+    layer: "L1",
+    trigger: "smoke selfheal spot-check",
+    degradedOf: "smoke:selfheal",
+    traceId: "tr_smoke_selfheal",
+    label: "冒烟自愈抽检（显式降级）",
+    emit: async (event) => { await bus.publish("fallback.events", event, { trace_id: event.trace_id }); },
+  });
+  check(selfheal.registeredFallbackEvents.length === 1, "自愈 Agent 登记新降级事件（兜底透明率 100%）");
+  check(selfheal.registeredFallbackEvents.every((e) => e.user_visible), "登记事件全部用户可见（禁静默兜底）");
+
+  // 死信路径（模拟重启后从持久库加载的死信）：留档 → 退避窗口内不重投 → 修复后到拍重投销档
+  let consumerBroken = true;
+  const releaseBreak = bus.subscribe("decision.replies", async () => {
+    if (consumerBroken) throw new Error("smoke: consumer temporarily broken");
+  });
+  const drillEventIds: string[] = [];
+  for (let i = 0; i < 3; i += 1) {
+    const reply: DecisionReply = {
+      decision_id: "dec_smoke_selfheal_" + i,
+      kind: "q1_route",
+      decision: { choice: "impact_range" },
+      calibrated_prob: 0.9,
+      decided_by: "rule_fallback",
+      schema_version: "1.0",
+    };
+    const env = await bus.publish("decision.replies", reply, { trace_id: "tr_smoke_selfheal_dl" });
+    drillEventIds.push(env.event_id);
+    // 等价于总线重试耗尽后的落库结果（真实路径由 EventBus.deliver 超过 maxRetries 触发）
+    await store.markDeadLetter(env.event_id, "smoke: simulated exhausted retries");
+  }
+  const deadBefore = (await store.deadLetters()).length;
+  check(deadBefore === 3, "3 条死信留档待自愈（实际 " + deadBefore + "）");
+  const nowMs = 1_800_000_000_000;
+  const firstDrain = await selfheal.dead_letter_drain({ now: nowMs });
+  check(firstDrain.retried === 3 && firstDrain.recovered === 0,
+    "首次重投 3 条全部失败（消费者仍坏，retried=" + firstDrain.retried + " recovered=" + firstDrain.recovered + "）");
+  const windowDrain = await selfheal.dead_letter_drain({ now: nowMs });
+  check(windowDrain.retried === 0, "指数退避窗口内不重投（retried=" + windowDrain.retried + "）");
+  consumerBroken = false;
+  releaseBreak();
+  let replayedCount = 0;
+  const releaseFix = bus.subscribe("decision.replies", async () => { replayedCount += 1; });
+  const drain = await selfheal.dead_letter_drain({ now: nowMs + 1500 });
+  check(drain.recovered === 3, "到拍重投 3 条全部恢复（recovered=" + drain.recovered + "）");
+  check(replayedCount === 3, "恢复后的消费者实际处理 3 条重放（" + replayedCount + "）");
+  check((await store.deadLetters()).length === 0, "死信队列清零（销档）");
+  const health = await selfheal.healthcheck();
+  check(health.fallback_events.total === 1 && health.dead_letters === 0, "healthcheck 聚合死信/降级计数");
+  check(health.circuits_observed === false && health.notes.some((n) => n.includes("未注入熔断探针")),
+    "未注入熔断探针时显式注明（不冒充健康）");
+  releaseFix();
 
   console.log("\n== 冒烟结束 ==");
   if (failures.length > 0) {

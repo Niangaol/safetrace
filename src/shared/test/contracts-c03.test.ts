@@ -60,7 +60,7 @@ test("QualityVerdict：越界评分与未知注入标签必须被拒", () => {
   assert.ok(validateInstance(unknown, BASE).length > 0, "未知注入标签必须被拒");
 });
 
-test("内联契约与 TS 镜像已登记 C-03，且未宣称检测已实现", () => {
+test("内联契约与 TS 镜像已登记 C-03；A-04 落地后 DQ1 如实填充且不宣称保证", () => {
   const events = read("contracts/events.md");
   assert.match(events, /injection_score/, "events.md 内联契约须登记新字段");
   assert.match(events, /injection_flags/, "events.md 内联契约须登记新字段");
@@ -69,6 +69,10 @@ test("内联契约与 TS 镜像已登记 C-03，且未宣称检测已实现", ()
   assert.match(mirror, /injection_score\?: number;/, "TS 镜像须同步 injection_score");
   const changelog = read("contracts/schemas/CHANGELOG.md");
   assert.match(changelog, /C-03/, "须在 CHANGELOG 登记影响面");
+  // A-04 已落地（2026-10-09）：DQ1 经共享启发式填充两个字段；仍不得宣称"保证安全"
   const dq = read("src/ingest/src/dq1.ts");
-  assert.ok(!/injection/.test(dq), "DQ1 尚未实现注入检测，不得出现检测代码");
+  assert.match(dq, /screenPromptInjection/, "DQ1 必须复用共享筛查器，不得另造一套口径");
+  assert.match(dq, /injection_flags/, "DQ1 必须填充 injection_flags");
+  assert.match(dq, /injection_score/, "DQ1 必须填充 injection_score");
+  assert.ok(!/guarantee|保证/.test(dq), "启发式筛查不得写成安全保证");
 });

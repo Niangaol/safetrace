@@ -88,7 +88,7 @@ test("pipeline publishes only frozen IntelItem fields while retaining compatible
     const events = await store.read<IntelItem>("intel.items"); assert.equal(events.length, 1);
     for (const key of ["_cve_status", "_dq_sources", "poc_link", "poc_sha256"]) assert.equal(key in events[0]!.payload, false);
     const verdict = (await store.read<QualityVerdict>("dq.verdicts"))[0]!;
-    assert.equal(verdict.causation_id, events[0]!.event_id); assert.equal(verdict.payload.gate_version, "1.0.1");
+    assert.equal(verdict.causation_id, events[0]!.event_id); assert.equal(verdict.payload.gate_version, "1.1.0");
   } finally {
     globalThis.fetch = oldFetch;
     keys.forEach((key, i) => { if (saved[i] === undefined) delete process.env[key]; else process.env[key] = saved[i]; });

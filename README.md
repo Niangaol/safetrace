@@ -31,9 +31,9 @@ safetrace/
 │   ├── gateway/          # MG1 Model Gateway（H 组：模型接入）★必须与采集同步开工
 │   ├── ingest/           # Y 线：Y1 采集 / Y2 适配 / Y3 去重 / DQ1 质量闸门（甲）
 │   ├── enrich/           # F 线：F1-F6 富化 + D1/D2/D3 深度功能（乙）
-│   └── qa/               # Q 线：Q1-Q4 问答 + pi-agent-core 编排（丙）
+│   └── qa/               # Q 线：Q1-Q4 问答 + 自研 TaskGraph 编排（适配层 statemachine.ts + native 后端；pi-agent-core 未采用，LangGraph 后端已于 2026-09-30 移除）
 ├── ops/                  # compose、监控、自愈脚本（甲/乙分担）
-└── scripts/validate_contracts.py   # 契约校验（CI 里跑）
+└── scripts/validate-contracts.mjs  # 契约校验（Node 跨平台入口，CI 里跑；旧 validate_contracts.py 已退役）
 ```
 
 **8 个 JSON Schema**（D6 冻结件；事件清单和 OpenAPI 另计）：
@@ -51,9 +51,9 @@ safetrace/
 |---|---|---|
 | P0 | Y1/Y2/Y3 + DQ1 | ≥7 类源接入；24h 连续运行截图；脏数据隔离区有实例 |
 | P0 | Q1/Q2/Q4 + S1 | 20 条黄金问答全过，答案带引用与推理链展开 |
-| P0 | MG1 + S2 | 一键起 compose；provider 切换不改代码；trace_id 全链贯穿，Langfuse 外发按 A-06 验收 |
+| P0 | MG1 + S2 | 本机 Qdrant 二进制直起（D4 起弃用 compose）；provider 切换不改代码；trace_id 全链贯穿（lineage_records），Langfuse 外发按 A-06 验收 |
 | P1 | Y4/Y5 + F1/F4/F6 | 时效看板有真实数字；论文关联与 CVSS 带来源 |
-| P1 | A1（自愈） | L1/L2 自愈演练录像；降级状态显式可见 |
+| P1 | A1（自愈） | **A-06 已落地（2026-10-09）**：`src/qa/src/orchestrator/selfheal.ts` 三角色工具（replay / dead_letter_drain 指数退避重投 / healthcheck 聚合）+ fallback.events 全量登记（兜底透明率 100%）+ Langfuse HTTP 外发（默认关闭）；验收 `npm run selfheal:drill`（ops/scripts/drill.sh）跑通 检测→降级→重投失败→退避→恢复→重放→验证 全链路 |
 | P2 | F2/F3/F5、D1-D4、Q3 | Mock/演示态即可，决赛做实 |
 
 ## 2. 三周日历（对齐 03-roadmap.md D1–D22）
@@ -70,10 +70,10 @@ safetrace/
 # 1) 申请 NVD API key（免费，邮箱激活链接 7 天有效）
 #    https://nvd.nist.gov/developers/request-an-api-key
 
-# 2) 起基础设施（Qdrant + Postgres + Langfuse）
-cp .env.example .env      # 填 NVD_API_KEY 与模型 provider
-docker compose up -d qdrant postgres langfuse
-docker compose ps         # 三个都 healthy 再往下走
+# 2) 起本地栈（Qdrant 单文件二进制，已按 D4 口径弃用 Docker/compose）
+#    Qdrant 二进制在 D:\AgentPrograms\qdrant\qdrant.exe（实测已在跑，storage 同目录）
+#    记 ./qdrant --storage-dir ./qdrant-storage 的 storage 目录口径即可
+#    约定：本机演示/验收一律本地直起，不再依赖 compose
 
 # 3) 装依赖（三线各自目录）
 cd src/gateway && npm install && npm test
@@ -81,11 +81,13 @@ cd src/ingest   && npm install
 cd src/qa       && npm install
 
 # 4) 契约自检（每次改动契约后必跑）
-python scripts/validate_contracts.py
+npm run validate:contracts        # Node 入口（Windows 实测通过；R-01 修的就是这里）
+                                # 旧 python 入口已退役（见 D-01/R-01 记录）
 ```
 
-> 没有 Docker 的机器：Qdrant 可下单文件二进制版（`./qdrant --storage-dir ./qdrant_data`），
-> Postgres 可换 SQLite（改 `src/gateway/src/store.ts` 的连接串），**但交件前必须在 compose 上验一遍**。
+> 没有 Docker 的机器（本机即此）：Qdrant 已改用**单文件二进制**直起（`D:\AgentPrograms\qdrant\qdrant.exe`，
+> 实测运行中、storage 82M）；持久层用 SQLite 替 Postgres。**compose 验证按砍单④降级为后续补验项
+> （E-05），已不阻塞 demo 主线**——本机无 Docker，这是已拍板的工程决策（TEAM-PLAN §1.2/§六）。
 
 ## 4. 每条线的第一天怎么开始
 
@@ -96,9 +98,9 @@ python scripts/validate_contracts.py
 
 ## 5. 交件前 checklist（D20–D22）
 
-- [ ] `python scripts/validate_contracts.py` 全绿
-- [ ] compose 一键拉起成功，端口健康检查通过（截图）
-- [ ] 连续运行 ≥72h 的可用率截图（7×24 证据）
+- [x] `npm run validate:contracts` 全绿（8 schema / 12 fixture；2026-10-05 实测）
+- [x] 本地栈可起：Qdrant 二进制实测运行中（D4 起弃用 compose，见上）——**compose 一键拉起仍是 S-04 待补验项（E-05 砍单④）**
+- [ ] 连续运行 ≥72h 的可用率截图（7×24 证据；E-07 调度器代码已合入，端到端实测待补跑）
 - [ ] 20 条黄金问答录屏，答案可见引用与推理链
 - [ ] 脱敏检查：PPT/视频/公开仓库无真实单位名、人名、内网地址、密钥
 - [ ] 报告「已知限制」写明 Mock 清单
@@ -121,27 +123,29 @@ npm install                 # 一次性（Node ≥24，免原生编译）
 npm run check               # 门禁 = typecheck + 单测 + 契约校验 + 前端构建
 npm run smoke               # 端到端冒烟：fixture 回放跑完整链路，逐项 PASS
 npm run cli:ask -- "Log4Shell 影响哪些版本？怎么修复？"   # 问答线 CLI 演示
+npm run selfheal:drill   # A-06 自愈演练：检测→降级→退避→恢复→重放→验证（离线）
 npm run assets:demo                                         # 20 条本地合成资产版本匹配，不扫描网络
 npm run gateway:serve       # MG1 HTTP :8317（/healthz /v1/chat/complete /v1/embed /v1/rerank）
 npm run qa:serve            # 检索服务 :8318（/healthz /v1/retrieve）
 ```
 
-**零外部依赖即可演示**：不装 Docker、不配 key、不联外网（默认 `cache` provider + fixtures 回放）；
-所有降级路径经 `degrade()` 统一登记 `fallback.events` 并在响应带 `degraded_to`——冒烟第 7 项断言零静默兜底。
+**零 provider SDK 即可演示**：不装 Docker、不配 key、不联外网（默认 `cache` provider + fixtures 回放）；
+所有降级路径经 `degrade()` 统一登记 `fallback.events` 并在响应带 `degraded_to`——冒烟第 8 项断言零静默兜底，第 9 项跑 A-06 自愈演练（死信退避重投 + 健康看板）。
+**2026-10-09 实测门禁（A-04/A-06 落地轮，沙箱解除后以真实运行器复测）**：`tsc -p tsconfig.json` 0 错误；**全量单测 709/709 通过、0 失败 0 跳过**（真实 `node --test`，含此前沙箱内无法运行的文件）；`node scripts/validate-contracts.mjs` 全绿（8 schema / 12 fixture）；`npm run build --prefix web` 通过（含前端 2 项 smoke）；`npm run smoke` 全段 PASS（含 20 条黄金问答、零静默兜底、A-06 自愈第 9 段）；`npm run selfheal:drill` 全链路 PASS。新增验收：A-04 注入 21 条（ingest 15 + qa 6）、A-06 自愈 8 条 + drill 11 项断言。
 
 | 模块 | 状态 | 测试 | 说明 |
 |---|---|---|---|
-| contracts/ | **v1.1 冻结待 D6** | 校验器当前全绿 | 8 schemas + events.md + openapi.yaml；C-01 待三线 sign-off，C-02~C-06 待完成；D3 起 main 单线，D6 后只追加/标 deprecated并经另两人同意 |
-| src/shared | S2 总线 v0 | 8/8 | Envelope/幂等总线/SQLite+内存双存储/降级统一出口 |
-| src/gateway（MG1） | 红线模块 | 9/9 | 角色路由、cache/openai_compat 双 provider、令牌桶、熔断、降级链、token 计量 |
-| src/ingest（Y 线） | 首期 | 29/29 | 6 源登记、4 连接器（KEV/NVD/OSV/cve.org）、fixture 回放、Y3 强标识去重、DQ1 四档闸门（10 条脏样本全捕获） |
-| src/enrich（F 线） | 最小闭环 | 50/50 | F1 arXiv 关联、F4 CVSS v3.1 规范计分 + EPSS + 多源仲裁、F6 冲突仲裁 |
-| src/qa（Q 线） | 最小闭环 | 36/36 | Q1 规则意图、Q2 BM25-lite + MG1/Qdrant dense RRF（默认 BM25，拒绝 cache/hash 向量）；Q4 四段式带引用答案、CLI + HTTP |
-| ops/ | compose 就位待验 | 脚本自测过 | qdrant + postgres + langfuse 全家桶（Docker 未装，装好后 `bash ops/scripts/wait-healthy.sh`） |
+| contracts/ | **v1.1 已冻结（2026-10-03 形式化冻结），C-01~C-06 代码侧全部完成，三线 sign-off 收尾中** | 校验器当前全绿 | 8 schemas + events.md + openapi.yaml；C-01~C-06 各留测试反向验证；D6 后只追加字段或标 deprecated 并经另两人同意 |
+| src/shared | S2 总线 + lineage 账 + 逐维富化状态 sidecar | 全量 543 内 | Envelope/幂等总线/SQLite+内存双存储/降级统一出口/`lineage_records` 追加式审计/`enrichment-state` 逐维状态+last-good+原子提交；A-04 共享注入筛查 `injection-screen.ts`（Q1/Q2/Q4、A-02 投影、受控网页、F1 复用同一口径）；A-06 `trace.ts` Langfuse HTTP 外发（默认关闭、只发元数据）+ `redeliver`/`clearDeadLetter` 死信重投销档 |
+| src/gateway（MG1） | 红线模块 | 全量 543 内 | 角色路由、cache/openai_compat 双 provider、令牌桶、熔断、降级链、token 计量、data_domain×trust_boundary 隔离闸门（private+cloud 硬拒） |
+| src/ingest（Y 线） | 7 源登记 + 真实联网留痕 | 全量 543 内 | 7 源登记、5 连接器（KEV/NVD/OSV/cve.org/USN）+ ghsa/arxiv planned、fixture 回放、Y3 强标识去重、DQ1 四档闸门（gate 1.1.0：A-04 注入筛查填 `injection_score/injection_flags`，命中转 review 不放行）；`fixtures/injection/` 十类对抗样本；E-02 已实跑 6970 条 intel 事件留痕 |
+| src/enrich（F 线） | 逐维状态 + 修复建议维度 | 全量 543 内 | F1 arXiv 关联（产品/CVE 锚定）、F4 CVSS v3.1 + EPSS（FIRST 回执）、F6 冲突仲裁；F5 修复建议只读派生（USN/KEV）；已从保存原文核验发布 10 条 CVSS |
+| src/qa（Q 线） | Q1-Q4 + 决策阶梯 + A-06 自愈 | 全量 543 内 | Q1 规则意图、Q2 BM25-lite + MG1/Qdrant dense RRF（默认 BM25，拒绝 cache/hash 向量）；Q4 四段式带引用答案 + stale_warning/injection_guard（A-04 出云门：注入信号/untrusted/未筛查 → 阻断云合成器并显式降级）；A-02 四层兜底阶梯 + /v1/decide；自研 TaskGraph（native）编排；A-06 SelfHealAgent（fallback 登记/死信退避重投/healthcheck/drill） |
+| ops/ | compose 降级为补验项 | 脚本自测过 | compose 仍写妥（Docker 未装）；本机改用 Qdrant 二进制 + SQLite 直起（E-05 按砍单④处理） |
 
-**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 是确定性占位，未配真实模型时没有 LLM 推理；② Q2 已接 MG1 embedding 接口，但默认 cache 向量会被拒绝写入/查询语义集合，显式退回 BM25-lite；只有真实 embedder、Qdrant 和来源索引均配置后才有实际 dense 召回；③ 受控页面工具已有 SQLite last-good 和人工复核队列，已有需操作方显式来源元数据的网页→DQ1 API，但尚未接正式 SourceRegistry 调度；复核决定也不会自动产生 IntelItem；④ `runIngestOnce` / `runEnrichment` 的持久入口是 `ingest:once`，离线 smoke 使用的内存 store 不代表重启持久；⑤ A-03/A-04 完成前，不可信网页不会送真实云 LLM；⑥ Firecrawl / 云 LLM / embedding 默认关闭，Firecrawl 按页计费；⑦ 本地推理栈（llama.cpp + bge-m3 + Qdrant）D4 已验收（见 [`docs/LOCAL-STACK.md`](docs/LOCAL-STACK.md)），来源 Qdrant 生产入库仍未实跑；`published_after`、Langfuse 完整 Trace 与生产级前端 API 接线仍待办（本机演示 API 见 [`docs/LOCAL-DEMO.md`](docs/LOCAL-DEMO.md)）。
+**已知限制（须同步进报告「已知限制」）**：① 默认 `cache` provider 是确定性占位，未配真实模型时没有 LLM 推理；② Q2 已接 MG1 embedding 接口，但默认 cache 向量会被拒绝写入/查询语义集合，显式退回 BM25-lite；只有真实 embedder、Qdrant 和来源索引均配置后才有实际 dense 召回；③ 受控页面工具已有 SQLite last-good 和人工复核队列，已有需操作方显式来源元数据的网页→DQ1 API，但尚未接正式 SourceRegistry 调度；复核决定也不会自动产生 IntelItem；④ `runIngestOnce` / `runEnrichment` 的持久入口是 `ingest:once`，离线 smoke 使用的内存 store 不代表重启持久；⑤ A-04 为本地有界启发式（非 prompt-injection 防护保证）：DQ1 已填 `injection_score/injection_flags`（命中转 review），Q4 出云门已阻断注入信号/untrusted/未筛查证据，但混淆/编码/多阶段攻击的完整覆盖与工具权限边界审计仍未闭环；A-03 完成后不可信网页才会送真实云 LLM（当前受控网页 LLM 抽取保持显式 opt-in 关闭态）；⑥ Firecrawl / 云 LLM / embedding 默认关闭，Firecrawl 按页计费；⑦ 本地推理栈（llama.cpp + bge-m3 + Qdrant）D4 已验收（见 [`docs/LOCAL-STACK.md`](docs/LOCAL-STACK.md)），来源 Qdrant 生产入库仍未实跑；`published_after`、Langfuse 完整 Trace 与生产级前端 API 接线仍待办（本机演示 API 见 [`docs/LOCAL-DEMO.md`](docs/LOCAL-DEMO.md)）。
 
-**D3 分工与新增方向**：李念负责 MG1/Q/编排/契约/ops，D6 前收口 C-01~C-06，D8 前完成 R-04/R-05/R-03/A-02；KKK9747human 主责前端及端到端演示；XueXuhang 在方案 A（第 7 源+时效看板）与方案 B（F2 被动信号）中认领。P-10 受控 Firecrawl + 规则/受控 LLM/人工复核 + Qdrant 语义向量小切片见 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) 与 [`docs/TASKS.md`](docs/TASKS.md)。A-03/A-04 未完成前，真实 LLM 网页抽取保持关闭。
+**D3 分工与新增方向**：李念负责 MG1/Q/编排/契约/ops，D6 前收口 C-01~C-06，D8 前完成 R-04/R-05/R-03/A-02；KKK9747human 主责前端及端到端演示；XueXuhang 在方案 A（第 7 源+时效看板）与方案 B（F2 被动信号）中认领。P-10 受控 Firecrawl + 规则/受控 LLM/人工复核 + Qdrant 语义向量小切片见 [`docs/TEAM-PLAN.md`](docs/TEAM-PLAN.md) 与 [`docs/TASKS.md`](docs/TASKS.md)。A-04 启发式已落地但非防护保证；受控网页真实 LLM 抽取仍保持显式 opt-in 关闭态（`PAGE_INGEST_ENABLED` + `SAFETRACE_INGEST_LLM_ENABLED` 双开关 + 精确 host + hash attestation）。
 
 **本机演示（2026-10-01 合入）**：`npm run demo:serve`（启动即实跑离线采集→DQ1→富化，问答实跑 Q1→Q2→Q4）+ `npm run dev --prefix web`，手测清单见 [`docs/LOCAL-DEMO.md`](docs/LOCAL-DEMO.md)；前端默认请求真实后端，仅 `VITE_DEMO_MODE=true` 时退回内置静态 mock。
 

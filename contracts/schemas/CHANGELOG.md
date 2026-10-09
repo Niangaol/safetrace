@@ -24,7 +24,7 @@
 |---|---|---|---|
 | C-01 | DecisionReply.json + openapi | `decided_by` 追加 `human` 枚举 | 代码完成，待三线 sign-off |
 | C-02 | RetrievalResponse.json（chunk） | 可选 `published_at` + `trust` | 代码完成，待三线 sign-off |
-| C-03 | QualityVerdict（events.md 内联） | 可选 `injection_score` + `injection_flags` | 代码完成，待三线 sign-off |
+| C-03 | QualityVerdict（events.md 内联） | 可选 `injection_score` + `injection_flags` | 代码完成，待三线 sign-off；A-04 检测已落地（2026-10-09，见 v1.1.2 条目） |
 | C-04 | Answer（events.md 内联） | 可选 `stale_warning` + `injection_guard` | 代码完成，待三线 sign-off |
 | C-05 | config/models.yml + openapi 请求体 | provider `trust_boundary` + role `data_domain` + 隔离闸门 | 代码完成，待三线 sign-off |
 | C-06 | CHANGELOG + validate_contracts.py | v1.1.x 逐条登记 + expected 集合/CHANGELOG 交叉校验 | 本轮落地 |
@@ -47,7 +47,7 @@
 
 | 契约 | 生产者 → 消费者 | 变更与兼容性 |
 |---|---|---|
-| QualityVerdict（events.md 内联） | DQ1 → S1/A1、注入防护消费方 | 追加**可选** `injection_score`（0-1）与 `injection_flags`（十类注入迹象枚举）；`required` 与既有字段不变，旧生产者合法（纯追加、无破坏性）。`flags` 同步登记既有实现已在用的 `unknown_version`。**缺省 = 未做注入筛查**，禁止调用方当作“已筛查且干净”；注入检测实现归 A-04，本条只落契约位与样例（`fixtures/qualityverdict.injection.sample.json`）。迁移动作：DQ1 填充前消费者按“未筛查”处理；A-04 落地后由 DQ1 填充，消费者据 flags 路由人工复核。 |
+| QualityVerdict（events.md 内联） | DQ1 → S1/A1、注入防护消费方 | 追加**可选** `injection_score`（0-1）与 `injection_flags`（十类注入迹象枚举）；`required` 与既有字段不变，旧生产者合法（纯追加、无破坏性）。`flags` 同步登记既有实现已在用的 `unknown_version`。**缺省 = 未做注入筛查**，禁止调用方当作“已筛查且干净”。**A-04 已于 2026-10-09 落地**：DQ1（gate 1.1.0）对 title+summary 跑共享本地启发式 `screenPromptInjection` 并如实填充两字段；命中迹象时 verdict 至少为 `review`（路由人工复核，pipeline 不放行），无法筛查时 fail-closed 同样至少 `review` 且不填字段（保持“未筛查”缺省语义）。这是**有界启发式，不是 prompt-injection 防护保证**。样例见 `fixtures/qualityverdict.injection.sample.json`，对抗样本见 `fixtures/injection/`。 |
 
 ## v1.1.1（2026-09-30，D6 冻结前增量；C-02）
 
