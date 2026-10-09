@@ -76,9 +76,9 @@ manifest 里的约束分三种，匹配行为不同：
 
 ### 5.1 命令行
 
-    npm run assets:scan                        # 按 config/assets-scan.json 扫描 + 匹配 + 落库
+    npm run assets:scan                        # 扫描所有启用分组 + 匹配 + 落库
+    npm run assets:scan -- --group safetrace   # 只扫指定分组（见 §6.2）
     npm run assets:scan -- --json              # 机器可读输出
-    npm run assets:scan -- --roots D:/a;D:/b   # 临时覆盖扫描根（PATH 分隔符）
     npm run assets:scan -- --no-match          # 只扫描不匹配
 
 ### 5.2 Web
@@ -97,22 +97,48 @@ node --import tsx src/ingest/src/cli/watch.ts 启动时立刻匹配一次（幂�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | /api/v1/assets/overview | 摘要 + 未读数 + 最新 20 条新提醒 |
-| GET | /api/v1/assets/repos | 最近一轮仓库列表 |
-| GET | /api/v1/assets/components?ecosystem=&q=&limit=&offset= | 组件清单 |
-| GET | /api/v1/assets/alerts?status=new 或 seen | 提醒列表（severity/title 由实时视图富化） |
-| POST | /api/v1/assets/scan，body {roots?: string[]} | 触发扫描+匹配（要求本机页面来源 localOrigin） |
-| POST | /api/v1/assets/alerts/read，body {ids?: string[]} | 标记已读（localOrigin） |
+| GET | /api/v1/assets/groups | 分组列表 + 实时统计（未读/仓库/组件/最近扫描） |
+| GET | /api/v1/assets/overview?group_id= | 摘要 + 未读数 + 最新 20 条新提醒（缺省全部组聚合） |
+| GET | /api/v1/assets/repos?group_id= | 仓库列表（缺省所有分组最新快照） |
+| GET | /api/v1/assets/components?group_id=&ecosystem=&q=&limit=&offset= | 组件清单 |
+| GET | /api/v1/assets/alerts?group_id=&status=new 或 seen | 提醒列表（severity/title 由实时视图富化） |
+| POST | /api/v1/assets/scan，body {group_id?: "all" 或分组 id} | 触发扫描+匹配（要求本机页面来源 localOrigin） |
+| POST | /api/v1/assets/groups，body {group_id, name, roots, enabled?, note?} | 新建/更新分组（localOrigin） |
+| POST | /api/v1/assets/groups/delete，body {group_id} | 删除分组定义，历史留痕（localOrigin） |
+| POST | /api/v1/assets/alerts/read，body {ids?} 或 {group_id?} | 标记已读（localOrigin） |
 
-## 6. 配置（config/assets-scan.json）
+## 6. 配置与多文件夹分组监控（config/assets-scan.json）
 
     {
-      "roots": [".", ".."],        // 相对仓库根；默认「本仓库 + 上一级目录」
+      "groups": [
+        { "id": "safetrace", "name": "SafeTrace 本仓库", "roots": ["."], "enabled": true, "note": "竞赛主工程" },
+        { "id": "agentprograms", "name": "AgentPrograms 项目群", "roots": [".."], "enabled": true, "note": "本机其他项目聚集地" }
+      ],
       "limits": { "maxDepth": 6, "maxRepos": 400, "maxComponents": 5000, "manifestDepth": 5, "timeoutMs": 120000 },
-      "skipDirNames": []           // 追加默认跳过名单（node_modules/.git/系统目录等已内置）
+      "skipDirNames": []
     }
 
-环境变量 SAFETRACE_SCAN_ROOTS（PATH 分隔符）可覆盖 roots，优先级低于配置文件。
+- roots 支持相对仓库根与绝对路径；同一目录可出现在多个分组（各自独立快照与提醒）。
+- 兼容旧平铺格式 { "roots": [...] }：自动包装为单个 default 分组。
+- 完全没有配置时播种两个默认组：SafeTrace 本仓库 + 上一级目录。
+- 环境变量 SAFETRACE_SCAN_ROOTS（PATH 分隔符）仅在无配置文件时生效。
+
+### 6.1 分组是运行时数据，不只是配置
+
+分组定义的运行时真相源是 var/assets.sqlite 的 groups 表：config/assets-scan.json 只在 groups 表为空时播种一次，之后以 Web 资产页「分组管理」/ API 为准（增删改、停用都不碰 git 仓库里的配置文件）。每次扫描轮次、每个仓库、每个组件、每条告警都带 group_id，按组隔离：
+
+- scan_runs/repos/components：各组只读自己最新一轮快照；
+- 告警去重键是 group_id + component_key + cve_id——同一组件同一 CVE 在每个分组各提醒一次（分组即监控边界）；
+- 停用（enabled=false）的分组不参与「扫描全部组」与 watch 常驻自动匹配，历史数据保留。
+
+### 6.2 分组的用法
+
+    npm run assets:scan -- --list-groups     # 列分组（含仓库/组件/未读统计）
+    npm run assets:scan -- --group safetrace # 只扫指定分组
+    npm run assets:scan                      # 扫所有启用分组
+    npm run assets:scan -- --json            # 机器可读输出
+
+Web：/assets 页顶部分组下拉（全部组 + 各分组，带未读角标）→「分组管理」面板可新增/编辑/停用/删除。API：GET /api/v1/assets/groups（列表+统计）、POST /api/v1/assets/groups（增改）、POST /api/v1/assets/groups/delete、各只读接口都支持 ?group_id= 过滤。
 
 ## 7. 已知限制（诚实清单）
 

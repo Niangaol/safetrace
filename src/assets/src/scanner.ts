@@ -17,6 +17,10 @@ export type GitRunner = (args: string[], cwd: string) => string | null;
 
 export interface ScanOptions {
   roots: string[];
+  /** 本轮扫描所属分组；缺省 "adhoc"（一次性扫描）。 */
+  groupId?: string;
+  /** 分组展示名；缺省 "临时扫描"。 */
+  groupName?: string;
   /** 相对扫描根的目录遍历深度，默认 6。 */
   maxDepth?: number;
   maxRepos?: number;
@@ -222,6 +226,8 @@ export async function scanLocalProjects(options: ScanOptions): Promise<ScanRun> 
     run_id: nextId("run"),
     started_at: startedAt.toISOString(),
     finished_at: finishedAt.toISOString(),
+    group_id: options.groupId ?? "adhoc",
+    group_name: options.groupName ?? "临时扫描",
     roots: options.roots.map((r) => path.resolve(r)),
     status: degraded === null ? "ok" : "partial",
     degraded_to: degraded,

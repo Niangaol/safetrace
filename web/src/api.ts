@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { mockCollectStatus, mockEvidence, mockMetrics, mockVuln, mockVulnsPage, mockQaResponse, mockAssetsOverview, mockAssetsRepos, mockAssetsComponents, mockAssetsAlerts, mockAssetsScanResult } from './mock'
+import { mockCollectStatus, mockEvidence, mockMetrics, mockVuln, mockVulnsPage, mockQaResponse, mockAssetsOverview, mockAssetsRepos, mockAssetsComponents, mockAssetsAlerts, mockAssetsScanResult, mockAssetsGroups } from './mock'
 
 const BASE = '/api/v1'
 // VITE_DEMO_MODE=true 时才使用前端内置静态 mock；默认请求本地实链 API。
@@ -120,6 +120,7 @@ export interface AssetAlert {
   name: string
   version: string
   repo_path: string
+  group_id: string
   cve_id: string
   intel_id: string
   severity: string | null
@@ -131,9 +132,28 @@ export interface AssetAlert {
   status: 'new' | 'seen'
 }
 
+export interface AssetGroup {
+  group_id: string
+  name: string
+  roots: string[]
+  enabled: boolean
+  note: string | null
+  created_at: string
+}
+
+export interface AssetGroupStats extends AssetGroup {
+  last_finished_at: string | null
+  repo_count: number
+  component_count: number
+  unread_count: number
+  alert_count: number
+}
+
 export interface AssetsOverview {
   scope: string
   data_mode: string
+  group_id: string | null
+  group_name: string | null
   last_run: {
     run_id: string
     finished_at: string
@@ -149,11 +169,13 @@ export interface AssetsOverview {
   alert_count: number
   unread_count: number
   by_ecosystem: Record<string, number>
+  by_group: Array<{ group_id: string; group_name: string; repo_count: number; component_count: number; unread_count: number; last_finished_at: string | null }>
   alerts: AssetAlert[]
 }
 
 export interface AssetRepo {
   repo_id: string
+  group_id: string
   path: string
   remote_url: string | null
   branch: string | null
@@ -175,43 +197,52 @@ export interface AssetComponent {
   version_is_range_floor: boolean
   source_file: string
   repo_path: string
+  group_id: string
 }
 
 export interface AssetsScanResult {
   scope: string
-  run_id: string
-  status: string
-  degraded_to: string | null
-  note: string | null
+  groups: Array<{ group_id: string; run_id: string; status: string; degraded_to: string | null; note: string | null; repo_count: number; component_count: number; skipped: number; affected: number; new_alerts: number }>
   repo_count: number
   component_count: number
-  skipped: number
-  affected: number
   new_alerts: number
+  unread_count: number
 }
 
-export function getAssetsOverview() {
-  return getJson<AssetsOverview>('/assets/overview')
+export function getAssetsGroups() {
+  return getJson<{ groups: AssetGroupStats[] }>('/assets/groups')
 }
 
-export function getAssetsRepos() {
-  return getJson<{ run_id: string | null; repos: AssetRepo[] }>('/assets/repos')
+export function getAssetsOverview(groupId?: string) {
+  return getJson<AssetsOverview>('/assets/overview', groupId ? { group_id: groupId } : undefined)
 }
 
-export function getAssetsComponents(params?: Record<string, string | number | undefined>) {
-  return getJson<{ total: number; rows: AssetComponent[] }>('/assets/components', params)
+export function getAssetsRepos(groupId?: string) {
+  return getJson<{ run_id: string | null; repos: AssetRepo[] }>('/assets/repos', groupId ? { group_id: groupId } : undefined)
 }
 
-export function getAssetsAlerts(status?: 'new' | 'seen') {
-  return getJson<{ alerts: AssetAlert[]; unread_count: number }>('/assets/alerts', status ? { status } : undefined)
+export function getAssetsComponents(groupId?: string, params?: Record<string, string | number | undefined>) {
+  return getJson<{ total: number; rows: AssetComponent[] }>('/assets/components', { ...(groupId ? { group_id: groupId } : {}), ...(params ?? {}) })
 }
 
-export function postAssetsScan(roots?: string[]) {
-  return postJson<AssetsScanResult>('/assets/scan', roots ? { roots } : {})
+export function getAssetsAlerts(groupId?: string, status?: 'new' | 'seen') {
+  return getJson<{ alerts: AssetAlert[]; unread_count: number }>('/assets/alerts', { ...(groupId ? { group_id: groupId } : {}), ...(status ? { status } : {}) })
 }
 
-export function postAlertsRead(ids?: string[]) {
-  return postJson<{ updated: number; unread_count: number }>('/assets/alerts/read', ids ? { ids } : {})
+export function postAssetsScan(groupId?: string) {
+  return postJson<AssetsScanResult>('/assets/scan', groupId ? { group_id: groupId } : {})
+}
+
+export function postAssetsGroup(group: { group_id: string; name: string; roots: string[]; enabled?: boolean; note?: string }) {
+  return postJson<{ action: 'created' | 'updated'; group: AssetGroup }>('/assets/groups', group)
+}
+
+export function postAssetsGroupDelete(groupId: string) {
+  return postJson<{ deleted: string; groups: AssetGroup[] }>('/assets/groups/delete', { group_id: groupId })
+}
+
+export function postAlertsRead(options?: { ids?: string[]; group_id?: string }) {
+  return postJson<{ updated: number; unread_count: number }>('/assets/alerts/read', options ?? {})
 }
 
 // ── mock 实现 ──────────────────────────────────────
@@ -224,10 +255,11 @@ function mockGet<T>(path: string, params?: Record<string, string | number | bool
       else if (path.startsWith('/vulns/') && path.includes('/evidence')) resolve(mockEvidence(path.split('/')[2]) as T)
       else if (path.startsWith('/vulns/')) resolve(mockVuln(path.split('/')[2]) as T)
       else if (path === '/vulns') resolve(mockVulnsPage(params) as T)
-      else if (path === '/assets/overview') resolve(mockAssetsOverview as T)
-      else if (path === '/assets/repos') resolve(mockAssetsRepos as T)
-      else if (path === '/assets/components') resolve(mockAssetsComponents as T)
-      else if (path === '/assets/alerts') resolve(mockAssetsAlerts.length && params?.status === 'seen' ? (mockAssetsAlerts.filter((a) => a.status === 'seen') as T) : ({ alerts: mockAssetsAlerts, unread_count: mockAssetsOverview.unread_count } as T))
+      else if (path === '/assets/overview') resolve((params?.group_id ? { ...mockAssetsOverview, group_id: params.group_id as string, group_name: mockAssetsGroups.groups.find((g) => g.group_id === params.group_id)?.name ?? null } : mockAssetsOverview) as T)
+      else if (path === '/assets/repos') resolve((params?.group_id ? { run_id: 'run_demo', repos: mockAssetsRepos.repos.filter((r) => r.group_id === params.group_id) } : mockAssetsRepos) as T)
+      else if (path === '/assets/components') resolve((params?.group_id ? { total: mockAssetsComponents.rows.filter((c) => c.group_id === params.group_id).length, rows: mockAssetsComponents.rows.filter((c) => c.group_id === params.group_id) } : mockAssetsComponents) as T)
+      else if (path === '/assets/groups') resolve(mockAssetsGroups as T)
+      else if (path === '/assets/alerts') resolve((params?.group_id ? { alerts: mockAssetsAlerts.filter((a) => a.group_id === params.group_id && (!params.status || a.status === params.status)), unread_count: mockAssetsAlerts.filter((a) => a.group_id === params.group_id && a.status === 'new').length } : { alerts: params?.status ? mockAssetsAlerts.filter((a) => a.status === params.status) : mockAssetsAlerts, unread_count: mockAssetsOverview.unread_count }) as T)
       else resolve({} as T)
     }, 300 + Math.random() * 200)
   })
@@ -237,6 +269,8 @@ function mockPost<T>(path: string, body: unknown): Promise<T> {
   return new Promise((resolve) => {
     setTimeout(() => {
       if (path === '/assets/scan') resolve(mockAssetsScanResult as T)
+      else if (path === '/assets/groups') resolve({ action: 'created', group: mockAssetsGroups.groups[0] } as T)
+      else if (path === '/assets/groups/delete') resolve({ deleted: (body as { group_id?: string })?.group_id ?? '', groups: mockAssetsGroups.groups } as T)
       else if (path === '/assets/alerts/read') resolve({ updated: 1, unread_count: 0 } as T)
       else resolve({} as T)
     }, 200)

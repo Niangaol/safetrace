@@ -3,6 +3,12 @@
 > 纪律（docs/GITHUB-FLOW.md 第五节）：只允许「新字段追加 + 旧字段标 deprecated」；
 > 禁止改语义、改枚举值含义、删字段。每次契约改动必须在此登记，并在 PR 中三线 sign-off。
 
+## v1.2.1（2026-10-09，D6 冻结后增量；A 线多分组监控）
+
+| 契约 | 生产者 → 消费者 | 变更与兼容性 |
+|---|---|---|
+| events.md 两个内联契约 | A 线扫描器/匹配器 → 前端 / A1 | **纯追加**：AssetScanRun 追加 group_id/group_name；AssetAlertRecord 追加 group_id。去重语义收窄为 group_id + component_key + cve_id（同一组件同一 CVE 在每个分组各提醒一次，分组即监控边界）。缺省语义：group_id=adhoc = 一次性扫描（旧行为），旧生产者合法；degraded_to=null = 无降级，禁止把缺省读成"扫描完整"。schema 文件数仍为 8。 |
+
 ## v1.2.0（2026-10-09，D6 冻结后增量；A 线本地资产扫描）
 
 | 契约 | 生产者 → 消费者 | 变更与兼容性 |

@@ -26,6 +26,8 @@ export interface IntelLite {
 /** 带仓库来源的组件（存储行 → 匹配器输入的形态）。 */
 export interface MatchedComponent extends Component {
   repo_path: string;
+  /** 所属分组；缺省按未分组处理。 */
+  group_id?: string;
 }
 
 /** 告警去重键：生态 + 归一化组件名。 */
@@ -54,6 +56,7 @@ export function matchComponent(item: IntelLite, component: MatchedComponent): Co
     version_is_range_floor: component.version_is_range_floor,
     intel_id: item.intel_id,
     cve_ids: [...item.cve_ids],
+    group_id: component.group_id ?? "adhoc",
     vendor_unverified: true,
     rule: item.entities.version_range.length ? item.entities.version_range.join(" OR ") : "unavailable",
   };

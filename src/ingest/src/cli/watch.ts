@@ -12,7 +12,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { SqliteEventStore } from "@safetrace/shared";
-import { AssetsStore, autoMatchIntel, defaultAssetsDbPath } from "@safetrace/assets";
+import { AssetsStore, autoMatchAllGroups, defaultAssetsDbPath } from "@safetrace/assets";
 import { runIngestScheduler, defaultDbPath, type RunRecord } from "../scheduler.js";
 import { activeSourceIds } from "../registry.js";
 
@@ -30,8 +30,8 @@ const AUTO_MATCH_INTERVAL_MS = 15 * 60_000;
 let lastAutoMatchAt = 0;
 
 /**
- * 新情报入库后与最新资产快照做确定性匹配，命中即落告警。
- * 纪律：失败只记日志不打断采集（显式失败）；无快照时明说"先跑一次扫描"。
+ * 新情报入库后与各分组最新资产快照做确定性匹配，命中即落告警。
+ * 纪律：失败只记日志不打断采集（显式失败）；无快照的组明说"先跑一次扫描"。
  */
 async function autoMatch(eventStore: SqliteEventStore, force: boolean): Promise<void> {
   const now = Date.now();
@@ -39,15 +39,17 @@ async function autoMatch(eventStore: SqliteEventStore, force: boolean): Promise<
   lastAutoMatchAt = now;
   const assets = new AssetsStore(defaultAssetsDbPath());
   try {
-    const report = await autoMatchIntel(eventStore, assets);
-    if (report.skipped_reason !== null) {
-      console.log("[assets] 自动匹配跳过：" + report.skipped_reason);
-      return;
+    const report = await autoMatchAllGroups(eventStore, assets);
+    for (const group of report.groups) {
+      if (group.skipped_reason !== null) {
+        console.log("[assets][" + group.group_id + "] 自动匹配跳过：" + group.skipped_reason);
+        continue;
+      }
+      console.log(
+        "[assets][" + group.group_id + "] 自动匹配：组件=" + group.components +
+          " 命中=" + group.affected + " 新增提醒=" + group.new_alerts,
+      );
     }
-    console.log(
-      "[assets] 自动匹配：情报=" + report.items_read + " 组件=" + report.components +
-        " 命中=" + report.affected + " 新增提醒=" + report.new_alerts,
-    );
   } catch (error) {
     console.log("[assets] 自动匹配失败（不打断采集）：" + (error instanceof Error ? error.message : String(error)));
   } finally {

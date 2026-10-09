@@ -101,6 +101,20 @@ test("maxRepos=1：触达仓库上限显式降级 repo_limit", async () => {
   }
 });
 
+test("分组标识写入 run；缺省 adhoc", async () => {
+  const root = await makeTree();
+  try {
+    const grouped = await scanLocalProjects({ roots: [root], groupId: "g1", groupName: "组一", gitRunner: fakeGit, now: () => FIXED_NOW });
+    assert.equal(grouped.group_id, "g1");
+    assert.equal(grouped.group_name, "组一");
+    const adhoc = await scanLocalProjects({ roots: [root], gitRunner: fakeGit, now: () => FIXED_NOW });
+    assert.equal(adhoc.group_id, "adhoc");
+    assert.equal(adhoc.group_name, "临时扫描");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("maxDepth=0：只扫根目录自身，不下钻", async () => {
   const root = await makeTree();
   try {

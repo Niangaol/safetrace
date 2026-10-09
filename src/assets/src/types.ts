@@ -58,10 +58,24 @@ export interface ScanSkip {
   reason: string;
 }
 
+/** 监控分组：一组扫描根目录 + 启用开关，是资产线的第一类公民。 */
+export interface AssetGroup {
+  group_id: string;
+  name: string;
+  /** 该组监控的根目录（绝对路径或相对仓库根的路径，由配置层解析）。 */
+  roots: string[];
+  enabled: boolean;
+  note: string | null;
+  created_at: string;
+}
+
 export interface ScanRun {
   run_id: string;
   started_at: string;
   finished_at: string;
+  /** 本轮扫描所属分组；未分组扫描（如一次性 roots）为 "adhoc"。 */
+  group_id: string;
+  group_name: string;
   roots: string[];
   status: "ok" | "partial";
   /** 显式降级标记：git_unavailable / timeout / read_error；null = 无降级。 */
@@ -84,6 +98,8 @@ export interface ComponentMatch {
   name: string;
   version: string;
   repo_path: string;
+  /** 命中所属分组（同一组件可在多个分组各自提醒）。 */
+  group_id: string;
   source_file: string;
   constraint_raw: string;
   version_is_range_floor: boolean;
@@ -106,6 +122,7 @@ export interface AssetAlert {
   name: string;
   version: string;
   repo_path: string;
+  group_id: string;
   cve_id: string;
   intel_id: string;
   /** 由展示层从实时情报视图富化；匹配器不产出。 */
@@ -128,6 +145,7 @@ export interface NewAssetAlert {
   name: string;
   version: string;
   repo_path: string;
+  group_id: string;
   cve_id: string;
   intel_id: string;
   matched_rule: string;

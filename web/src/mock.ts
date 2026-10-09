@@ -5,7 +5,7 @@ import type {
   Paged,
   VulnItem,
 } from './types'
-import type { AssetAlert, AssetComponent, AssetRepo, AssetsOverview, AssetsScanResult } from './api'
+import type { AssetAlert, AssetComponent, AssetGroupStats, AssetRepo, AssetsOverview, AssetsScanResult } from './api'
 
 export const mockMetrics: MetricsOverview = {
   collect: { raw_items: 5230, vulns: 1284, merge_ratio: 0.754, sources: 7 },
@@ -184,6 +184,7 @@ export const mockAssetsAlerts: AssetAlert[] = [
   {
     alert_id: 'al_demo_001',
     created_at: '2026-10-08T21:14:00+08:00',
+    group_id: 'agentprograms',
     name: 'vllm',
     version: '0.6.1',
     repo_path: 'D:\\AgentPrograms\\demo-inference',
@@ -200,6 +201,7 @@ export const mockAssetsAlerts: AssetAlert[] = [
   {
     alert_id: 'al_demo_002',
     created_at: '2026-10-08T21:14:00+08:00',
+    group_id: 'safetrace',
     name: 'langchain',
     version: '0.1.9',
     repo_path: 'D:\\AgentPrograms\\demo-agent',
@@ -218,6 +220,8 @@ export const mockAssetsAlerts: AssetAlert[] = [
 export const mockAssetsOverview: AssetsOverview = {
   scope: 'assets',
   data_mode: 'fixture',
+  group_id: null,
+  group_name: null,
   last_run: {
     run_id: 'run_demo',
     finished_at: '2026-10-08T21:13:40+08:00',
@@ -233,6 +237,10 @@ export const mockAssetsOverview: AssetsOverview = {
   alert_count: 2,
   unread_count: 1,
   by_ecosystem: { npm: 8, pypi: 3, docker: 1 },
+  by_group: [
+    { group_id: 'safetrace', group_name: 'SafeTrace 本仓库', repo_count: 1, component_count: 2, unread_count: 0, last_finished_at: '2026-10-08T21:13:40+08:00' },
+    { group_id: 'agentprograms', group_name: 'AgentPrograms 项目群', repo_count: 2, component_count: 10, unread_count: 1, last_finished_at: '2026-10-08T21:13:40+08:00' },
+  ],
   alerts: mockAssetsAlerts.filter((a) => a.status === 'new'),
 }
 
@@ -240,6 +248,7 @@ export const mockAssetsRepos: { run_id: string | null; repos: AssetRepo[] } = {
   run_id: 'run_demo',
   repos: [
     {
+      group_id: 'agentprograms',
       repo_id: 'repo_demo_1',
       path: 'D:\\AgentPrograms\\demo-agent',
       remote_url: 'https://github.com/demo/agent.git',
@@ -254,6 +263,7 @@ export const mockAssetsRepos: { run_id: string | null; repos: AssetRepo[] } = {
       component_count: 6,
     },
     {
+      group_id: 'agentprograms',
       repo_id: 'repo_demo_2',
       path: 'D:\\AgentPrograms\\demo-inference',
       remote_url: null,
@@ -268,6 +278,7 @@ export const mockAssetsRepos: { run_id: string | null; repos: AssetRepo[] } = {
       component_count: 4,
     },
     {
+      group_id: 'safetrace',
       repo_id: 'repo_demo_3',
       path: 'D:\\AgentPrograms\\demo-web',
       remote_url: 'https://github.com/demo/web.git',
@@ -287,27 +298,57 @@ export const mockAssetsRepos: { run_id: string | null; repos: AssetRepo[] } = {
 export const mockAssetsComponents: { total: number; rows: AssetComponent[] } = {
   total: 12,
   rows: [
-    { ecosystem: 'pypi', name: 'langchain', version: '0.1.9', constraint_raw: '>=0.1.9', version_is_range_floor: true, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-agent' },
-    { ecosystem: 'pypi', name: 'fastapi', version: '0.110.0', constraint_raw: '==0.110.0', version_is_range_floor: false, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-agent' },
-    { ecosystem: 'pypi', name: 'vllm', version: '0.6.1', constraint_raw: '==0.6.1', version_is_range_floor: false, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-inference' },
-    { ecosystem: 'pypi', name: 'torch', version: '', constraint_raw: '*', version_is_range_floor: true, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-inference' },
-    { ecosystem: 'npm', name: 'vue', version: '3.5.13', constraint_raw: '^3.5.0', version_is_range_floor: true, source_file: 'package.json', repo_path: 'D:\\AgentPrograms\\demo-web' },
-    { ecosystem: 'npm', name: 'vite', version: '6.0.5', constraint_raw: '^6.0.0', version_is_range_floor: true, source_file: 'package.json', repo_path: 'D:\\AgentPrograms\\demo-web' },
-    { ecosystem: 'docker', name: 'nginx', version: '1.25', constraint_raw: '1.25', version_is_range_floor: false, source_file: 'Dockerfile', repo_path: 'D:\\AgentPrograms\\demo-agent' },
+    { ecosystem: 'pypi', name: 'langchain', version: '0.1.9', constraint_raw: '>=0.1.9', version_is_range_floor: true, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-agent', group_id: 'agentprograms' },
+    { ecosystem: 'pypi', name: 'fastapi', version: '0.110.0', constraint_raw: '==0.110.0', version_is_range_floor: false, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-agent', group_id: 'agentprograms' },
+    { ecosystem: 'pypi', name: 'vllm', version: '0.6.1', constraint_raw: '==0.6.1', version_is_range_floor: false, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-inference', group_id: 'agentprograms' },
+    { ecosystem: 'pypi', name: 'torch', version: '', constraint_raw: '*', version_is_range_floor: true, source_file: 'requirements.txt', repo_path: 'D:\\AgentPrograms\\demo-inference', group_id: 'agentprograms' },
+    { ecosystem: 'npm', name: 'vue', version: '3.5.13', constraint_raw: '^3.5.0', version_is_range_floor: true, source_file: 'package.json', repo_path: 'D:\\AgentPrograms\\demo-web', group_id: 'safetrace' },
+    { ecosystem: 'npm', name: 'vite', version: '6.0.5', constraint_raw: '^6.0.0', version_is_range_floor: true, source_file: 'package.json', repo_path: 'D:\\AgentPrograms\\demo-web', group_id: 'safetrace' },
+    { ecosystem: 'docker', name: 'nginx', version: '1.25', constraint_raw: '1.25', version_is_range_floor: false, source_file: 'Dockerfile', repo_path: 'D:\\AgentPrograms\\demo-agent', group_id: 'agentprograms' },
   ],
 }
 
 export const mockAssetsScanResult: AssetsScanResult = {
   scope: 'assets',
-  run_id: 'run_demo',
-  status: 'ok',
-  degraded_to: null,
-  note: null,
+  groups: [
+    { group_id: 'safetrace', run_id: 'run_demo_s', status: 'ok', degraded_to: null, note: null, repo_count: 1, component_count: 2, skipped: 0, affected: 0, new_alerts: 0 },
+    { group_id: 'agentprograms', run_id: 'run_demo_a', status: 'ok', degraded_to: null, note: null, repo_count: 2, component_count: 10, skipped: 0, affected: 2, new_alerts: 1 },
+  ],
   repo_count: 3,
   component_count: 12,
-  skipped: 0,
-  affected: 2,
   new_alerts: 1,
+  unread_count: 1,
+}
+
+export const mockAssetsGroups: { groups: AssetGroupStats[] } = {
+  groups: [
+    {
+      group_id: 'safetrace',
+      name: 'SafeTrace 本仓库',
+      roots: ['D:\\AgentPrograms\\safetrace'],
+      enabled: true,
+      note: '竞赛主工程',
+      created_at: '2026-10-09T08:00:00+08:00',
+      last_finished_at: '2026-10-08T21:13:40+08:00',
+      repo_count: 1,
+      component_count: 2,
+      unread_count: 0,
+      alert_count: 1,
+    },
+    {
+      group_id: 'agentprograms',
+      name: 'AgentPrograms 项目群',
+      roots: ['D:\\AgentPrograms'],
+      enabled: true,
+      note: '本机其他项目聚集地',
+      created_at: '2026-10-09T08:00:00+08:00',
+      last_finished_at: '2026-10-08T21:13:40+08:00',
+      repo_count: 2,
+      component_count: 10,
+      unread_count: 1,
+      alert_count: 1,
+    },
+  ],
 }
 
 export const mockQaResponse = {

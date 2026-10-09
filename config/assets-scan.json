@@ -1,6 +1,21 @@
 {
-  "_comment": "本地资产扫描配置。roots 支持相对路径（相对本仓库根）与绝对路径；limits 见 src/assets/src/scanner.ts 的 DEFAULT_SCAN_LIMITS；skipDirNames 追加默认跳过名单。",
-  "roots": [".", ".."],
+  "_comment": "本地资产扫描配置（分组模型 v2）。groups 仅在 var/assets.sqlite 的 groups 表为空时播种一次；之后以 Web 资产页/API 管理为准。roots 支持相对仓库根与绝对路径。",
+  "groups": [
+    {
+      "id": "safetrace",
+      "name": "SafeTrace 本仓库",
+      "roots": ["."],
+      "enabled": true,
+      "note": "竞赛主工程"
+    },
+    {
+      "id": "agentprograms",
+      "name": "AgentPrograms 项目群",
+      "roots": [".."],
+      "enabled": true,
+      "note": "本机其他项目聚集地"
+    }
+  ],
   "limits": {
     "maxDepth": 6,
     "maxRepos": 400,

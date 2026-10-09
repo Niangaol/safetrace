@@ -18,8 +18,8 @@
 | `qa.answers` | Answer（内联） | Q4 | 前端/编排层 | 带引用与推理链的答案 |
 | `decision.replies` | DecisionReply.json | D4 | Y5/Q1/Q3 | 结构化决策回复，decided_by 必填 |
 | `fallback.events` | FallbackEvent（内联） | FB1 各层 | A1 | 兜底事件，兜底透明率 100% 的证据源 |
-| `asset.scans` | AssetScanRun（内联） | A 线扫描器 | 前端 / A1 | 本地资产扫描轮次摘要（仓库/组件计数与显式降级） |
-| `asset.alerts` | AssetAlertRecord（内联） | A 线匹配器 | 前端 / A1 | 组件命中情报受影响版本区间产生的提醒（按 component_key+cve_id 去重） |
+| `asset.scans` | AssetScanRun（内联） | A 线扫描器 | 前端 / A1 | 本地资产扫描轮次摘要（分组/仓库/组件计数与显式降级） |
+| `asset.alerts` | AssetAlertRecord（内联） | A 线匹配器 | 前端 / A1 | 组件命中情报受影响版本区间产生的提醒（按 group_id+component_key+cve_id 去重） |
 
 ## 降级标记（红线：禁止静默兜底）
 
@@ -89,6 +89,8 @@
 // AssetScanRun（asset.scans）
 {
   "run_id": "string",
+  "group_id": "string（监控分组 id；一次性扫描为 adhoc）",
+  "group_name": "string",
   "started_at": "ISO-8601",
   "finished_at": "ISO-8601",
   "roots": ["string"],
@@ -104,7 +106,8 @@
 {
   "alert_id": "string",
   "created_at": "ISO-8601",
-  "component_key": "string（ecosystem:归一化组件名，与 cve_id 共同去重）",
+  "group_id": "string（告警所属分组；同一组件同一 CVE 在每个分组各提醒一次）",
+  "component_key": "string（ecosystem:归一化组件名，与 group_id+cve_id 共同去重）",
   "ecosystem": "npm | pypi | go | cargo | maven | composer | gem | docker | github-actions",
   "name": "string",
   "version": "string（空 = 未锁定）",
