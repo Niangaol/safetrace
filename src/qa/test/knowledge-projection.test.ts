@@ -121,6 +121,45 @@ test("N07 CVSS cannot borrow an unrelated record score even with consistent resu
   assert.equal((await projectKnowledgeEvidence(s.input)).chunks.length, 2);
 });
 
+test("N07 NVD bulk 报文原文收录的 CNA 评分：内容逐字比对成立即放行（1908 条误拒修复）", async () => {
+  const s = setup(), cna = "cna@example.com";
+  // NVD bulk 报文里除 NIST 主评分外，原文收录 CNA（sourceIdentifier）提交的评分
+  const record = s.payload.vulnerabilities[0]!.cve as unknown as { sourceIdentifier?: string; metrics: { cvssMetricV31: { source: string; cvssData: { baseScore: number } }[] } };
+  record.sourceIdentifier = cna;
+  record.metrics.cvssMetricV31[0]!.source = cna;
+  const bytes = new TextEncoder().encode(JSON.stringify(s.payload));
+  s.input.read_raw_payload = async () => bytes;
+  s.lineage[0]!.output_refs[1]!.sha256 = sha256(bytes); // 报文变了，RawPayload 血缘哈希同步
+  Object.assign(s.result.artifacts.score_assessment!, { source_of_score: "cna" });
+  s.state.resultHash = sha256Json(s.result);
+  s.lineage[2]!.output_refs[0]!.sha256 = s.state.resultHash;
+  s.state.artifacts[1]!.artifactHash = sha256Json(s.result.artifacts.score_assessment);
+  const p = await projectKnowledgeEvidence(s.input);
+  assert.equal(p.chunks.length, 3, JSON.stringify(p.rejected));
+  const score = p.evidence.find(e => e.kind === "cvss")!;
+  assert.ok(score.chunk.text.includes(String(record.metrics.cvssMetricV31[0]!.cvssData.baseScore)));
+  assert.ok(score.chunk.text.includes('"source_of_score":"cna"'), score.chunk.text);
+  assert.equal(score.raw_ref, s.raw.payload_ref);
+});
+
+test("N07 配对放行不放宽内容比对：CNA 评分与报文数值不一致仍拒绝", async () => {
+  const s = setup(), cna = "cna@example.com";
+  const record = s.payload.vulnerabilities[0]!.cve as unknown as { sourceIdentifier?: string; metrics: { cvssMetricV31: { source: string; cvssData: { baseScore: number } }[] } };
+  record.sourceIdentifier = cna;
+  record.metrics.cvssMetricV31[0]!.source = cna;
+  record.metrics.cvssMetricV31[0]!.cvssData.baseScore = 4.2;
+  const bytes = new TextEncoder().encode(JSON.stringify(s.payload));
+  s.input.read_raw_payload = async () => bytes;
+  s.lineage[0]!.output_refs[1]!.sha256 = sha256(bytes);
+  Object.assign(s.result.artifacts.score_assessment!, { source_of_score: "cna" });
+  s.state.resultHash = sha256Json(s.result);
+  s.lineage[2]!.output_refs[0]!.sha256 = s.state.resultHash;
+  s.state.artifacts[1]!.artifactHash = sha256Json(s.result.artifacts.score_assessment);
+  const p = await projectKnowledgeEvidence(s.input);
+  assert.equal(p.chunks.length, 2, JSON.stringify(p.rejected));
+  assert.ok(p.rejected.some(r => /actual raw payload/.test(r.reason)));
+});
+
 test("N07 artifact metadata is not guessed, including trust, URL, date and hash", async () => {
   for (const patch of [{ trust: undefined }, { published_at: "2026-10-03" }, { artifactHash: "" }, { url: "https://evil.example/paper" }]) {
     const s = setup(); Object.assign(s.state.artifacts[0]!, patch);

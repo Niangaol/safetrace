@@ -1,7 +1,7 @@
 import { degrade, EventBus, nextId, sha256Json, SqliteEventStore, SqliteLlmContextStore, SqliteEnrichmentStateStore } from "@safetrace/shared";
 import type { EnrichmentResult, FallbackEvent, IntelItem, QualityVerdict } from "@safetrace/shared";
 import { nextArxivFailureStreak, planPendingEnrichment } from "../src/enrich/src/pending.js";
-import { createStepFunPaperReviewer, runEnrichment } from "@safetrace/enrich";
+import { createJevPaperReviewer, createStepFunPaperReviewer, runEnrichment } from "@safetrace/enrich";
 import type { PaperReviewPort } from "@safetrace/enrich";
 import { ModelGateway } from "@safetrace/gateway";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -99,12 +99,28 @@ async function main(): Promise<void> {
         }
       }
     }
+    // 本地 Open-Jev 论文评审（SAFETRACE_ENRICH_PAPER_REVIEWER=jev）：与 StepFun 云端评审互斥，
+    // 离线模式一律拒绝（fixture 回放必须确定）；模型标识钉版本，官方别名会静默漂移。
+    const jevReviewerKind = process.env.SAFETRACE_ENRICH_PAPER_REVIEWER;
+    if (jevReviewerKind !== undefined && jevReviewerKind !== "jev") throw new Error("SAFETRACE_ENRICH_PAPER_REVIEWER 只能取 jev（本地 Open-Jev 评审）");
+    if (jevReviewerKind === "jev" && llmOptIn) throw new Error("SAFETRACE_ENRICH_PAPER_REVIEWER=jev 与 SAFETRACE_ENRICH_LLM_ENABLED=true 互斥：一次只启用一个论文评审端");
+    let paperReviewerProvider: string | undefined;
+    if (jevReviewerKind === "jev") {
+      if (offline) {
+        await bus.recordLineage({ trace_id: traceId, stage: "enrich.llm_optin", operation_version: "enrich-llm-optin.v1", status: "rejected", decision: { reason: "Local Open-Jev F1 advisory requested in fixture/offline mode; no model request made" } });
+        await degrade({ layer: "L3", trigger: "F1 Open-Jev advisory requested while enrichment is offline", degradedOf: "rule-ranked-papers", traceId, label: "离线富化不调用本地 Jev 评审；保留规则结果", recoveryHint: "需启用本地评审时设置 SAFETRACE_ENRICH_OFFLINE=false，并保持 Jev 服务（JEV_BASE_URL）就绪。", emit: async (event) => { await bus.publish("fallback.events", event, { trace_id: traceId }); } });
+      } else {
+        paperReviewer = createJevPaperReviewer({ modelId: process.env.JEV_MODEL_ID ?? "Open-Jev-2B", ...(process.env.JEV_BASE_URL ? { baseUrl: process.env.JEV_BASE_URL } : {}) });
+        paperReviewerProvider = "openjev";
+        await bus.recordLineage({ trace_id: traceId, stage: "enrich.llm_optin", operation_version: "enrich-llm-optin.v1", status: "success", input_refs: [{ kind: "ModelRole", id: "openjev", sha256: sha256Json({ base_url: process.env.JEV_BASE_URL ?? "http://127.0.0.1:8791", model_id: process.env.JEV_MODEL_ID ?? "Open-Jev-2B" }) }], decision: { reason: "F1 local Jev review is advisory-only; ambiguous rule-ranked arXiv candidates required" } });
+      }
+    }
     const requestedDelay = Number(process.env.SAFETRACE_ENRICH_DELAY_MS ?? "3000");
     const stopAfter = Number(process.env.SAFETRACE_ENRICH_STOP_AFTER_ARXIV_FAILURES ?? "3");
     if (!Number.isFinite(requestedDelay) || requestedDelay < 0 || !Number.isSafeInteger(stopAfter) || stopAfter < 1) throw new Error("富化延迟必须非负有限，连续失败阈值必须为正整数");
     // arXiv 礼让只在真的会发起 arXiv 请求时生效；只补 cvss/epss 的条目改用更短的服务礼节间隔。
     const delayFor = (): number => offline ? 0 : (scope === undefined || scope.includes("paper") ? Math.max(3000, requestedDelay) : Math.max(250, Math.min(requestedDelay, 1000)));
-    console.log(JSON.stringify({ mode: offline ? "fixture/offline" : "live", db_path: dbPath, unique_intel_ids: plan.unique_intel_ids, accepted_ids: plan.accepted_ids, already_enriched: plan.already_enriched, recorded_with_failed_dimensions: plan.recorded_with_failed_dimensions, pending: pending.length, selected_source: sourceArg ?? null, recheck_recorded: Boolean(recheckIds), selected_count: selected.length, batch_size: batch.length, delay_ms_between_live_items: delayFor(), dimensions: scope ?? ["paper","cvss","epss"], stepplan_f1_advisory_active: Boolean(paperReviewer), trace_id: traceId }));
+    console.log(JSON.stringify({ mode: offline ? "fixture/offline" : "live", db_path: dbPath, unique_intel_ids: plan.unique_intel_ids, accepted_ids: plan.accepted_ids, already_enriched: plan.already_enriched, recorded_with_failed_dimensions: plan.recorded_with_failed_dimensions, pending: pending.length, selected_source: sourceArg ?? null, recheck_recorded: Boolean(recheckIds), selected_count: selected.length, batch_size: batch.length, delay_ms_between_live_items: delayFor(), dimensions: scope ?? ["paper","cvss","epss"], f1_advisory_active: Boolean(paperReviewer), f1_advisory_provider: paperReviewerProvider ?? (llmOptIn ? "stepplan" : null), trace_id: traceId }));
     let processed = 0;
     let newlyProcessed = 0;
     const pendingIds = new Set(pending.map(item => item.intel_id));
@@ -120,8 +136,8 @@ async function main(): Promise<void> {
       const fallbackEvents: FallbackEvent[] = [];
       const results = await runEnrichment([item], {
         offline, bus, stateStore, traceId, ...(scope ? { dimensions: scope } : {}), causation_by_intel_id: { [item.intel_id]: current.intel_event.event_id },
-        ...(dqParent ? { lineage_parent_by_intel_id: { [item.intel_id]: dqParent.lineage_id } } : {}), onDegrade: event => { fallbackEvents.push(event); }, ...(paperReviewer ? { paperReviewer } : {}),
-        onPaperReview: (intelId, outcome) => console.log(JSON.stringify({ type: "f1_stepfun_advisory", intel_id: intelId, status: outcome.status, ...(outcome.status === "suggested" ? { paper_ids: outcome.paper_ids, model_confidence: outcome.confidence } : { reason: outcome.reason }), applied: false })),
+        ...(dqParent ? { lineage_parent_by_intel_id: { [item.intel_id]: dqParent.lineage_id } } : {}), onDegrade: event => { fallbackEvents.push(event); }, ...(paperReviewer ? { paperReviewer } : {}), ...(paperReviewerProvider ? { paperReviewerProvider } : {}),
+        onPaperReview: (intelId, outcome) => console.log(JSON.stringify({ type: "f1_paper_advisory", provider: outcome.provider ?? paperReviewerProvider ?? "stepplan", intel_id: intelId, status: outcome.status, ...(outcome.status === "suggested" ? { paper_ids: outcome.paper_ids, model_confidence: outcome.confidence, ...(outcome.probabilities ? { probabilities: outcome.probabilities } : {}) } : { reason: outcome.reason }), applied: false })),
       });
       processed += 1;
       if (pendingIds.has(item.intel_id)) newlyProcessed += 1;

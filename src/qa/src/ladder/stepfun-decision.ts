@@ -2,6 +2,7 @@ import { screenPromptInjection, sha256Json } from "@safetrace/shared";
 import type { DecisionReply, DecisionRequest, EventBus } from "@safetrace/shared";
 import type { StepFunChatClient } from "../stepfun-answerer.js";
 import { runDecisionLadder } from "./decision-ladder.js";
+import { chainLlmResolvers, createOpenJevDecisionResolver, type OpenJevDecisionOptions } from "./openjev-decision.js";
 import type { DecisionResolution, LadderContext, LadderOptions, LlmResolver, RuleResolver } from "./decision-ladder.js";
 
 const OPTION_LABEL = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/;
@@ -26,6 +27,8 @@ export interface StepPlanDecisionOptions {
 }
 export interface StepPlanDecisionHandlerOptions extends StepPlanDecisionOptions, Omit<LadderOptions, "llm" | "bus"> {
   bus?: EventBus;
+  /** 本地 Open-Jev 兜底通道；提供后接在云通道之后（云弃权/不可用才轮到它）。 */
+  openjev?: OpenJevDecisionOptions;
 }
 export class DecisionRequestValidationError extends Error {
   readonly statusCode = 400;
@@ -33,7 +36,8 @@ export class DecisionRequestValidationError extends Error {
 }
 
 type PublicFacts = Record<string, string | number | boolean | string[]>;
-interface Projection {
+/** Shared model-input projection gate: what may reach ANY decision model. */
+export interface Projection {
   kind: DecisionRequest["kind"];
   facts: PublicFacts;
   question: { q_id: string; type: "choice"; options: string[] };
@@ -124,7 +128,7 @@ export function createCalibratedRuleResolver(): RuleResolver {
     return { choice: candidate, score: probability };
   };
 }
-function buildProjection(ctx: LadderContext): Projection | null {
+export function buildProjection(ctx: LadderContext): Projection | null {
   const state = ctx.state;
   if (state.data_domain !== "public" || state.stepfun_opt_in !== true || state.injection_screened !== true) return null;
   if (ctx.questions.length !== 1) return null;
@@ -151,12 +155,12 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   } catch { return null; }
 }
 
-async function writeDecisionLineage(bus: EventBus | undefined, ctx: LadderContext, status: "success" | "review" | "failed", input: unknown, output: unknown, provider: string, modelId: string, reason: string, parents: string[] = []): Promise<void> {
+export async function writeDecisionLineage(bus: EventBus | undefined, ctx: LadderContext, status: "success" | "review" | "failed", input: unknown, output: unknown, provider: string, modelId: string, reason: string, parents: string[] = [], operationVersion = "decision.v1"): Promise<void> {
   await bus?.recordLineage({
     trace_id: ctx.trace_id,
     parent_lineage_ids: parents,
-    stage: "decide.stepfun",
-    operation_version: "stepfun.decision.v1",
+    stage: "decide.model",
+    operation_version: operationVersion,
     status,
     input_refs: [{ kind: "PublicDecisionProjection", id: ctx.decision_id, sha256: sha256Json(input) }],
     output_refs: [{ kind: "DecisionCandidate", id: ctx.decision_id, sha256: sha256Json(output) }],
@@ -240,7 +244,9 @@ function parseDecisionRequest(raw: unknown): DecisionRequest {
 }
 
 export function createStepPlanDecisionHandler(options: StepPlanDecisionHandlerOptions): (raw: unknown) => Promise<DecisionReply> {
-  const llm = createStepPlanDecisionResolver(options);
+  const cloud = createStepPlanDecisionResolver(options);
+  // 兜底链：云 StepPlan（若配置）→ 本地 Open-Jev（若配置）→ 人工。任一级弃权/不可用都显式下坠。
+  const llm = chainLlmResolvers(cloud, options.openjev ? createOpenJevDecisionResolver(options.openjev) : undefined);
   return async (raw) => {
     const request = parseDecisionRequest(raw);
     const ladder: LadderOptions = { bus: options.bus, tool: options.tool, rule: options.rule ?? createCalibratedRuleResolver(), human: options.human, onFallback: options.onFallback, ...(llm ? { llm } : {}) };

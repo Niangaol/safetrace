@@ -18,7 +18,9 @@ import path from "node:path";
 import { scanLocalProjects } from "../src/assets/src/scanner.js";
 import { AssetsStore } from "../src/assets/src/store.js";
 import { defaultAssetsDbPath, groupsFromConfig, scanOptionsForGroup } from "../src/assets/src/config.js";
-import { alertsFromMatches, readAllIntelItems } from "../src/assets/src/auto-match.js";
+import { alertsFromMatches } from "../src/assets/src/auto-match.js";
+import { withReleasedIntel, withReleasedIntelDb } from "../src/assets/src/intel-admission.js";
+import { currentAssetAlertView } from "../src/assets/src/current-alerts.js";
 import { matchComponents, type MatchedComponent } from "../src/assets/src/matcher.js";
 import { SqliteEventStore } from "@safetrace/shared";
 import { defaultDbPath } from "../src/ingest/src/scheduler.js";
@@ -61,11 +63,15 @@ async function main(): Promise<number> {
   }
 
   if (has("--list-groups")) {
+    let current:ReturnType<typeof currentAssetAlertView>|undefined;
+    try {current=withReleasedIntelDb(defaultDbPath(),items=>currentAssetAlertView(store,items));}
+    catch {console.warn("[assets] 最新 DQ 视图不可用，当前风险计数未核验，不回放历史计数为当前风险");}
     for (const row of store.listGroupsWithStats()) {
+      const unread=current?current.alerts.filter(a=>a.group_id===row.group_id&&a.status==="new").length:"未核验";
       console.log(
         "[assets][组] " + row.group_id + " | " + row.name + (row.enabled ? "" : "（已停用") +
           " | 根=" + row.roots.join(" | ") + " | 仓库=" + row.repo_count + " 组件=" + row.component_count +
-          " 未读提醒=" + row.unread_count + " | 最近扫描 " + (row.last_finished_at ?? "从未"),
+          " 当前未读提醒=" + unread + " | 最近扫描 " + (row.last_finished_at ?? "从未"),
       );
     }
     store.close();
@@ -87,8 +93,9 @@ async function main(): Promise<number> {
 
   const useMatch = !has("--no-match");
   const eventStore = useMatch ? new SqliteEventStore(defaultDbPath()) : null;
-  const intelItems = eventStore ? await readAllIntelItems(eventStore) : [];
+  // Admission is captured after scanning, under the Intel writer reservation before alert commit.
 
+  let admittedItemsCount=0;
   const reports: GroupReport[] = [];
   for (const group of targets) {
     const run = await scanLocalProjects(scanOptionsForGroup(cwd, group));
@@ -96,14 +103,17 @@ async function main(): Promise<number> {
     let affected = 0;
     let newAlerts = 0;
     if (eventStore && components.length > 0) {
-      const matches = matchComponents(intelItems, components);
-      affected = matches.length;
-      store.saveScanRun(run, matches.length);
-      newAlerts = store.insertAlerts(alertsFromMatches(matches, run.run_id));
+      withReleasedIntel(eventStore,intelItems=>{
+        admittedItemsCount=intelItems.length;
+        const matches = matchComponents(intelItems, components);
+        affected = matches.length;
+        store.saveScanRun(run, matches.length);
+        newAlerts = store.insertAlerts(alertsFromMatches(matches, run.run_id));
+      });
     } else {
       store.saveScanRun(run, 0);
     }
-    const alerts = store.listAlerts({ groupId: group.group_id, status: "new", limit: 50 });
+    const alerts = eventStore?withReleasedIntel(eventStore,items=>currentAssetAlertView(store,items,group.group_id).alerts.filter(a=>a.status==="new").slice(0,50)):[];
     reports.push({
       group_id: group.group_id,
       group_name: group.name,
@@ -134,7 +144,7 @@ async function main(): Promise<number> {
         " 跳过=" + report.skipped + (report.degraded_to !== null ? " 显式降级=" + report.degraded_to + (report.note ? "（" + report.note + "）" : "") : ""),
     );
     if (useMatch) {
-      console.log("[assets][" + report.group_id + "] 情报=" + intelItems.length + " 命中=" + report.affected + " 新增提醒=" + report.new_alerts);
+      console.log("[assets][" + report.group_id + "] 情报=" + admittedItemsCount + " 命中=" + report.affected + " 新增提醒=" + report.new_alerts);
     }
     for (const alert of report.alerts) {
       console.log("[assets][" + report.group_id + "][提醒] " + alert.name + "@" + (alert.version || "未锁定") + " ← " + alert.repo_path + " :: " + alert.cve_id + "（" + alert.reason + "）");

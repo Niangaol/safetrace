@@ -394,3 +394,152 @@ CVSS v3.1 live 3241、EPSS live 6068、论文 live 0（arXiv 对这批条目无�
 （health: live / 6392 情报 / 7745 块 / 已验证工件 1333）。
 Qdrant(:6333) 与 bge-m3 嵌入(:8081) 是独立可执行文件，不受此限制，已在后台常驻。
 需由用户在自己的终端按 README 命令启动前后端。
+---
+
+# 附七：富化覆盖率口径对照（2026-10-09 实测，修正“覆盖比较少”的归因）
+
+## 问题：同一份库有两个相差 4.5 倍的“覆盖率”
+
+用户反馈“富化覆盖比较少”。实测确认仓库里存在两套互不等价的覆盖率数字，
+且改前没有任何一处说明差异，数字对不上时无法归因：
+
+| 口径 | 定义 | 计算位置 | 当前值（2026-10-09，CNA 修复 + paper 降可选后） |
+|---|---|---|---|
+| A 任一维度 live | sidecar 状态任一维度 `status=live` 即算覆盖 | `scripts/coverage-agent.ts`（`auditCoverage`） | 94.9%（6068/6392） |
+| B 必备维度 live | 覆盖必备维度 **cvss** live（**target 达标线按此判定**） | 同上（`calibers.B`） | 50.7%（3241/6392） |
+| 可选维度 live | paper 命中算赚到，缺失不影响达标（`calibers.optional`） | 同上 | paper 0%（0/6392） |
+| C 逐维度 live | 分维度各自 live 占比 | 同上（`calibers.C`） | paper 0% / cvss 50.7%（3241）/ epss 94.9%（6068） |
+| D 投影验证 | paper/cvss artifact 与原始 NVD/CNA 报文逐字匹配且血缘完整 | `src/qa/src/live-knowledge-view.ts`（仪表盘数字、QA 引用） | 50.7%（3241/6392；修复前 20.9%＝1333） |
+
+结论：**没有故障性“覆盖丢失”，但是口径分裂**。94.9% 是口径 A 被 EPSS 单维度
+抬高的结果；按覆盖必备维度（口径 B＝cvss）看是 50.7%，距离 90% 达标线的差距是
+2828 条“本地无 NVD 源”结构性缺口 + 323 条从未跑；仪表盘原看到 20.9%，其中 1908
+条是适配器误拒，已于 2026-10-09 修复，与口径 C 的 cvss 对齐（50.7%）。
+**2026-10-09 用户决策：paper 作为可选项**——论文检索对 KEV 老条目上游无匹配是
+结构性现实，拿它当达标线只会得到恒为 0 的假指标；target 判定随之从口径 A 改为
+口径 B。注意这与 f6-verify 的 `REQUIRED_DIMENSIONS`（paper+cvss）不是一件事：
+那边是富化完成度契约（EnrichmentResult.json 已冻结，未动），这边是覆盖率达标线。
+
+## 口径 D 的 1908 条差距：CNA 评分被适配器误拒（2026-10-09 已修复）
+
+修复前 D 的 cvss 已验证 1333 条全部是 `source_of_score=nvd`；sidecar 里另有 1908 条
+`source_of_score=cna` 的 live 评分进不了投影。根因在
+`src/qa/src/knowledge-state-adapter.ts:27` 与 `knowledge-projection.ts:223` 两处
+同款来源配对规则：只认 (nvd_cve 报文 + nvd 评分) 或 (cve_org 报文 + cna 评分)；
+这 1908 条的 CNA 评分来自 NVD bulk 报文（CNA 即该报文的 sourceIdentifier），
+组合不匹配被整体拒绝。抽样验证：这些条目的 baseScore+vectorString 在本地原始
+NVD 报文里逐字存在（MATCH）——属于“有原始证据但不被口径承认”。
+
+**修法**：来源判据改以“原始报文里逐字存在该 metric（source/vector/base 全对上）”
+为主，source_type 配对只排除明显不可能的容器组合；nvd_cve 报文内 CNA 提交的
+评分放行。**实测**（修复后重跑 `readLiveKnowledgeView`）：verified 1333 → 3241，
+其中 cna 1908 + nvd 1333，与 sidecar live cvss 数（3241）完全对齐。
+回归测试：投影层 2 条（放行 + 内容不一致仍拒）+ 适配器层 3 条（放行 / NIST 通路
+不受影响 / 三个负例），全绿。注意：`baseline-facts` 的“已验证”徽标仍只认 NIST
+主评分（v3.1 + nvd@nist.gov + Primary），CNA 评分可被问答引用但不戴该徽标——
+这是既有的产品口径，未随本次修复改变。
+
+## 口径 B/C 的 paper 为什么是 0：旧查询策略的 state 从未被重跑
+
+- 534 条空状态的 `provenance.query_url` 是整段标题短语（如
+  `all:"Cisco IOS Cross-Site Request Forgery Vulnerability"`），即锚点查询修复
+  （`ad1c8d4`）之前的旧策略；`f1-papers.ts` 注释实测“任何标题短语 arXiv 都返回 0 条”。
+- 这些 state 的 24h 退避早已到期（534/534 retry due），但覆盖批次一直带
+  `--dimensions=cvss,epss`，把 paper 排除在外，新查询策略从未上场。
+- 另 221 条是离线 fixture 回放降级（`enrich-pending` 默认
+  `SAFETRACE_ENRICH_OFFLINE!=false` 即离线；离线下 paper 必降级）。
+- arXiv 当前 429 限流，重跑前需恢复。
+- 新 `buildPaperQuery` 对 88% 空状态条目能产出非空查询词，但样本含
+  internet/automatic/professional 这类弱锚点，重跑时需评估噪声。
+
+## 323 条从未跑：时序问题，非故障（修正附五的猜测）
+
+附五曾记“排在 pending 尾部，未被批次取到”。本次按事件序号实测修正：
+这 323 条的 DQ 放行事件（seq 22281–22927）**全部晚于**最后一轮富化批次，
+即批次跑完它们才被接受，不存在“被跳过”。补跑 `--apply` 需 verified backup；
+做新备份要经 Qdrant(6333) 向量恢复验证（`backup-intel.ts → verifyVectorRestore`），
+Qdrant 现未运行，因此卡在备份门禁而非富化逻辑。
+另：cvss 还有 2828 条“本地无 NVD 评分源”的结构性缺口（审计不计入可推进）。
+
+## 本次已落地的改动（2026-10-09，两批：先统一口径，再修误拒）
+
+**第一批 · 口径统一**
+
+- `src/qa/src/coverage-audit.ts`：`auditCoverage` 新增
+  `coveredRequired`/`coverageRequired`（口径 B）与 `dimensionLiveRatio`（口径 C）；
+  必备维度 live 为 0 时 `next_actions` 显式预警“headline 被其他维度抬高”，
+  禁止只报口径 A。维度分类三分（必备 cvss / 可选 paper / 辅助 epss）在导入期
+  做穷尽性断言，新增维度忘了归类会直接炸掉；paper 与 f6-verify
+  `REQUIRED_DIMENSIONS` 的有意分歧见上方结论段。
+- `scripts/coverage-agent.ts`：输出新增 `calibers{A/B/可选/C/D}` 并列结构；
+  D 标注 `computed_here:false` 并指向本文档（纯函数审计不读原始 payload，算不了 D）。
+- `web/src/views/DashboardView.vue`：覆盖指标标签改为“富化覆盖（投影验证口径）”
+  并加 hint；图表注释说明与审计口径不可直接比较。
+- `web/src/views/IngestDiagnosticsView.vue`：“结果覆盖”标注为“有结果记录口径，
+  非投影验证”并指向本文档。
+- `src/qa/test/coverage-audit.test.ts`：新增 3 条用例固化 B/C 口径与预警。
+
+**第二批 · 修复 1908 条 CNA 评分误拒**
+
+- `src/qa/src/knowledge-state-adapter.ts` 与 `src/qa/src/knowledge-projection.ts`：
+  两处同款来源配对规则同步放开——nvd_cve 报文内 CNA（sourceIdentifier）提交的评分，
+  在“source/vector/base 与原始报文逐字比对成立”时放行；source_type 配对退化为
+  只排除明显不可能的容器组合。内容比对一秒未放松。
+- `src/qa/test/knowledge-projection.test.ts`：新增 2 条（放行 / 数值不一致仍拒）。
+- `src/qa/test/knowledge-state-adapter.test.ts`（新文件）：3 条（放行 / NIST 通路
+  不受影响 / 来源或数值不符都不产出证据）。
+- 验证：typecheck 干净；全量单测 **639/639 通过**；真实库重算口径 D
+  20.9% → 50.7%（3241＝1333 nvd＋1908 cna，与 sidecar live 对齐）。
+
+**第三批 · paper 降为可选项 + target 改按口径 B（2026-10-09 用户决策）**
+
+- `src/qa/src/coverage-audit.ts`：维度分类三分——必备 `cvss` / 可选 `paper` /
+  辅助 `epss`；`targetMet` 从口径 A 改按口径 B（`coverageRequired >= target`）；
+  零 live 预警只盯必备维度（paper 为 0 不再报警）。分类穷尽性在导入期断言，
+  新增维度忘了归类直接炸掉。
+- `scripts/coverage-agent.ts`：`calibers` 新增 `optional_dimensions_live`；
+  B 的定义与 target 语义同步更新。
+- `src/qa/test/coverage-audit.test.ts`：重写 3 条用例固化新语义
+  （B 只认 cvss / 可选零 live 不预警 / target 按 B 判定）。
+- 与 f6-verify `REQUIRED_DIMENSIONS`（paper+cvss，EnrichmentResult.json 冻结契约）
+  的有意分歧：那边管富化完成度，这边管覆盖率达标线，互不影响。
+
+## 后续待办（按优先级）
+
+1. 恢复 Qdrant(6333) → 做新 verified backup → `--apply` 补跑 323 条 cvss/epss
+   （当前 Qdrant down；arXiv 已恢复，curl 200）。
+2. paper 维度：arXiv 恢复后已做只读探针（新查询策略实跑，不写库），
+   结论见下节；收敛过滤前不全量重跑。
+## paper 维度只读探针：新查询策略的召回与噪声（2026-10-09 实测）
+
+arXiv 恢复后（curl 200）对 60 条重试到期的 paper empty 条目做了只读探针：
+复刻 index.ts 的 F1 链路（buildPaperQuery → searchPapers 在线 → anchoredPapers →
+metadata 过滤），**不写任何库**。结果：
+
+| 阶段 | 条数 | 占比 |
+|---|---|---|
+| live（会记为论文命中） | 29 | 48.3% |
+| no-related（arXiv 无匹配/全被滤掉） | 15 | 25.0% |
+| empty-query（buildPaperQuery 返回空） | 16 | 26.7% |
+
+**但质量不及格**：71 篇保留论文中，CVE 锚点命中 **0 篇**（没有一篇论文
+提到对应 CVE 编号）；按锚点词看，generic 英文词贡献了过半保留量——
+catalyst 10 篇（催化/物理论文）、internet 9 篇、appliances 8 篇、
+authorization 5 篇、defender 5 篇、communications 3 篇、center 2 篇、
+automatic/professional 各 1 篇，全部与漏洞无关。真实产品名锚点同样大量
+假阳性（directx → 手势库论文、acrobat → 深度学习自动批处理论文）。
+
+**结论：现过滤器下直接全量重跑，会把约一半条目标成 paper live，但绝大多数
+是噪声论文——比没有论文更糟（会污染问答引用）。** 收敛方向（待用户确认）：
+
+1. 锚点必须来自产品身份（entities.product），拒绝标题衍生词；
+2. 扩充通用词表（探针实测的 catalyst/internet/appliances/authorization/
+   defender/communications/center/automatic/professional 等先进表）；
+3. 锚点要求命中论文**标题**而非仅摘要，且与机制词共现；
+4. 改完后用小样本复跑探针验证假阳性率，再决定是否全量。
+
+在收敛完成前，**不做 paper 全量重跑**——paper 已降为可选维度，
+不阻塞任何达标判定。
+
+3. cvss 2828 条“本地无 NVD 源”结构性缺口：需要补 NVD 全量源或接受缺口，
+   继续跑不涨（审计已标 structural）。

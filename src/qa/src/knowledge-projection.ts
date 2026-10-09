@@ -220,7 +220,11 @@ export async function projectKnowledgeEvidence(input: KnowledgeProjectionInput):
             const rows = m.raw_ref ? sourceRecords.get(m.raw_ref) : undefined;
             const row = rows?.find(r => r.id === m.cve_id);
             const raw = input.events.find(e => e.topic === "raw.docs" && object(e.payload).payload_ref === m.raw_ref)?.payload as RawDoc | undefined;
-            if (!m.cve_id || !item.cve_ids.includes(m.cve_id) || !raw || raw.url !== m.url || !row || !((raw.source_type === "nvd_cve" && score.source_of_score === "nvd") || (raw.source_type === "cve_org" && score.source_of_score === "cna")) || !row.metrics.some(v => v?.source_of_score === score.source_of_score && v?.vectorString === score.cvss_v3_vector && v?.baseScore === score.cvss_v3_base)) throw new Error("CVSS score/CVE/source does not match actual raw payload");
+            // 来源判据以"原始报文里逐字存在该 metric"为主：source_of_score/vector/base 全部
+            // 对上才放行。source_type 配对只排除明显不可能的容器组合（如 kev 报文证明评分）；
+            // nvd_cve 报文里由 CNA（sourceIdentifier）提交的评分是 NVD bulk 的原文内容，
+            // 旧规则把这类有原始证据的评分整体误拒（2026-10-09 实测误拒 1908 条）。
+            if (!m.cve_id || !item.cve_ids.includes(m.cve_id) || !raw || raw.url !== m.url || !row || !((raw.source_type === "nvd_cve" && (score.source_of_score === "nvd" || score.source_of_score === "cna")) || (raw.source_type === "cve_org" && score.source_of_score === "cna")) || !row.metrics.some(v => v?.source_of_score === score.source_of_score && v?.vectorString === score.cvss_v3_vector && v?.baseScore === score.cvss_v3_base)) throw new Error("CVSS score/CVE/source does not match actual raw payload");
             const core = { ...score };
             // Auxiliary EPSS provenance is separate; do not publish fixture/unknown EPSS as a CVSS fact.
             delete core.epss_score; delete core.epss_percentile;

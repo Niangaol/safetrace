@@ -14,9 +14,10 @@ import type { EventStore, IntelItem } from "@safetrace/shared";
 import type { AssetsStore } from "./store.js";
 import { matchComponents, type MatchedComponent } from "./matcher.js";
 import type { AssetGroup, NewAssetAlert } from "./types.js";
+import { releasedIntel, withReleasedIntel } from "./intel-admission.js";
 
 export interface AutoMatchOptions {
-  /** 读取情报事件的分页大小，默认 500。 */
+  /** 兼容旧调用选项；准入现用全局一致快照，不再按各 topic 独立分页。 */
   itemPageSize?: number;
   /** 测试注入的"现在"。 */
   now?: () => Date;
@@ -66,16 +67,10 @@ export function alertsFromMatches(matches: ReturnType<typeof matchComponents>, f
   return out;
 }
 
-/** 分页读取情报事件库里的全部 IntelItem。 */
-export async function readAllIntelItems(eventStore: EventStore, pageSize = 500): Promise<IntelItem[]> {
-  const size = Math.min(Math.max(pageSize, 1), 5000);
-  const items: IntelItem[] = [];
-  for (let offset = 0; ; offset += size) {
-    const page = await eventStore.read<IntelItem>("intel.items", offset, size);
-    for (const event of page) items.push(event.payload);
-    if (page.length < size) break;
-  }
-  return items;
+/** Historical export name retained; now returns only latest-version, latest-DQ released Intel. */
+export async function readAllIntelItems(eventStore: EventStore, _pageSize = 500): Promise<IntelItem[]> {
+  if(!eventStore.readIntelAdmissionEvents)throw new Error("Asset matching refuses independently paginated historical Intel without a coherent DQ snapshot");
+  return releasedIntel(eventStore.readIntelAdmissionEvents());
 }
 
 /** 纯函数路径：给定组件集合与事件库，产出匹配与告警草稿（不落库）。 */
@@ -106,8 +101,11 @@ export async function autoMatchGroup(
   if (components.length === 0) {
     return { ...base, skipped_reason: "该组最新快照没有解析出任何组件" };
   }
-  const matched = await matchIntelAgainstComponents(eventStore, components, run.run_id, options);
-  const newAlerts = assets.insertAlerts(matched.alerts, options.now);
+  const {matched,newAlerts} = withReleasedIntel(eventStore,items=>{
+    const matches=matchComponents(items,components);
+    const matched={items_read:items.length,affected:matches.length,alerts:alertsFromMatches(matches,run.run_id)};
+    return {matched,newAlerts:assets.insertAlerts(matched.alerts,options.now)};
+  });
   return {
     group_id: group.group_id,
     group_name: group.name,
@@ -141,8 +139,10 @@ export async function autoMatchAllGroups(
         reports.push({ ...base, skipped_reason: "该组最新快照没有解析出任何组件" });
         continue;
       }
-      const matches = matchComponents(items, components);
-      const newAlerts = assets.insertAlerts(alertsFromMatches(matches, run.run_id), options.now);
+      const {matches,newAlerts}=withReleasedIntel(eventStore,current=>{
+        const matches=matchComponents(current,components);
+        return {matches,newAlerts:assets.insertAlerts(alertsFromMatches(matches,run.run_id),options.now)};
+      });
       reports.push({ ...base, components: components.length, affected: matches.length, new_alerts: newAlerts, skipped_reason: null });
     } catch (error) {
       reports.push({ ...base, skipped_reason: "匹配失败：" + (error instanceof Error ? error.message : String(error)) });

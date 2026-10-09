@@ -10,28 +10,32 @@ import RevealOnScroll from '../effects/RevealOnScroll.vue'
 const props = defineProps<{ id: string }>()
 
 const vuln = ref<VulnItem | null>(null)
-type ProofEvidence = Evidence & { original_sha256?: string; artifact_sha256?: string; text_sha256?: string; parent_lineage_ids?: string[] }
-type DetailEvidence = EvidenceResponse & { historical_unknown?: boolean; recorded_result_present?: boolean; dimension_states?: { dimension: string; status: string; reason?: string; has_last_good?: boolean }[] }
+type ProofEvidence = Evidence & { original_sha256?: string; artifact_sha256?: string; text_sha256?: string; parent_lineage_ids?: string[]; receipt_id?: string; asset_snapshot_sha256?: string }
+type DetailEvidence = EvidenceResponse & { asset_assessment_status?:string; historical_unknown?: boolean; recorded_result_present?: boolean; dimension_states?: { dimension: string; status: string; reason?: string; has_last_good?: boolean }[] }
 const chain = ref<DetailEvidence | null>(null)
-const focusDims = ['paper', 'cvss', 'fix', 'asset', 'poc']
+const focusDims = ['paper', 'cvss', 'remediation', 'asset', 'poc']
 function proofLabel(e?: Enrichment): string {
-  if (e?.dimension === 'asset' || e?.dimension === 'poc') return '未实现 · 样例不算实证'
+  if (e?.dimension === 'poc') return '未实现 · 样例不算实证'
   if (IS_DEMO_MODE || chain.value?.data_mode === 'fixture' || e?.mock) return 'fixture / 预置样例'
   if (e?.degraded_to) return '降级 · 待复核'
+  const storage=(e as (Enrichment&{storage?:string})|undefined)?.storage;
+  if(e?.dimension==='asset' && storage?.startsWith('verified-extension-receipt') && e.evidence.length && e.evidence.every(ev=>{const p=ev as ProofEvidence;return p.receipt_id&&p.asset_snapshot_sha256&&p.artifact_sha256})) return '资产快照已绑定 · 厂商身份未核实';
+  if(e?.dimension==='remediation' && storage?.startsWith('verified-extension-receipt')) return '修复指导收据已验证 · 非已修复';
   if (e?.evidence.length && e.evidence.every(ev => { const p = ev as ProofEvidence; return p.original_sha256 && p.artifact_sha256 && p.text_sha256 && p.parent_lineage_ids?.length })) return '可证明 · 来源与工件已绑定'
   if (chain.value?.historical_unknown || chain.value?.recorded_result_present && !e) return 'historical / 历史未知'
   return 'unknown / 尚无充分证明'
 }
 const dimensionCards = computed(() => focusDims.map(dimension => {
-  const result = chain.value?.enrichments.find(e => e.dimension === dimension)
+  const result = chain.value?.enrichments.find(e => e.dimension === dimension || dimension==='remediation'&&e.dimension==='fix')
   const state = chain.value?.dimension_states?.find(s => s.dimension === dimension)
-  return { dimension, result, state, status: dimension === 'asset' || dimension === 'poc' ? '未实现' : proofLabel(result) }
+  return { dimension, result, state, status: dimension === 'poc' ? '未实现' : dimension==='asset'&&!result ? chain.value?.asset_assessment_status==='stale' ? '资产快照已变更 · 需重评' : '尚无有效资产评估' : proofLabel(result) }
 }))
 function limitation(dim: string): string {
-  return ({ paper: '相关研究不等于该漏洞复现；需核对 CVE、产品与论文关联。', cvss: '评分只适用于来源声明的 CVE / 版本；风险评分不是准确率，缺失不按 0 处理。', fix: '只读修复指引；不是已执行或已验证修复，适用版本与来源须人工复核。', asset: '未接入真实资产清单，不推断你的环境已受影响。', poc: '未实现隔离 PoC 自动复现，不将利用链接当复现成功。' } as Record<string, string>)[dim] ?? '结论须按来源范围复核。'
+  return ({ paper: '相关研究不等于该漏洞复现；需核对 CVE、产品与论文关联。', cvss: '评分只适用于来源声明的 CVE / 版本；风险评分不是准确率，缺失不按 0 处理。', fix: '只读修复指引；不是已执行或已验证修复，适用版本与来源须人工复核。', remediation: '来源明确的修复指导；不是已执行或已验证修复，需核对适用版本。', asset: '按真实扫描快照做版本规则匹配，厂商身份未核实；unknown 或没有告警不等于安全。', poc: '未实现隔离 PoC 自动复现，不将利用链接当复现成功。' } as Record<string, string>)[dim] ?? '结论须按来源范围复核。'
 }
 function proofHashes(ev: Evidence): string {
   const p = ev as ProofEvidence
+  if(p.receipt_id&&p.asset_snapshot_sha256)return '收据: '+p.receipt_id+'\n资产快照 SHA-256: '+p.asset_snapshot_sha256+'\n工件 SHA-256: '+(p.artifact_sha256??'未提供');
   return '原文 SHA-256: ' + (p.original_sha256 ?? '未提供') + '\n工件 SHA-256: ' + (p.artifact_sha256 ?? '未提供') + '\n文本 SHA-256: ' + (p.text_sha256 ?? '未提供') + '\nlineage: ' + (p.parent_lineage_ids?.join(' / ') || '未提供')
 }
 const openDims = ref<Set<string>>(new Set())
@@ -39,8 +43,8 @@ const error = ref('')
 const loading = ref(true)
 
 const DIM_LABEL: Record<string, string> = {
-  paper: '论文支撑', asset: '受影响资产', poc: 'POC 复现',
-  cvss: 'CVSS 与影响', fix: '修复建议', consistency: '一致性校验',
+  paper: '论文支撑', asset: '资产影响评估', poc: 'POC 复现',
+  cvss: 'CVSS 与影响', fix: '修复建议', remediation: '修复建议', consistency: '一致性校验',
   ai_risk: 'AI 风险分类', attack: '攻击技战术',
   impact: '影响评估', mitre_attack: 'ATT&CK 映射',
   cwe: 'CWE 分类', timeline: '事件脉络',

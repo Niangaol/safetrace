@@ -199,10 +199,11 @@ export class AssetsStore {
   readonly dbPath: string;
   private readonly db: DatabaseSync;
 
-  constructor(dbPath: string = "var/assets.sqlite") {
+  constructor(dbPath: string = "var/assets.sqlite", options: {readOnly?:boolean} = {}) {
     this.dbPath = resolve(dbPath);
-    mkdirSync(dirname(this.dbPath), { recursive: true }); // node:sqlite 不建父目录
-    this.db = new DatabaseSync(this.dbPath);
+    if(!options.readOnly) mkdirSync(dirname(this.dbPath), { recursive: true }); // node:sqlite 不建父目录
+    this.db = new DatabaseSync(this.dbPath,{readOnly:options.readOnly??false});
+    if(options.readOnly)return; // Evidence readers never initialize/migrate an asset database.
     // 先迁移旧库（补 group_id 列/重建去重索引），再执行建表语句：
     // 否则 SCHEMA 里引用 group_id 的 CREATE INDEX 会在旧库上报 "no such column"。
     this.migrateLegacy();
@@ -237,6 +238,13 @@ export class AssetsStore {
   }
 
   // ── 分组管理 ──
+
+  /** Coherent read-only snapshot of groups, runs and components for evidence binding. */
+  readSnapshot<T>(operation:()=>T):T {
+    this.db.exec("BEGIN");
+    try {const result=operation();if(result&&typeof result==="object"&&"then" in result)throw new Error("Asset snapshot work must be synchronous");this.db.exec("COMMIT");return result;}
+    catch(error){this.db.exec("ROLLBACK");throw error;}
+  }
 
   listGroups(): GroupRow[] {
     const rows = this.db.prepare("SELECT * FROM groups ORDER BY created_at, group_id").all() as Array<Record<string, unknown>>;

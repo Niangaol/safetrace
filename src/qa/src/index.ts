@@ -14,4 +14,5 @@ export * from "./orchestrator/taskgraph-machine.js";
 export * from "./ladder/decision-ladder.js";
 export * from "./ladder/stepfun-decision.js";
 export * from "./ladder/jev-local.js";
+export * from "./ladder/openjev-decision.js";
 export { createServer, createDefaultEngine, startServer, DEFAULT_PORT } from "./server.js";

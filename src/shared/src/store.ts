@@ -85,11 +85,21 @@ export interface LineageDraft {
   error?: string;
 }
 
+export interface IntelAdmissionEvent { seq:number;event_id:string;trace_id:string;causation_id:string|null;topic:"raw.docs"|"intel.items"|"dq.verdicts";payload:unknown }
+
+function intelAdmissionRows(db: DatabaseSync): IntelAdmissionEvent[] {
+  return db.prepare("SELECT seq,event_id,trace_id,causation_id,topic,payload FROM events WHERE topic IN ('raw.docs','intel.items','dq.verdicts') ORDER BY seq").all().map(row=>({seq:Number(row.seq),event_id:String(row.event_id),trace_id:String(row.trace_id),causation_id:row.causation_id===null?null:String(row.causation_id),topic:row.topic as IntelAdmissionEvent["topic"],payload:JSON.parse(String(row.payload))}));
+}
+
 export interface EventStore {
   /** 写入事件。返回是否为新事件（false = 重复投递被幂等去重）。 */
   append<T>(env: Envelope<T>): Promise<boolean>;
   /** 按主题顺序读取（offset 分页）。 */
   read<T>(topic: Topic, offset?: number, limit?: number): Promise<Envelope<T>[]>;
+  /** One globally ordered Intel/DQ snapshot, not independently paginated topic views. */
+  readIntelAdmissionEvents?(): IntelAdmissionEvent[];
+  /** Synchronous cross-store work while Intel writers are reserved; no Intel content is written. */
+  withIntelAdmissionSnapshot?<T>(operation:(events:IntelAdmissionEvent[])=>T): T;
   /** 标记事件为死信（超过重试上限）。 */
   markDeadLetter(eventId: string, reason: string): Promise<void>;
   /** 死信队列内容（A1 看板消费）。 */
@@ -184,6 +194,12 @@ CREATE TABLE IF NOT EXISTS dead_letters (
 
 export class SqliteEventStore implements EventStore {
   private db: DatabaseSync;
+  readIntelAdmissionEvents(): IntelAdmissionEvent[] { return intelAdmissionRows(this.db); }
+  withIntelAdmissionSnapshot<T>(operation:(events:IntelAdmissionEvent[])=>T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try { const result=operation(this.readIntelAdmissionEvents());this.db.exec("COMMIT");return result; }
+    catch(error){this.db.exec("ROLLBACK");throw error;}
+  }
 
   constructor(path = ":memory:") {
     this.db = new DatabaseSync(path);
@@ -418,6 +434,10 @@ function toEnvelope(row: Record<string, unknown>): Envelope {
 /** 内存实现：单测与冒烟零依赖运行。 */
 export class MemoryEventStore implements EventStore {
   private events: Envelope[] = [];
+  readIntelAdmissionEvents(): IntelAdmissionEvent[] {
+    return this.events.map((event,index)=>({...structuredClone(event),seq:index+1})).filter(e=>["raw.docs","intel.items","dq.verdicts"].includes(e.topic)) as IntelAdmissionEvent[];
+  }
+  withIntelAdmissionSnapshot<T>(operation:(events:IntelAdmissionEvent[])=>T): T { return operation(this.readIntelAdmissionEvents()); }
   private dead: Array<{ event_id: string; reason: string; envelope: Envelope }> = [];
   private lineage: LineageRecord[] = [];
   private lastGoodPages = new Map<string, StoredPageSnapshot>();

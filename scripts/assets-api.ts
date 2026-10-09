@@ -20,17 +20,21 @@ import nodePath from "node:path";
 import { scanLocalProjects } from "../src/assets/src/scanner.js";
 import { AssetsStore } from "../src/assets/src/store.js";
 import { defaultAssetsDbPath, groupsFromConfig, scanOptionsForGroup } from "../src/assets/src/config.js";
-import { alertsFromMatches, readAllIntelItems } from "../src/assets/src/auto-match.js";
+import { alertsFromMatches } from "../src/assets/src/auto-match.js";
 import { matchComponents, type MatchedComponent } from "../src/assets/src/matcher.js";
 import { liveIntelItem, type LiveKnowledgeView } from "../src/qa/src/live-knowledge-view.js";
-import type { AlertRow } from "../src/assets/src/store.js";
 import type { ActivityItem } from "./activity-stream.js";
+import { withReleasedIntelDb } from "../src/assets/src/intel-admission.js";
+import { currentAssetAlertView } from "../src/assets/src/current-alerts.js";
+import type { IntelItem } from "@safetrace/shared";
 
 export interface AssetsApiDeps {
   readView: () => Promise<LiveKnowledgeView>;
   publishActivity: (event: Omit<ActivityItem, "event" | "sequence" | "id" | "origin"> & { id?: string; origin?: "live" | "recorded" }) => void;
   localOrigin: (req: IncomingMessage) => boolean;
   cwd?: string;
+  intelSqlitePath?: string;
+  assetsDbPath?: string;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -61,7 +65,7 @@ export async function handleAssetsRequest(
 ): Promise<boolean> {
   if (!path.startsWith("/api/v1/assets")) return false;
   const cwd = deps.cwd ?? process.cwd();
-  const dbPath = defaultAssetsDbPath(cwd);
+  const dbPath = deps.assetsDbPath ?? defaultAssetsDbPath(cwd);
 
   // ── POST /api/v1/assets/scan：按组扫描 + 匹配 + 落库 ──
   if (req.method === "POST" && path === "/api/v1/assets/scan") {
@@ -93,8 +97,6 @@ export async function handleAssetsRequest(
     const traceId = "as_" + Date.now().toString(36);
     deps.publishActivity({ trace_id: traceId, intel_id: null, stage: "assets", status: "running", at: new Date().toISOString(), label: "assets.scan_started", details: { reason: "分组 " + targets.map((g) => g.group_id).join(",") } });
     try {
-      const view = await deps.readView();
-      const intelItems = view.intel;
       const results = [];
       for (const group of targets) {
         const run = await scanLocalProjects(scanOptionsForGroup(cwd, group));
@@ -102,10 +104,13 @@ export async function handleAssetsRequest(
         let affected = 0;
         let newAlerts = 0;
         if (components.length > 0) {
-          const matches = matchComponents(intelItems, components);
-          affected = matches.length;
-          store.saveScanRun(run, matches.length);
-          newAlerts = store.insertAlerts(alertsFromMatches(matches, run.run_id));
+          const persist=(intelItems:IntelItem[])=>{
+            const matches = matchComponents(intelItems, components);
+            affected = matches.length;store.saveScanRun(run,matches.length);
+            newAlerts=store.insertAlerts(alertsFromMatches(matches,run.run_id));
+          };
+          if(deps.intelSqlitePath)withReleasedIntelDb(deps.intelSqlitePath,persist);
+          else persist((await deps.readView()).intel); // Explicit injected test/custom view, acquired after scan.
         } else {
           store.saveScanRun(run, 0);
         }
@@ -122,11 +127,12 @@ export async function handleAssetsRequest(
           new_alerts: newAlerts,
         });
       }
+      const currentAlertState=currentAssetAlertView(store,(await deps.readView()).intel);
       const totalNew = results.reduce((sum, r) => sum + r.new_alerts, 0);
       const totalRepos = results.reduce((sum, r) => sum + r.repo_count, 0);
       const totalComponents = results.reduce((sum, r) => sum + r.component_count, 0);
       deps.publishActivity({ trace_id: traceId, intel_id: null, stage: "assets", status: "success", at: new Date().toISOString(), label: "assets.scan_finished", details: { artifact_count: totalComponents, reason: "分组 " + results.length + " 个；仓库 " + totalRepos + "；新增提醒 " + totalNew } });
-      json(res, 200, { scope: "assets", data_mode: "live", groups: results, repo_count: totalRepos, component_count: totalComponents, new_alerts: totalNew, unread_count: store.unreadCount() });
+      json(res, 200, { scope: "assets", data_mode: "live", groups: results, repo_count: totalRepos, component_count: totalComponents, new_alerts: totalNew, unread_count: currentAlertState.unread_count, alerts_truncated:currentAlertState.alerts_truncated });
     } catch (error) {
       deps.publishActivity({ trace_id: traceId, intel_id: null, stage: "assets", status: "failed", at: new Date().toISOString(), label: "assets.scan_failed", details: { reason: error instanceof Error ? error.message : String(error) } });
       json(res, 500, { error: { message: error instanceof Error ? error.message : "scan failed" }, scope: "assets" });
@@ -240,17 +246,25 @@ export async function handleAssetsRequest(
 
   const store = new AssetsStore(dbPath);
   try {
+    let currentView:LiveKnowledgeView|undefined;
+    if(["/api/v1/assets/groups","/api/v1/assets/overview","/api/v1/assets/alerts"].includes(path)) {
+      try {currentView=await deps.readView();}
+      catch {json(res,503,{scope:"assets",data_mode:"unavailable",alerts:[],unread_count:null,degraded_to:"latest_dq_view_unavailable",note:"当前风险未能重验；不回放历史告警为当前风险"});return true;}
+    }
     // ── GET /api/v1/assets/groups：分组 + 统计 ──
     if (path === "/api/v1/assets/groups") {
-      json(res, 200, { scope: "assets", data_mode: "live", groups: store.listGroupsWithStats() });
+      const current=currentAssetAlertView(store,currentView!.intel);
+      const groups=store.listGroupsWithStats().map(g=>({...g,historical_unread_count:g.unread_count,unread_count:current.alerts.filter(a=>a.group_id===g.group_id&&a.status==="new").length}));
+      json(res,200,{scope:"assets",data_mode:"live",groups,alerts_truncated:current.alerts_truncated});
       return true;
     }
     // ── GET /api/v1/assets/overview ──
     if (path === "/api/v1/assets/overview") {
       const groupId = url.searchParams.get("group_id") ?? undefined;
       const overview = store.overview(groupId);
-      const alerts = store.listAlerts({ ...(groupId ? { groupId } : {}), status: "new", limit: 20 });
-      json(res, 200, { scope: "assets", data_mode: "live", ...overview, alerts });
+      const current=currentAssetAlertView(store,currentView!.intel,groupId);
+      const alerts=current.alerts.filter(a=>a.status==="new").slice(0,20);
+      json(res,200,{scope:"assets",data_mode:"live",...overview,historical_alert_count:overview.alert_count,historical_unread_count:overview.unread_count,alert_count:current.alerts.length,unread_count:current.unread_count,alerts,assessment:current.assessment,alerts_truncated:current.alerts_truncated,by_group:overview.by_group.map(g=>({...g,unread_count:current.alerts.filter(a=>a.group_id===g.group_id&&a.status==="new").length}))});
       return true;
     }
     // ── GET /api/v1/assets/repos ──
@@ -288,20 +302,10 @@ export async function handleAssetsRequest(
         json(res, 400, { error: { message: "invalid limit" }, scope: "assets" });
         return true;
       }
-      const rows = store.listAlerts({ ...(groupId ? { groupId } : {}), ...(status ? { status } : {}), limit });
-      let enriched: AlertRow[] = rows;
-      try {
-        const view = await deps.readView();
-        const byIntelId = new Map(view.intel.map((item) => [item.intel_id, liveIntelItem(view, item)]));
-        enriched = rows.map((row) => {
-          const live = byIntelId.get(row.intel_id);
-          return { ...row, severity: row.severity ?? live?.severity ?? null, title: row.title ?? live?.title ?? null };
-        });
-      } catch {
-        json(res, 200, { scope: "assets", data_mode: "live", alerts: rows, unread_count: store.unreadCount(groupId), degraded_to: "live_view_unavailable" });
-        return true;
-      }
-      json(res, 200, { scope: "assets", data_mode: "live", alerts: enriched, unread_count: store.unreadCount(groupId) });
+      const current=currentAssetAlertView(store,currentView!.intel,groupId);
+      const byIntelId=new Map(currentView!.intel.map(item=>[item.intel_id,liveIntelItem(currentView!,item)]));
+      const alerts=current.alerts.filter(row=>!status||row.status===status).slice(0,limit).map(row=>({...row,severity:byIntelId.get(row.intel_id)?.severity??null,title:byIntelId.get(row.intel_id)?.title??null}));
+      json(res,200,{scope:"assets",data_mode:"live",alerts,unread_count:current.unread_count,assessment:current.assessment,alerts_truncated:current.alerts_truncated});
       return true;
     }
     json(res, 404, { error: { message: "unknown assets route" }, scope: "assets" });

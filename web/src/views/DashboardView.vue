@@ -216,7 +216,7 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
       :items="[
         { label: '漏洞总数', value: metrics?.collect.vulns ?? null, numeric: metrics?.collect.vulns != null ? { value: metrics.collect.vulns } : undefined, icon: 'shield', variant: 'critical' },
         { label: '原始条目', value: metrics?.collect.raw_items ?? null, numeric: metrics?.collect.raw_items != null ? { value: metrics.collect.raw_items } : undefined, hint: `去重合并率 ${((metrics?.collect.merge_ratio ?? 0) * 100).toFixed(1)}%`, icon: 'docs' },
-        { label: '富化结果覆盖（非准确率）', value: metrics ? `${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%` : null, numeric: metrics ? { value: (metrics.enrich.coverage_ratio ?? 0) * 100, decimals: 1, suffix: '%' } : undefined, icon: 'spark', variant: 'ok' },
+        { label: '富化覆盖（投影验证口径）', value: metrics ? `${((metrics.enrich.coverage_ratio ?? 0) * 100).toFixed(1)}%` : null, numeric: metrics ? { value: (metrics.enrich.coverage_ratio ?? 0) * 100, decimals: 1, suffix: '%' } : undefined, icon: 'spark', variant: 'ok', hint: '仅统计 paper/cvss 且与原始报文逐字匹配、血缘完整的结果；EPSS 不计入。与 coverage-agent 审计口径（sidecar 任一维度 live）数值不可直接比较' },
         { label: '采集延迟 P50', value: fmtLatency(metrics?.latency.p50_seconds ?? null), icon: 'clock' },
         { label: '6h 内入库占比', value: metrics?.latency.sla_6h_ratio != null ? `${(metrics.latency.sla_6h_ratio * 100).toFixed(1)}%` : '未测', numeric: metrics?.latency.sla_6h_ratio != null ? { value: metrics.latency.sla_6h_ratio * 100, decimals: 1, suffix: '%' } : undefined, icon: 'zap', variant: 'ok' },
         { label: '知识库切片', value: metrics?.knowledge.chunks ?? null, numeric: metrics?.knowledge.chunks != null ? { value: metrics.knowledge.chunks } : undefined, icon: 'box' },
@@ -232,7 +232,7 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
           <h3 class="fx-underline">逐维覆盖与启发式置信分</h3>
           <span class="badge-count">{{ metrics?.enrich.dimensions ?? 0 }} 维度</span>
         </div>
-        <p class="muted chart-note">覆盖率只表示存在结果；置信分与质量分不是人工评测准确率。空维度没有可展示数据。</p>
+        <p class="muted chart-note">本页为投影验证口径：只统计与原始报文逐字匹配且血缘完整的 paper/cvss 结果（EPSS 不计入），与 coverage-agent 审计口径（sidecar 任一维度 live）是两把尺，数值不可直接比较，对照见 docs/CLOUD-ENRICH-QA-2026-10-06.md。覆盖率只表示存在结果；置信分与质量分不是人工评测准确率。空维度没有可展示数据。</p>
         <div ref="sevChart" class="chart-box" style="height: 260px"></div>
       </div>
       <div class="panel fade-in fx-beam" style="--fx-delay: 400ms">

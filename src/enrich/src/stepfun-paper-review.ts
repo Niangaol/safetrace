@@ -6,10 +6,10 @@ export interface StepFunPaperReviewReply { text: string; provider: string; model
 export interface StepFunPaperReviewClient {
   chat(role: "planner", messages: ChatMessage[], params: { temperature?: number; max_tokens?: number }, traceId: string, dataDomain: "public", contextKey?: string): Promise<StepFunPaperReviewReply>;
 }
-export interface PaperReviewRequest { trace_id: string; intel_id: string; query: string; papers: PaperLink[] }
+export interface PaperReviewRequest { trace_id: string; intel_id: string; query: string; papers: PaperLink[]; /** 可选：paper_id -> 摘要（F1 从 arXiv 原始回执带出；StepFun 评审刻意不用，本地 Jev 评审用它做语义判断） */ paper_summaries?: Record<string, string> }
 export type PaperReviewOutcome =
-  | { status: "suggested"; paper_ids: string[]; confidence: number; model_id: string }
-  | { status: "abstained"; reason: string; flags?: string[]; model_id?: string };
+  | { status: "suggested"; paper_ids: string[]; confidence: number; model_id: string; provider?: string; probabilities?: Record<string, number> }
+  | { status: "abstained"; reason: string; flags?: string[]; model_id?: string; provider?: string };
 export type PaperReviewPort = (request: PaperReviewRequest) => Promise<PaperReviewOutcome>;
 export interface StepFunPaperReviewOptions { provider: string; modelId: string; apiKeyConfigured: boolean; client: StepFunPaperReviewClient }
 

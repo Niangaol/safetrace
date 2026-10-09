@@ -8,6 +8,8 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { pathToFileURL } from "node:url";
 import { readLiveKnowledgeView, liveIntelItem, liveEvidenceView } from "../src/qa/src/live-knowledge-view.js";
 import { readRemediationEvidence } from "../src/qa/src/remediation-reader.js";
+import { readAssetImpactReceipt } from "../src/enrich/src/asset-extension.js";
+import { defaultAssetsDbPath } from "../src/assets/src/config.js";
 import { loadBaselineIndex, baselineForItem, baselineNarrative, type BaselineIndex } from "../src/qa/src/baseline-reader.js";
 import { naturalConclusion } from "./natural-answer.js";
 import { knowledgeGeneration } from "../src/qa/src/knowledge-generation.js";
@@ -32,7 +34,7 @@ function localOrigin(req:IncomingMessage):boolean {
   const origin=req.headers.origin;if(!origin)return req.headers["sec-fetch-site"]!=="cross-site";
   try{return ["127.0.0.1","localhost","[::1]"].includes(new URL(origin).hostname);}catch{return false;}
 }
-export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:readonly string[];readView?:()=>Promise<LiveKnowledgeView>;modelSettings?:ModelSettingsController}):Server{
+export function createLiveIntelServer(options:{sqlitePath:string;assetsSqlitePath?:string;payloadRoots?:readonly string[];readView?:()=>Promise<LiveKnowledgeView>;modelSettings?:ModelSettingsController}):Server{
   let qaCount=0;
   const activity=new ActivityStream(options.sqlitePath),settings=options.modelSettings;
   let cached: { key:string; view:LiveKnowledgeView } | undefined;
@@ -53,7 +55,7 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
       if(settings && await settings.handle(req,res,url))return;
       if(req.method==="GET"&&path==="/api/v1/activity/stream"){activity.attach(req,res,url);return;}
       // 资产线（A 线）自带路由与写门禁（localOrigin），必须位于只读 405 之前
-      if(await handleAssetsRequest(req,res,url,path,{readView:read,publishActivity:(e)=>activity.publish(e),localOrigin}))return;
+      if(await handleAssetsRequest(req,res,url,path,{readView:read,publishActivity:(e)=>activity.publish(e),localOrigin,intelSqlitePath:options.sqlitePath,assetsDbPath:options.assetsSqlitePath}))return;
       const isChat=req.method==="POST"&&path==="/api/v1/qa/chat";
       let q: string | undefined;
       if(isChat) { try { q=await question(req); } catch { json(res,400,{error:{message:"invalid JSON question or size"},data_mode:"live"}); return; } }
@@ -81,9 +83,11 @@ export function createLiveIntelServer(options:{sqlitePath:string;payloadRoots?:r
         if(!itemRoute[2]){const index=await readBaseline();const baseline=baselineForItem(index,item,view.verified.has(item.intel_id),view.states.filter(state=>state.intel_id===item.intel_id).map(state=>({dimension:state.dimension,status:state.status})));json(res,200,{...liveIntelItem(view,item),baseline:baseline.facts,gaps:baseline.gaps});return;}
         const base=liveEvidenceView(view,item),guidance=await readRemediationEvidence({...options,intelIds:[item.intel_id],limit:1});
         const extra=guidance.evidence.length?[{dimension:"remediation",value:{guidance:guidance.evidence.map(e=>e.artifact)},source:[...new Set(guidance.evidence.map(e=>e.artifact.source_id))],
-          evidence:guidance.evidence.map(e=>({evidence_id:e.chunk.chunk_id,source:e.artifact.source_id,url:e.artifact.source_url,snippet:e.chunk.text,artifact_sha256:e.chunk.provenance.sha256,original_sha256:e.artifact.source_sha256,parent_lineage_ids:e.parent_lineage_ids})),
-          confidence:null,model:"rule",agent:"f5",version:1,mock:false,degraded_to:null,storage:"readonly-source-derived; not frozen EnrichmentResult",validation:"vendor/agency statement, not verified fix",created_at:null}]:[];
-        json(res,200,{...base,enrichments:[...base.enrichments,...extra],derived_guidance_count:guidance.evidence.length});return;
+          evidence:guidance.evidence.map(e=>({evidence_id:e.chunk.chunk_id,source:e.artifact.source_id,url:e.artifact.source_url,snippet:e.chunk.text,artifact_sha256:e.chunk.provenance.sha256,original_sha256:e.artifact.source_sha256,parent_lineage_ids:e.parent_lineage_ids,...(e.receipt_id?{receipt_id:e.receipt_id}:{})})),
+          confidence:null,model:"rule",agent:"f5",version:1,mock:false,degraded_to:null,storage:guidance.evidence.every(e=>!!e.receipt_id)?"verified-extension-receipt; not frozen EnrichmentResult":"readonly-source-derived; not frozen EnrichmentResult",validation:"vendor/agency statement, not verified fix",created_at:null}]:[];
+        const asset=await readAssetImpactReceipt({...options,assetsPath:options.assetsSqlitePath??defaultAssetsDbPath(),intelId:item.intel_id});
+        const assetEvidence=asset.receipt?[{dimension:"asset",value:{assessments:asset.receipt.artifacts,scope:asset.receipt.asset_scope},source:["local_scan","current_dq_intel"],evidence:[{evidence_id:asset.receipt.receipt_id,source:"local-assets",snippet:"本地依赖规则评估；厂商身份未核实；unknown 不等于安全。",artifact_sha256:asset.receipt.artifact_sha256,receipt_id:asset.receipt.receipt_id,intel_event_id:asset.receipt.intel_event_id,dq_event_id:asset.receipt.dq_event_id,asset_snapshot_sha256:asset.receipt.asset_scope.asset_snapshot_sha256}],confidence:null,model:"rule",agent:"f2",mock:false,storage:"verified-extension-receipt; private snapshot paths hashed",validation:"potential impact; vendor unverified; unknown is not safety",created_at:asset.receipt.created_at}]:[];
+        json(res,200,{...base,enrichments:[...base.enrichments,...extra,...assetEvidence],asset_assessment_status:asset.status,derived_guidance_count:guidance.evidence.length});return;
       }
       if(isChat&&q!==undefined){
         res.writeHead(200,{"content-type":"text/event-stream; charset=utf-8","cache-control":"no-cache, no-transform","x-accel-buffering":"no"});

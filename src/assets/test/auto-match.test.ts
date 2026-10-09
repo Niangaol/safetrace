@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { SqliteEventStore, type Envelope, type IntelItem } from "@safetrace/shared";
 import { AssetsStore } from "../src/store.js";
-import { autoMatchGroup, autoMatchAllGroups, alertsFromMatches } from "../src/auto-match.js";
+import { autoMatchGroup, autoMatchAllGroups, alertsFromMatches, readAllIntelItems } from "../src/auto-match.js";
 import type { AssetGroup, ScanRun } from "../src/types.js";
 
 const FIXED_NOW = new Date("2026-10-09T08:00:00.000Z");
@@ -66,15 +66,19 @@ function runFor(groupId: string, groupName: string, componentName: string, versi
   };
 }
 
-function setup(): { events: SqliteEventStore; dir: string } {
+async function admit(events:SqliteEventStore,item:IntelItem,id:string,verdict:'pass'|'quarantine'='pass') {
+  await events.append(event(item,id));
+  await events.append({event_id:'dq_'+id,topic:'dq.verdicts',occurred_at:FIXED_NOW.toISOString(),trace_id:'tr_x',causation_id:id,schema_version:'1.0',payload:{item_id:item.intel_id,item_kind:'intel',quality_score:0.9,dimension_scores:{structure:1,completeness:1,consistency:1,timeliness:1,sourcing:1},flags:[],verdict,gate_version:'dq1.v1'}});
+}
+async function setup(): Promise<{ events: SqliteEventStore; dir: string }> {
   const events = new SqliteEventStore(":memory:");
-  void events.append(event(intelItem("intel-vue", "vue", ["<3.5.0"], "CVE-2026-1001"), "ev_1"));
-  void events.append(event(intelItem("intel-react", "react", ["<18.0.0"], "CVE-2026-1002"), "ev_2"));
+  await admit(events,intelItem("intel_vue", "vue", ["<3.5.0"], "CVE-2026-1001"),"ev_1");
+  await admit(events,intelItem("intel_react", "react", ["<18.0.0"], "CVE-2026-1002"),"ev_2");
   return { events, dir: "" };
 }
 
 test("按组匹配：各组独立快照独立告警，无快照显式跳过", async () => {
-  const { events } = setup();
+  const { events } = await setup();
   const dir = await mkdtemp(path.join(tmpdir(), "safetrace-assets-automatch-"));
   try {
     const store = new AssetsStore(path.join(dir, "assets.sqlite"));
@@ -106,7 +110,7 @@ test("按组匹配：各组独立快照独立告警，无快照显式跳过", as
 });
 
 test("autoMatchAllGroups：情报只读一批，多组复用，幂等", async () => {
-  const { events } = setup();
+  const { events } = await setup();
   const dir = await mkdtemp(path.join(tmpdir(), "safetrace-assets-automatch-"));
   try {
     const store = new AssetsStore(path.join(dir, "assets.sqlite"));
@@ -133,6 +137,22 @@ test("autoMatchAllGroups：情报只读一批，多组复用，幂等", async ()
     await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     events.close();
   }
+});
+
+test("CLI/watch 不借历史准入：缺 DQ、隔离、未复核新版本均拒绝",async()=>{
+  const {events}=await setup();
+  try {
+    await events.append(event(intelItem('intel_missing','vue',['<9'],'CVE-2026-1011'),'missing'));
+    await admit(events,intelItem('intel_quarantined','vue',['<9'],'CVE-2026-1012'),'quarantined','quarantine');
+    const original=(await readAllIntelItems(events)).find(i=>i.intel_id==='intel_vue')!;
+    await events.append(event({...original,title:'new unreviewed version'},'ev_new'));
+    assert.deepEqual((await readAllIntelItems(events)).map(i=>i.intel_id),['intel_react']);
+    await admit(events,{...original,title:'current released version'},'ev_fresh');
+    assert.equal((await readAllIntelItems(events)).find(i=>i.intel_id==='intel_vue')!.title,'current released version');
+    const entry=events.readIntelAdmissionEvents().find(e=>e.event_id==='dq_ev_fresh')!;
+    await events.append({event_id:'dq_revoke',topic:'dq.verdicts',occurred_at:FIXED_NOW.toISOString(),trace_id:'tr_x',causation_id:'ev_fresh',schema_version:'1.0',payload:{...(entry.payload as object),verdict:'quarantine'}});
+    assert.ok(!(await readAllIntelItems(events)).some(i=>i.intel_id==='intel_vue'));
+  } finally {events.close();}
 });
 
 test("alertsFromMatches：一条情报多个 CVE 各生成一条，group_id 透传", () => {

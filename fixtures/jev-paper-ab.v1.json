@@ -1,0 +1,63 @@
+{
+  "version": "1.0",
+  "evidence_kind": "synthetic-held-out-sanity",
+  "note": "Agent-authored semantic sanity cases, not official arXiv metadata, not a labeled accuracy benchmark. No business writes or automatic publication.",
+  "cases": [
+    {
+      "id": "log4shell-positive",
+      "label": "related",
+      "query": "CVE-2021-44228: Apache Log4j2 JNDI lookup remote code execution",
+      "title": "Analysis and mitigation of Log4Shell in Apache Log4j",
+      "summary": "We analyze CVE-2021-44228, trace attacker-controlled JNDI lookups in Log4j2, and evaluate mitigations."
+    },
+    {
+      "id": "catalyst-negative",
+      "label": "unrelated",
+      "query": "Cisco Catalyst switch command injection vulnerability",
+      "title": "Catalyst Diffusion Transformer for Heterogeneous Catalysis",
+      "summary": "We optimize chemical catalysts with generative modeling and measure catalytic activity in heterogeneous reactions."
+    },
+    {
+      "id": "acrobat-negative",
+      "label": "unrelated",
+      "query": "Adobe Acrobat Reader heap-based buffer overflow vulnerability",
+      "title": "ACRoBat: Optimizing Auto-batching of Dynamic Deep Learning",
+      "summary": "A compiler framework batches dynamic tensor operations to accelerate neural network training."
+    },
+    {
+      "id": "directx-negative",
+      "label": "unrelated",
+      "query": "Microsoft DirectX NULL-byte overwrite vulnerability",
+      "title": "MotionInput supporting DirectX gesture input",
+      "summary": "A modular open-source library translates hand gestures into game input. No vulnerability analysis is supplied."
+    },
+    {
+      "id": "ie-negative",
+      "label": "unrelated",
+      "query": "Internet Explorer use-after-free memory corruption",
+      "title": "Internet Exchange Points and Global Network Connectivity",
+      "summary": "We measure transit routing, peering diversity and backbone network connectivity."
+    },
+    {
+      "id": "langflow-positive",
+      "label": "related",
+      "query": "Langflow prompt injection enabling malicious tool use",
+      "title": "Prompt injection attacks against Langflow agents",
+      "summary": "We demonstrate adversarial instructions in untrusted retrieval content overriding Langflow agent tool policies and test mitigations."
+    },
+    {
+      "id": "ambiguous-short",
+      "label": "uncertain",
+      "query": "Vendor ProductX remote execution vulnerability",
+      "title": "ProductX security study",
+      "summary": "Only the title is available; the studied version, weakness and CVE are not specified."
+    },
+    {
+      "id": "same-product-different-weakness",
+      "label": "unrelated",
+      "query": "CVE-2021-44228 Apache Log4j2 JNDI remote code execution",
+      "title": "Log4j throughput optimization under heavy logging load",
+      "summary": "We benchmark logging throughput and memory allocation. This study does not analyze JNDI or security vulnerabilities."
+    }
+  ]
+}

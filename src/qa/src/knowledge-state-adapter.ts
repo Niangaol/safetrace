@@ -24,7 +24,11 @@ export async function knowledgeStatesFromDimensions(input:{events:readonly Knowl
       for(const ref of entry.item.raw_refs){
         const raws=input.events.filter(e=>e.topic==="raw.docs"&&(e.payload as RawDoc).payload_ref===ref);
         if(raws.length!==1)continue;const raw=raws[0]!.payload as RawDoc;
-        if(!((raw.source_type==="nvd_cve"&&score.source_of_score==="nvd")||(raw.source_type==="cve_org"&&score.source_of_score==="cna")))continue;
+        // NVD bulk 报文除 NIST 主评分外，还原文收录 CNA（sourceIdentifier）提交的评分；
+        // 两者都由下方 row.metrics 的 source/vector/base 逐字比对证明来源，source_type
+        // 不再是额外门槛——旧配对规则把 1908 条"报文里逐字存在"的 CNA 评分整体误拒
+        // （2026-10-09 实测，投影验证口径因此只有 20.9%）。
+        if(!((raw.source_type==="nvd_cve"&&(score.source_of_score==="nvd"||score.source_of_score==="cna"))||(raw.source_type==="cve_org"&&score.source_of_score==="cna")))continue;
         try{let records=rawCache.get(raws[0]!.event_id);if(!records){records=rawKnowledgeRecords(raw,await input.readRaw(raw));rawCache.set(raws[0]!.event_id,records);}
           const row=records.find(r=>entry.item.cve_ids.includes(r.id)&&r.metrics.some(m=>m?.source_of_score===score.source_of_score&&m?.baseScore===score.cvss_v3_base&&m?.vectorString===score.cvss_v3_vector));
           if(row)artifacts.push({key:"cvss",artifactHash:sha256Json(score),url:raw.url,published_at:row.published_at,trust:"untrusted",raw_ref:ref,cve_id:row.id});

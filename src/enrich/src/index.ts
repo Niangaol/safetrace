@@ -32,7 +32,14 @@ export * from "./f4-cvss.js";
 export * from "./f2-assets.js";
 export * from "./f1-papers.js";
 export * from "./stepfun-paper-review.js";
+export * from "./jev-paper-review.js";
+export * from "./extension-receipts.js";
+export * from "./poc-candidates.js";
+export * from "./jev-decision-client.js";
+export * from "./triage.js";
 export * from "./f6-verify.js";
+
+import type { ExtensionDimension, ExtensionRunSummary } from "./extension-receipts.js";
 
 export interface EnrichContext {
   stateStore?: EnrichmentStateStore;
@@ -52,21 +59,43 @@ export interface EnrichContext {
   onDegrade?: (event: FallbackEvent) => void | Promise<void>;
   /** 多源分差观察者（conflicts 审计信息，不在 EnrichmentResult 契约内）。 */
   onConflict?: (conflict: ScoreConflict, intelId: string) => void | Promise<void>;
-  /** Optional StepPlan F1 review sidecar; it must never reorder or modify published scores by itself. */
+  /** Optional F1 paper review sidecar (StepPlan or local Open-Jev); it must never reorder or modify published scores by itself. */
   paperReviewer?: PaperReviewPort;
+  /** 评审提供方标识（落 lineage stage/execution）；缺省 stepplan 保持历史口径。 */
+  paperReviewerProvider?: string;
   onPaperReview?: (intelId: string, outcome: PaperReviewOutcome) => void | Promise<void>;
   /**
    * 本轮只跑这些维度（运维用：例如只补 cvss/epss 时不发起 arXiv 请求）。
    * 未列出维度既不请求也不改写状态；缺省为全部三维度。
    */
   dimensions?: readonly EnrichmentDimension[];
+  /** Explicit typed sidecars; never injected into the frozen enrich.items payload. */
+  extensionDimensions?: readonly ExtensionDimension[];
+  extensionRunner?: (item: IntelItem, dimension: ExtensionDimension) => Promise<ExtensionRunSummary>;
+  onExtension?: (intelId: string, summary: ExtensionRunSummary) => void | Promise<void>;
 }
 
 /** 富化一批情报。单个条目内部失败直接抛错（显式失败，不静默跳过）。 */
 export async function runEnrichment(items: IntelItem[], ctx: EnrichContext = {}): Promise<EnrichmentResult[]> {
+  const extensions = ctx.extensionDimensions ?? [];
+  if (extensions.some(d=>!["remediation","asset","poc"].includes(d)) || new Set(extensions).size!==extensions.length || (extensions.length && !ctx.extensionRunner)) throw new Error("Unsupported/missing explicit extension runner");
   const results: EnrichmentResult[] = [];
   for (const item of items) {
-    const outcome = await enrichOne(item, ctx);
+    // extensions-only runs do not fetch papers/scores or rewrite historical enrich.items receipts.
+    const outcome = ctx.dimensions?.length === 0 ? summarizeEnrichment(item,{}) : await enrichOne(item, ctx);
+    for (const dimension of extensions) {
+      const trace = ctx.traceId ?? nextId("tr");
+      let summary: ExtensionRunSummary;
+      try {
+        summary = await ctx.extensionRunner!(item,dimension);
+        if(summary.dimension!==dimension || !summary.receipt_id || !["live","empty"].includes(summary.status) || !Number.isSafeInteger(summary.artifacts) || summary.artifacts<0 || (summary.status === "live") !== (summary.artifacts > 0)) throw new Error("Invalid committed extension summary");
+      } catch(error) {
+        await ctx.bus?.recordLineage({trace_id:trace,causation_id:ctx.causation_by_intel_id?.[item.intel_id]??null,stage:dimension==="asset"?"enrich.f2_assets":dimension==="poc"?"enrich.f3_poc":"enrich.f5_remediation",operation_version:dimension==="asset"?"asset-extension.v1":dimension==="poc"?"poc-extension.v1":"remediation-extension.v1",status:"failed",input_refs:[{kind:"IntelItem",id:item.intel_id,sha256:sha256Json(item)}],error:"extension failed; no success receipt reported"});
+        throw error;
+      }
+      await ctx.bus?.recordLineage({trace_id:trace,causation_id:ctx.causation_by_intel_id?.[item.intel_id]??null,stage:dimension==="asset"?"enrich.f2_assets":dimension==="poc"?"enrich.f3_poc":"enrich.f5_remediation",operation_version:dimension==="asset"?"asset-extension.v1":dimension==="poc"?"poc-extension.v1":"remediation-extension.v1",status:summary.status==="live"?"success":"review",input_refs:[{kind:"IntelItem",id:item.intel_id,sha256:sha256Json(item)}],output_refs:[{kind:"ExtensionReceipt",id:summary.receipt_id,sha256:sha256Json(summary)}],decision:{reason:dimension==="asset"?"Local asset rule assessment; vendor identity unverified; unknown is not safety; frozen result unchanged":dimension==="poc"?"Advisory-tagged PoC references with local model advisory; no content fetched, nothing executed, reachability/exploitability unverified; frozen result unchanged":"Independent source-backed guidance receipt; not a verified repair; frozen result unchanged"}});
+      await ctx.onExtension?.(item.intel_id,summary);
+    }
     results.push(outcome);
   }
   return results;
@@ -156,7 +185,10 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
     ...(papersRes.degraded_to ? { decision: { fallback_to: papersRes.degraded_to, reason: "paper search returned fallback fixture" } } : {}),
   });
 
-  // Optional F1 StepPlan advice: sidecar only; never changes PaperLink scores, order, or published EnrichmentResult.
+  // Optional F1 paper review advice (StepPlan or local Open-Jev): sidecar only; never changes PaperLink scores, order, or published EnrichmentResult.
+  // 历史 stage 名为 enrich.f1_stepfun_advisory；默认值保持 stepfun 以兼容既有 lineage 查询，
+  // 本地 Jev 评审由 enrich-pending 传 paperReviewerProvider="openjev"（stage: enrich.f1_openjev_advisory）。
+  const reviewerProvider = ctx.paperReviewerProvider ?? "stepfun";
   if (runPaper && ctx.paperReviewer && ctx.bus && !papersRes.degraded_to && shouldAskPaperReviewer(papersRes.papers)) {
     const candidates = papersRes.papers.map((paper) => ({
       paper_id: paper.paper_id,
@@ -167,24 +199,29 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
     }));
     const projection = { query: item.title, candidates };
     const projectionHash = sha256Json(projection);
+    // 摘要只来自本次 arXiv 原始回执（paper_records），且仅传给声明消费它的评审端；
+    // StepFun 云端评审不读摘要（契约原因），本地 Jev 评审读（语义判断需要）。
+    const paperSummaries = Object.fromEntries(Object.entries(papersRes.paper_records ?? {})
+      .filter(([id, record]) => papersRes.papers.some(paper => paper.paper_id === id) && record.title === papersRes.papers.find(paper => paper.paper_id === id)!.title)
+      .map(([id, record]) => [id, record.summary.slice(0, 1000)]));
     const reviewStarted = nowIso();
     let reviewOutcome: PaperReviewOutcome;
     let reviewFailed = false;
     try {
       const reviewerPapers = papersRes.papers.map((paper) => ({ ...paper, ...(paper.evidence_terms ? { evidence_terms: [...paper.evidence_terms] } : {}) }));
-      reviewOutcome = await ctx.paperReviewer({ trace_id: traceId, intel_id: item.intel_id, query: item.title, papers: reviewerPapers });
+      reviewOutcome = await ctx.paperReviewer({ trace_id: traceId, intel_id: item.intel_id, query: item.title, papers: reviewerPapers, ...(Object.keys(paperSummaries).length ? { paper_summaries: paperSummaries } : {}) });
     } catch {
       reviewFailed = true;
       await ctx.bus.recordLineage({
         trace_id: traceId, parent_lineage_ids: [f1Lineage?.lineage_id, inputParent].filter((id): id is string => Boolean(id)),
-        causation_id: papersEnv?.event_id ?? causation, stage: "enrich.f1_stepfun_advisory", operation_version: "stepfun.f1-advisory.v1", status: "degraded", started_at: reviewStarted,
+        causation_id: papersEnv?.event_id ?? causation, stage: "enrich.f1_" + reviewerProvider + "_advisory", operation_version: reviewerProvider + ".f1-advisory.v1", status: "degraded", started_at: reviewStarted,
         input_refs: [{ kind: "F1PaperReviewProjection", id: item.intel_id, sha256: projectionHash }],
-        decision: { fallback_to: "rule-ranked-papers", reason: "StepPlan review failed; deterministic F1/F4/F6 outputs remain unchanged" },
+        decision: { fallback_to: "rule-ranked-papers", reason: reviewerProvider + " review failed; deterministic F1/F4/F6 outputs remain unchanged" },
         error: "paper review request failed; source text omitted",
       });
       await degrade({
-        layer: "L3", trigger: "StepPlan F1 advisory failed; deterministic paper results retained", degradedOf: "rule-ranked-papers", traceId,
-        label: "StepPlan 论文建议不可用；F1 规则结果未改变", recoveryHint: "检查 planner provider/key；不会改写论文来源、相关分或 F6 总分。",
+        layer: "L3", trigger: reviewerProvider + " F1 advisory failed; deterministic paper results retained", degradedOf: "rule-ranked-papers", traceId,
+        label: "论文评审建议不可用；F1 规则结果未改变", recoveryHint: reviewerProvider === "stepfun" ? "检查 planner provider/key；不会改写论文来源、相关分或 F6 总分。" : "检查本地 Jev 服务（JEV_BASE_URL）与 JEV_MODEL_ID；不会改写论文来源、相关分或 F6 总分。",
         emit: async (event) => emit(event),
       });
       reviewOutcome = { status: "abstained", reason: "review request failed" };
@@ -192,7 +229,7 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
     if (!reviewFailed) {
       const candidateIds = new Set(papersRes.papers.map((paper) => paper.paper_id));
       if (reviewOutcome.status === "suggested" && (reviewOutcome.paper_ids.length < 1 || reviewOutcome.paper_ids.length > candidates.length || new Set(reviewOutcome.paper_ids).size !== reviewOutcome.paper_ids.length || reviewOutcome.paper_ids.some((id) => !candidateIds.has(id)) || !Number.isFinite(reviewOutcome.confidence) || reviewOutcome.confidence < 0.8 || reviewOutcome.confidence > 1)) {
-        reviewOutcome = { status: "abstained", reason: "StepPlan paper suggestion failed candidate/threshold validation", model_id: reviewOutcome.model_id };
+        reviewOutcome = { status: "abstained", reason: "paper suggestion failed candidate/threshold validation", model_id: reviewOutcome.model_id, provider: reviewOutcome.provider };
       }
       const suggested = reviewOutcome.status === "suggested" ? reviewOutcome : undefined;
       const suggestionRefs = suggested
@@ -200,11 +237,11 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
         : [];
       await ctx.bus.recordLineage({
         trace_id: traceId, parent_lineage_ids: [f1Lineage?.lineage_id, inputParent].filter((id): id is string => Boolean(id)),
-        causation_id: papersEnv?.event_id ?? causation, stage: "enrich.f1_stepfun_advisory", operation_version: "stepfun.f1-advisory.v1", status: "review", started_at: reviewStarted,
+        causation_id: papersEnv?.event_id ?? causation, stage: "enrich.f1_" + reviewerProvider + "_advisory", operation_version: reviewerProvider + ".f1-advisory.v1", status: "review", started_at: reviewStarted,
         input_refs: [{ kind: "IntelItem", id: item.intel_id, sha256: inputHash }, { kind: "F1PaperReviewProjection", id: item.intel_id, sha256: projectionHash }],
         output_refs: suggestionRefs,
-        execution: reviewOutcome.model_id ? { provider: "stepplan", model_id: reviewOutcome.model_id, model_version: "unversioned-api" } : { component_version: "stepfun.f1-advisory.v1" },
-        decision: { reason: reviewOutcome.status === "suggested" ? "StepPlan ranking is advisory only; F1 scores/order and published EnrichmentResult remain rule-derived" : "StepPlan F1 advisory abstained: " + reviewOutcome.reason, review_required: true },
+        execution: reviewOutcome.model_id ? { provider: reviewOutcome.provider ?? "stepplan", model_id: reviewOutcome.model_id, model_version: reviewOutcome.provider === "openjev" ? "pinned-local" : "unversioned-api" } : { component_version: reviewerProvider + ".f1-advisory.v1" },
+        decision: { reason: reviewOutcome.status === "suggested" ? reviewerProvider + " ranking is advisory only; F1 scores/order and published EnrichmentResult remain rule-derived" : reviewerProvider + " F1 advisory abstained: " + reviewOutcome.reason, review_required: true },
       });
       try { await ctx.onPaperReview?.(item.intel_id, reviewOutcome); }
       catch {
