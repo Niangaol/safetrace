@@ -40,6 +40,7 @@ function templateOnlyOptions(options: StepFunAnswerOptions): SynthesizeOptions {
     ...(options.stale_after_days !== undefined ? { stale_after_days: options.stale_after_days } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.injectionGuard !== undefined ? { injectionGuard: options.injectionGuard } : {}),
+    ...(options.source_conflicts !== undefined ? { source_conflicts: options.source_conflicts } : {}),
   };
 }
 

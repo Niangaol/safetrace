@@ -6,7 +6,7 @@
  * - degraded_to 从 RetrievalResponse 原样透传，并在答案尾部给用户可见提示。
  */
 import { degrade, nowIso, parseLoose, screenPromptInjection, sha256, sha256Json } from "@safetrace/shared";
-import type { Answer, EventBus, InjectionFlag, InjectionGuard, RetrievalResponse, StaleWarning } from "@safetrace/shared";
+import type { Answer, EventBus, InjectionFlag, InjectionGuard, RetrievalResponse, SourceConflict, StaleWarning } from "@safetrace/shared";
 import type { QueryPlan } from "./q1-intent.js";
 
 /**
@@ -34,6 +34,11 @@ export interface SynthesizeOptions {
   now?: Date;
   /** 上游筛查结果与本地 A-04 heuristic 合并；screened=false 会禁止外部 synthesizer 出云。 */
   injectionGuard?: Omit<InjectionGuard, "untrusted_evidence">;
+  /**
+   * P-05：多源分值冲突（富化 F6 产出）。提供即显式进答案（含拒答路径），
+   * 禁止把冲突压成单一结论；缺省 = 本轮未提供冲突信息，不当当"无冲突"。
+   */
+  source_conflicts?: readonly SourceConflict[];
 }
 
 /** 没有独立 reranker 时，以当前可用的 dense/sparse 召回分做保守拒答门槛。 */
@@ -54,6 +59,8 @@ interface Ctx {
   avgQuality: number;
   stale?: StaleWarning;
   injection: InjectionGuard;
+  /** P-05：归一化后的多源冲突（可能为空数组 = 未提供）。 */
+  conflicts: SourceConflict[];
 }
 
 /** C-04 默认时效阈值（天）。A-05 将按意图细化；此处保证"过龄/未知"必须显式可见。 */
@@ -118,6 +125,64 @@ function assessStaleness(evidence: RetrievalResponse, now: Date, thresholdDays: 
   return { threshold_days: thresholdDays, oldest_published_at: new Date(oldest).toISOString(), unknown_published_at: unknown, note: "⚠️ 证据时效提示：" + parts.join("；") + "。结论请结合最新通告核对。" };
 }
 
+const CONFLICT_SOURCES = new Set(["nvd", "cna", "ghsa", "adp", "system_derived"]);
+
+/**
+ * P-05：冲突入答案前的归一化校验（fail-closed）。
+ * 形态非法、来源越界、分值非 0-10 有限数、同值无分歧 → 抛错；
+ * 静默丢弃等于把"冲突被算出来又被丢掉"的 bug 留在答案侧。
+ */
+export function normalizeSourceConflicts(input: readonly SourceConflict[] | undefined): SourceConflict[] {
+  if (input === undefined) return [];
+  if (!Array.isArray(input)) throw new Error("source_conflicts 必须是数组");
+  const rows: readonly SourceConflict[] = input;
+  const out: SourceConflict[] = [];
+  const seen = new Set<string>();
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object") throw new Error("冲突条目必须是对象");
+    if (raw.field !== "cvss_v3_base") throw new Error("冲突字段仅支持 cvss_v3_base（收到 " + String(raw.field) + "）");
+    if (!Array.isArray(raw.values) || raw.values.length < 2) throw new Error("冲突必须至少携带两个来源的分值");
+    const values = raw.values.map((v) => {
+      if (!v || typeof v !== "object") throw new Error("冲突分值必须是对象");
+      if (!CONFLICT_SOURCES.has(v.source)) throw new Error("冲突分值来源非法：" + String(v.source));
+      if (typeof v.score !== "number" || !Number.isFinite(v.score) || v.score < 0 || v.score > 10) {
+        throw new Error("冲突分值必须是 0-10 的有限数（CVSS v3 基础分域）");
+      }
+      return { source: v.source, score: v.score };
+    });
+    if (new Set(values.map((v) => v.score)).size <= 1) throw new Error("冲突条目必须实际存在分歧（同值不构成冲突）");
+    if (typeof raw.resolved !== "boolean") throw new Error("冲突 resolved 必须是布尔值");
+    if (raw.rationale !== undefined && (typeof raw.rationale !== "string" || raw.rationale.trim() === "")) {
+      throw new Error("冲突 rationale 必须是非空字符串");
+    }
+    if (raw.resolved && raw.rationale === undefined) throw new Error("已仲裁冲突必须写明 rationale（采用哪源、为何）");
+    const key = sha256Json({ field: raw.field, values, resolved: raw.resolved, rationale: raw.rationale ?? null });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ field: raw.field, values, resolved: raw.resolved, ...(raw.rationale !== undefined ? { rationale: raw.rationale } : {}) });
+  }
+  return out;
+}
+
+/** P-05：冲突的用户可见段落（进正文）+ 推理链条目。空数组返回空段落。 */
+function renderConflicts(conflicts: readonly SourceConflict[]): { section: string[]; chainEntry: string | null } {
+  if (conflicts.length === 0) return { section: [], chainEntry: null };
+  const lines: string[] = ["## 来源冲突"];
+  lines.push(
+    "检测到 " + conflicts.length + " 条多源分值冲突，按项目纪律显式保留、未压成单一结论：",
+  );
+  conflicts.forEach((c, i) => {
+    const pairs = c.values.map((v) => v.source + " " + v.score).join(" vs ");
+    const state = c.resolved ? "已仲裁" : "未仲裁";
+    lines.push((i + 1) + ". `" + c.field + "`：" + pairs + "（" + state + (c.rationale ? "：" + c.rationale : "") + "）");
+  });
+  const unresolved = conflicts.filter((c) => !c.resolved).length;
+  const chainEntry =
+    "P-05 冲突保留：" + conflicts.length + " 条多源分值冲突进入答案（未仲裁 " + unresolved +
+    " 条），分歧本身对用户可见，不用单一结论覆盖";
+  return { section: lines, chainEntry };
+}
+
 /** C-04/A-04 部分筛查状态：screened 表示本地启发式扫描已运行，不保证能识别所有注入；未运行时必须显式为 false。 */
 function assessInjectionGuard(question: string, evidence: RetrievalResponse, opts: SynthesizeOptions): InjectionGuard {
   const untrusted = evidence.chunks.filter((chunk) => chunk.trust === "untrusted").length;
@@ -174,6 +239,9 @@ function buildAbstain(
       ? "处置：先向用户澄清——" + plan.clarify_question
       : "处置：请补充检索条件（如指定 CVE、放宽 min_quality、扩大时间范围）后重试",
   ];
+  const conflictView = renderConflicts(ctx.conflicts);
+  for (const line of conflictView.section) lines.push(line);
+  if (conflictView.chainEntry) chain.push(conflictView.chainEntry);
   lines.push("## 推理链");
   chain.forEach((s, i) => lines.push((i + 1) + ". " + s));
   lines.push("## 置信度");
@@ -192,6 +260,7 @@ function buildAbstain(
     confidence: 0,
     abstained: true,
     ...(ctx.stale ? { stale_warning: ctx.stale } : {}),
+    ...(ctx.conflicts.length > 0 ? { source_conflicts: ctx.conflicts } : {}),
     injection_guard: ctx.injection,
   };
 }
@@ -230,6 +299,9 @@ function buildAnswer(
     "逐条核对 provenance：" + n + " 条证据均可回溯到原文 URL，正文角标 [1]-[" + n + "] 与 citations 一一对应",
     "置信度 = 0.6×最高召回分 + 0.05×附加证据数(≤3) + 0.2×平均质量分 = " + confidence.toFixed(2),
   ];
+  const conflictView = renderConflicts(ctx.conflicts);
+  for (const line of conflictView.section) lines.push(line);
+  if (conflictView.chainEntry) chain.push(conflictView.chainEntry);
   lines.push("## 推理链");
   chain.forEach((s, i) => lines.push((i + 1) + ". " + s));
   lines.push("## 置信度");
@@ -251,6 +323,7 @@ function buildAnswer(
     confidence,
     abstained: false,
     ...(ctx.stale ? { stale_warning: ctx.stale } : {}),
+    ...(ctx.conflicts.length > 0 ? { source_conflicts: ctx.conflicts } : {}),
     injection_guard: ctx.injection,
   };
 }
@@ -295,6 +368,7 @@ export async function synthesizeAnswer(
       avgQuality: qs.length > 0 ? qs.reduce((sum, q) => sum + q, 0) / qs.length : 0,
       stale: assessStaleness(evidence, opts.now ?? new Date(), opts.stale_after_days ?? DEFAULT_STALE_THRESHOLD_DAYS),
       injection: assessInjectionGuard(question, evidence, opts),
+      conflicts: normalizeSourceConflicts(opts.source_conflicts),
     };
     const reasons: string[] = [];
     if (evidence.chunks.length === 0) reasons.push("检索没有返回任何证据块");
@@ -327,7 +401,7 @@ export async function synthesizeAnswer(
     } else if (opts.synth && !blockedSynth) {
       usedSynth = true;
       const generated = await opts.synth.synthesize(question, plan, evidence);
-      answer = { ...generated, injection_guard: ctx.injection };
+      answer = { ...generated, injection_guard: ctx.injection, ...(ctx.conflicts.length > 0 ? { source_conflicts: ctx.conflicts } : {}) };
     } else {
       answer = buildAnswer(question, plan, evidence, ctx, base);
     }

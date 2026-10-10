@@ -3,6 +3,11 @@
 > 纪律（docs/GITHUB-FLOW.md 第五节）：只允许「新字段追加 + 旧字段标 deprecated」；
 > 禁止改语义、改枚举值含义、删字段。每次契约改动必须在此登记，并在 PR 中三线 sign-off。
 
+## v1.2.2（2026-10-10，D6 冻结后增量；P-05）
+
+| 契约 | 生产者 → 消费者 | 变更与兼容性 |
+|---|---|---|
+| Answer（events.md 内联） | Q4 → 前端/编排层 | 追加**可选** `source_conflicts` 数组字段；既有必填集合不变，旧生产者合法（纯追加、无破坏性）。元素形状 `{ field: "cvss_v3_base", values: [{ source, score }], resolved, rationale? }` 与富化 F6 的 ScoreConflict 一致（shared 为权威定义，enrich re-export 兼容）。缺省语义：缺省 = 本轮未提供冲突信息，**禁止当作无冲突**；`resolved=false` 表示多源分差未仲裁，分歧本身必须原样呈现，消费方不得把多源分值压成单一结论。实现：Q4 `synthesizeAnswer` 新增 `source_conflicts` 选项，经 fail-closed 归一化校验后在正文输出「## 来源冲突」段落并进 reasoning_chain，拒答路径同样保留；富化侧 `runEnrichment` 返回类型 widen 为 EnrichmentOutcome（内存侧带 conflicts，总线发布的 EnrichmentResult 契约不变）。schema 文件数仍为 8。 |
 ## v1.2.1（2026-10-09，D6 冻结后增量；A 线多分组监控）
 
 | 契约 | 生产者 → 消费者 | 变更与兼容性 |

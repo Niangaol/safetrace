@@ -104,6 +104,38 @@ test("本地演示 API：拒绝空问题和未知路由", async () => {
   assert.equal(missing.status, 404);
 });
 
+test("本地演示 API：P-05 多源分值冲突显式进问答答案（不压成单一结论）", async () => {
+  const dataset = await loadDataset();
+  const target = dataset.intel.find((item) => item.cve_ids.includes("CVE-2021-44228"));
+  assert.ok(target, "fixture 语料应含 Log4Shell 情报");
+  const outcome = dataset.enrichments.get(target!.intel_id);
+  assert.ok(outcome, "fixture 富化应产出 outcome（内存侧带 conflicts 审计字段）");
+  // 注入一条多源冲突（真实多源富化才产出；fixture 单源不产，故测试显式注入验证接线）
+  outcome!.conflicts = [{
+    field: "cvss_v3_base",
+    values: [{ source: "nvd", score: 7.5 }, { source: "cna", score: 8.8 }],
+    resolved: true,
+    rationale: "测试注入：采用 nvd 的 7.5 分；差异源仅作旁证，不改写分值",
+  }];
+  const conflictServer = createLocalDemoServer(dataset, { diagnosticsDbPath: "tmp/absent-ingest-diagnostics-" + process.pid + ".sqlite" });
+  await new Promise<void>((resolve) => conflictServer.listen(0, "127.0.0.1", resolve));
+  const conflictBase = "http://127.0.0.1:" + (conflictServer.address() as AddressInfo).port;
+  try {
+    const response = await fetch(conflictBase + "/api/v1/qa/chat", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: "Log4Shell 影响哪些版本？", stream: true }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /## 来源冲突/, "答案正文必须展示来源冲突段落");
+    assert.ok(text.includes("nvd 7.5 vs cna 8.8"), "分歧数值必须对用户可见");
+    assert.ok(text.includes("测试注入"), "仲裁理由必须可见");
+    assert.match(text, /P-05 冲突保留/, "推理链须记录冲突保留");
+  } finally {
+    await new Promise<void>((resolve, reject) => conflictServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("采集诊断 API：无持久化 SQLite 时明确说明 fixture 不是真采集", async () => {
   const response = await fetch(base + "/api/v1/ingest/diagnostics");
   assert.equal(response.status, 200);

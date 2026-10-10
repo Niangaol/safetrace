@@ -75,11 +75,15 @@ export interface EnrichContext {
   onExtension?: (intelId: string, summary: ExtensionRunSummary) => void | Promise<void>;
 }
 
-/** 富化一批情报。单个条目内部失败直接抛错（显式失败，不静默跳过）。 */
-export async function runEnrichment(items: IntelItem[], ctx: EnrichContext = {}): Promise<EnrichmentResult[]> {
+/**
+ * 富化一批情报。单个条目内部失败直接抛错（显式失败，不静默跳过）。
+ * 返回 EnrichmentOutcome（extends EnrichmentResult）：内存侧带 conflicts 审计字段，
+ * P-05 起消费方（答案编排）可直接读取多源冲突；发布到总线的仍是契约纯净 payload。
+ */
+export async function runEnrichment(items: IntelItem[], ctx: EnrichContext = {}): Promise<EnrichmentOutcome[]> {
   const extensions = ctx.extensionDimensions ?? [];
   if (extensions.some(d=>!["remediation","asset","poc"].includes(d)) || new Set(extensions).size!==extensions.length || (extensions.length && !ctx.extensionRunner)) throw new Error("Unsupported/missing explicit extension runner");
-  const results: EnrichmentResult[] = [];
+  const results: EnrichmentOutcome[] = [];
   for (const item of items) {
     // extensions-only runs do not fetch papers/scores or rewrite historical enrich.items receipts.
     const outcome = ctx.dimensions?.length === 0 ? summarizeEnrichment(item,{}) : await enrichOne(item, ctx);

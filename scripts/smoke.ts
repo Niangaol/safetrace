@@ -386,6 +386,39 @@ async function main(): Promise<number> {
     check(trendAnswer.text_md.includes("阈值 7 天"), "过龄提示在正文对用户可见（写明收紧后的阈值）");
   }
 
+  // ---------- 11) P-05 来源冲突进答案（多源分歧显式保留，不压成单一结论） ----------
+  console.log("\n[11] P-05 来源冲突（多源分值分歧显式保留）");
+  {
+    // ① 富化批量返回 outcome：内存侧带 conflicts 审计字段（总线契约仍纯净）
+    check(Array.isArray(enrichResults[0]!.conflicts),
+      "runEnrichment 返回 EnrichmentOutcome（内存侧带 conflicts，答案侧可消费）");
+    const p05Turn: QueryTurn = { session_id: "sess_smoke_p05", turn_id: "turn_p05", text: "Log4Shell 影响哪些版本？" };
+    const p05Plan = classifyIntent(p05Turn);
+    const p05Evidence = await engine.search({ query_id: "q_smoke_p05", query_text: p05Plan.rewrite_text, top_k: 5, trace_id: "tr_smoke_p05", schema_version: "1.0" });
+    // ② 注入一条多源冲突 → 正文 / reasoning_chain / Answer 对象三处可见
+    const p05Answer = await synthesizeAnswer(p05Turn.text, p05Plan, p05Evidence, {
+      session_id: p05Turn.session_id, turn_id: p05Turn.turn_id, bus,
+      source_conflicts: [{ field: "cvss_v3_base", values: [{ source: "nvd", score: 7.5 }, { source: "cna", score: 8.8 }], resolved: true, rationale: "冒烟注入：采用 nvd 的 7.5 分；差异源仅作旁证" }],
+    });
+    check(!p05Answer.abstained && p05Answer.text_md.includes("## 来源冲突") && p05Answer.text_md.includes("nvd 7.5 vs cna 8.8"),
+      "冲突段落与分歧数值进正文（不压成单一结论）");
+    check(p05Answer.source_conflicts?.length === 1 && p05Answer.reasoning_chain.some((s) => s.includes("P-05 冲突保留")),
+      "Answer.source_conflicts 与推理链条目齐备");
+    // ③ 未提供冲突 → 不渲染段落、不设字段（缺省不当「无冲突」）
+    const p05Plain = await synthesizeAnswer(p05Turn.text, p05Plan, p05Evidence, { session_id: p05Turn.session_id, turn_id: p05Turn.turn_id, bus });
+    check(p05Plain.source_conflicts === undefined && !p05Plain.text_md.includes("## 来源冲突"),
+      "未提供冲突时答案不渲染冲突段落（缺省语义如实）");
+    // ④ 形态非法的冲突 fail-closed 抛错（不静默丢弃）
+    let p05Rejected = false;
+    try {
+      await synthesizeAnswer(p05Turn.text, p05Plan, p05Evidence, {
+        session_id: p05Turn.session_id, turn_id: p05Turn.turn_id, bus,
+        source_conflicts: [{ field: "cvss_v3_base", values: [{ source: "nvd", score: 7.5 }, { source: "cna", score: 7.5 }], resolved: false }],
+      });
+    } catch { p05Rejected = true; }
+    check(p05Rejected, "同值无分歧的冲突条目 fail-closed 抛错（不静默丢弃）");
+  }
+
   console.log("\n== 冒烟结束 ==");
   if (failures.length > 0) {
     console.log("失败 " + failures.length + " 项：");

@@ -261,6 +261,23 @@ export interface StaleWarning {
   note: string;
 }
 
+/**
+ * P-05：多源分值冲突（富化 F6 仲裁产出）。答案侧必须显式保留——
+ * 禁止把冲突压成单一结论；resolved=false 表示分差未仲裁，消费者必须看到分歧本身。
+ */
+export interface SourceConflictValue {
+  source: ScoreSource;
+  score: number;
+}
+
+export interface SourceConflict {
+  field: "cvss_v3_base";
+  values: SourceConflictValue[];
+  resolved: boolean;
+  /** resolved=true 时必须写明采用哪源、为何；resolved=false 时说明未仲裁原因。 */
+  rationale?: string;
+}
+
 /** C-04 注入筛查状态；screened=false 表示本轮未做注入检测，不得当作"已筛查干净"。 */
 export interface InjectionGuard {
   screened: boolean;
@@ -284,6 +301,11 @@ export interface Answer {
   stale_warning?: StaleWarning;
   /** C-04：注入筛查状态；缺省 = 未筛查。 */
   injection_guard?: InjectionGuard;
+  /**
+   * P-05：多源来源冲突；缺省 = 本轮未提供冲突信息，禁止当作"无冲突"。
+   * 生产者（Q4）只在调用方显式提供冲突时填充；resolved=false 的冲突必须原样呈现。
+   */
+  source_conflicts?: SourceConflict[];
 }
 
 export type FallbackLayer = "L1" | "L2" | "L3" | "L4";

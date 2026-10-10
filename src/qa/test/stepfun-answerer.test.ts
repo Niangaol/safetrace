@@ -35,6 +35,20 @@ test("StepFun Q4：只替换结论，保留规则门禁与已验证引用", asyn
   assert.ok(lineage.some((row) => row.stage === "qa.q4_answer" && row.execution?.provider === "stepplan" && row.execution.model_id === "step-3.7-flash"));
 });
 
+test("StepFun Q4：P-05 冲突随模板证据段保留，模型结论不覆盖分歧", async () => {
+  const question = "Log4Shell 影响哪些版本？";
+  const { plan, evidence } = await context(question);
+  const client: StepFunChatClient = { chat: async () => ({ provider: "stepplan", model_id: "step-3.7-flash", degraded_to: "", text: "根据证据，Log4j2 的受影响与修复版本应以所列公告为准。" }) };
+  const result = await synthesizeAnswerWithStepFun(question, plan, evidence, {
+    session_id: "sess_stepfun", turn_id: "turn_stepfun", provider: "stepplan", modelId: "step-3.7-flash", apiKeyConfigured: true, client, injectionGuard: screened,
+    source_conflicts: [{ field: "cvss_v3_base", values: [{ source: "nvd", score: 7.5 }, { source: "cna", score: 8.8 }], resolved: true, rationale: "测试：采用 nvd 的 7.5 分" }],
+  });
+  assert.equal(result.answer_mode, "stepfun");
+  assert.match(result.answer.text_md, /## 来源冲突/, "模型结论替换后冲突段落仍保留");
+  assert.ok(result.answer.text_md.includes("nvd 7.5 vs cna 8.8"), "分歧数值不被模型结论覆盖");
+  assert.deepEqual(result.answer.source_conflicts?.map((c) => c.resolved), [true]);
+});
+
 test("StepFun Q4：提供商失败时登记用户可见事件并使用原模板", async () => {
   const question = "Log4Shell 影响哪些版本？";
   const { plan, evidence } = await context(question);

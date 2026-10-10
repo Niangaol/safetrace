@@ -4,30 +4,21 @@
  * 纪律：
  * - paper/cvss 是 P0 必做维度，按实际产出枚举进 completed/failed
  * - conflicts 是审计信息：EnrichmentResult.json（D1 冻结）additionalProperties:false，
- *   故只随内存返回值（EnrichmentOutcome）传递，index.ts 发布到总线前会剥离，保证信封契约纯净
+ *   故只随内存返回值（EnrichmentOutcome）传递，index.ts 发布到总线前会剥离，保证信封契约纯净；
+ *   P-05 起冲突经 onConflict 观察者/答案侧 source_conflicts 显式保留，不再被静默丢弃
  * - enrichment_score = 维度完整度 * 0.6 + 证据覆盖率 * 0.4（纯函数 computeEnrichmentScore）
  */
 import { SCHEMA_VERSION, nowIso } from "@safetrace/shared";
-import type { Dimension, EnrichmentResult, IntelItem, PaperLink, ScoreAssessment, ScoreSource } from "@safetrace/shared";
+import type { Dimension, EnrichmentResult, IntelItem, PaperLink, ScoreAssessment, ScoreSource, SourceConflict as ScoreConflict, SourceConflictValue as ScoreConflictValue } from "@safetrace/shared";
 import { SCORE_AUTHORITY, type ScoreSourceInput } from "./f4-cvss.js";
 
 export type { ScoreSourceInput } from "./f4-cvss.js";
+/** 冲突类型以 shared 为权威定义（P-05：答案侧契约复用同一形状）；此处 re-export 保持既有导入路径兼容。 */
+export type { SourceConflict as ScoreConflict } from "@safetrace/shared";
+export type { SourceConflictValue as ScoreConflictValue } from "@safetrace/shared";
 
 /** P0 必做维度（paper / cvss；asset/poc/remediation/triage 未落地，不枚举进 completed/failed）。 */
 export const REQUIRED_DIMENSIONS: readonly Dimension[] = ["paper", "cvss"];
-
-export interface ScoreConflictValue {
-  source: ScoreSource;
-  score: number;
-}
-
-export interface ScoreConflict {
-  field: "cvss_v3_base";
-  values: ScoreConflictValue[];
-  resolved: boolean;
-  /** resolved=true 时必须写明"采用哪源、为何"。 */
-  rationale?: string;
-}
 
 /** 内存侧完整产出（带 conflicts 审计；总线侧发布前剥离为契约纯净 EnrichmentResult）。 */
 export interface EnrichmentOutcome extends EnrichmentResult {

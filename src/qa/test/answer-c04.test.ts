@@ -40,6 +40,16 @@ const ANSWER_INLINE: Record<string, unknown> = {
       untrusted_evidence: { type: "number" },
       note: { type: "string" },
     } },
+    // P-05：多源分值冲突（契约 v1.2.2 追加；缺省 = 未提供，禁当「无冲突」）
+    source_conflicts: { type: "array", items: { type: "object", additionalProperties: false, required: ["field", "values", "resolved"], properties: {
+      field: { type: "string", enum: ["cvss_v3_base"] },
+      values: { type: "array", items: { type: "object", additionalProperties: false, required: ["source", "score"], properties: {
+        source: { type: "string", enum: ["nvd", "cna", "ghsa", "adp", "system_derived"] },
+        score: { type: "number", minimum: 0, maximum: 10 },
+      } } },
+      resolved: { type: "boolean" },
+      rationale: { type: "string" },
+    } } },
   },
 };
 

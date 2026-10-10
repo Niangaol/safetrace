@@ -10,7 +10,8 @@ import type { LlmContextStore } from "@safetrace/shared";
 import { ModelGateway } from "@safetrace/gateway";
 import { synthesizeAnswerWithStepFun } from "../src/qa/src/stepfun-answerer.js";
 import { refineQ1WithStepFun, rewriteQ2WithStepFun, shouldRewriteQ2WithStepFun } from "../src/qa/src/stepfun-planner.js";
-import type { EnrichmentResult, IntelItem, QueryTurn, RawDoc } from "@safetrace/shared";
+import type { EnrichmentResult, IntelItem, QueryTurn, RawDoc, RetrievalResponse, SourceConflict } from "@safetrace/shared";
+import type { EnrichmentOutcome } from "@safetrace/enrich";
 import { runIngestOnce } from "@safetrace/ingest";
 import { runEnrichment } from "@safetrace/enrich";
 import { buildRetrievalRequest } from "../src/qa/src/cli.js";
@@ -29,7 +30,7 @@ type Dataset = {
   fetched: RawDoc[];
   parsed: IntelItem[];
   intel: IntelItem[];
-  enrichments: Map<string, EnrichmentResult>;
+  enrichments: Map<string, EnrichmentOutcome>;
   index: MemoryIndex;
   chunkCount: number;
 };
@@ -57,6 +58,22 @@ export async function loadDataset(contextStore: LlmContextStore = new MemoryLlmC
     enrichments: new Map(enriched.map((e) => [e.intel_id, e])), index,
     chunkCount: chunks.length,
   };
+}
+
+/** P-05：为本次检索证据涉及的多源分值冲突（按 CVE 归并；无冲突 = 不渲染冲突段落）。
+ * 冲突只来自富化 outcome 的审计字段（不在总线契约内），答案侧显式保留、不压成单一结论。 */
+function conflictsForEvidence(data: Dataset, evidence: RetrievalResponse): SourceConflict[] {
+  const cveIds = new Set<string>();
+  for (const chunk of evidence.chunks) {
+    for (const m of chunk.text.match(/CVE-\d{4}-\d{4,}/gi) ?? []) cveIds.add(m.toUpperCase());
+  }
+  if (cveIds.size === 0) return [];
+  const out: SourceConflict[] = [];
+  for (const item of data.intel) {
+    if (!item.cve_ids.some((cve) => cveIds.has(cve.toUpperCase()))) continue;
+    for (const conflict of data.enrichments.get(item.intel_id)?.conflicts ?? []) out.push(conflict);
+  }
+  return out;
 }
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
@@ -288,6 +305,7 @@ export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPat
             session_id: turn.session_id, turn_id: turn.turn_id, bus: data.bus, parent_lineage_ids: retrievalLineageIds,
             provider: answerProvider, modelId: answerModelId, apiKeyConfigured: Boolean(process.env.STEP_PLAN_API_KEY),
             ...(data.gateway ? { client: data.gateway } : {}),
+            source_conflicts: conflictsForEvidence(data, retrieval),
           });
           if (answerProvider === "stepplan" && generated.answer_mode !== "template") llmLayers.push("q4_answer");
           if (generated.fallback_reason) layerFallbacks.push("Q4: " + generated.fallback_reason);

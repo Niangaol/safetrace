@@ -83,7 +83,8 @@
   "abstained": false,
   "degraded_to": "string?",
   "stale_warning": { "threshold_days": 0, "oldest_published_at": "ISO-8601?", "unknown_published_at": 0, "note": "string" }?,
-  "injection_guard": { "screened": false, "max_score": "0-1?", "flags": ["instruction_override"], "untrusted_evidence": 0, "note": "string" }?
+  "injection_guard": { "screened": false, "max_score": "0-1?", "flags": ["instruction_override"], "untrusted_evidence": 0, "note": "string" }?,
+  "source_conflicts": [{ "field": "cvss_v3_base", "values": [{ "source": "nvd|cna|ghsa|adp|system_derived", "score": 0 }], "resolved": false, "rationale": "string?" }]?
 }
 
 // AssetScanRun（asset.scans）
