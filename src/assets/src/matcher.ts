@@ -44,41 +44,65 @@ export function nameVariants(name: string): string[] {
   return variants.filter((v) => v !== "");
 }
 
-export function matchComponent(item: IntelLite, component: MatchedComponent): ComponentMatch {
+/**
+ * P-03：版本影响判定的核心规则（组件扫描与问答入口共用同一实现，不引入第二套逻辑）。
+ * 输入只依赖「情报侧版本规则 + 待判产品/版本」；ecosystem/来源路径等扫描形态由
+ * matchComponent 包装层补齐，问答侧直接消费本函数的结构化结论。
+ */
+export interface VersionImpactInput {
+  /** 待判产品名（任意写法，内部归一化后与情报产品标识比对）。 */
+  name: string;
+  /** 待判具体版本字面量；空串按 unknown 处理（不猜版本）。 */
+  version: string;
+  /** true = version 只是范围约束下界，结论需带 semver 提示。 */
+  version_is_range_floor?: boolean;
+  /** 原始约束原文（缺省表示用户直接给出的具体版本）。 */
+  constraint_raw?: string;
+}
+
+export interface VersionImpactVerdict {
+  intel_id: string;
+  cve_ids: string[];
+  /** 情报侧产品标识（未归一化原文）。 */
+  product: string;
+  /** 情报给出的受影响版本规则原文（OR 连接；无规则为 unavailable）。 */
+  rule: string;
+  status: "affected" | "not_affected" | "unknown";
+  tested_version: string;
+  matched_ranges: string[];
+  /** 人类可读依据；unknown 时必须写明为什么无法判定。 */
+  reason: string;
+  /** 本地判定不携带厂商身份核实，恒为 true。 */
+  vendor_unverified: boolean;
+}
+
+export function assessVersionImpact(item: IntelLite, input: VersionImpactInput): VersionImpactVerdict {
   const base = {
-    component_key: componentKey(component.ecosystem, component.name),
-    ecosystem: component.ecosystem,
-    name: component.name,
-    version: component.version,
-    repo_path: component.repo_path,
-    source_file: component.source_file,
-    constraint_raw: component.constraint_raw,
-    version_is_range_floor: component.version_is_range_floor,
     intel_id: item.intel_id,
     cve_ids: [...item.cve_ids],
-    group_id: component.group_id ?? "adhoc",
-    vendor_unverified: true,
+    product: item.entities.product ?? "",
     rule: item.entities.version_range.length ? item.entities.version_range.join(" OR ") : "unavailable",
+    vendor_unverified: true,
   };
   const advisoryProduct = normalizeName(item.entities.product);
-  const variants = nameVariants(component.name);
+  const variants = nameVariants(input.name);
 
   if (!advisoryProduct || variants.length === 0) {
-    return { ...base, status: "unknown", tested_version: component.version, matched_ranges: [], reason: "缺少可比较的产品标识" };
+    return { ...base, status: "unknown", tested_version: input.version, matched_ranges: [], reason: "缺少可比较的产品标识" };
   }
   if (!variants.includes(advisoryProduct)) {
-    return { ...base, status: "not_affected", tested_version: component.version, matched_ranges: [], reason: "产品标识不匹配" };
+    return { ...base, status: "not_affected", tested_version: input.version, matched_ranges: [], reason: "产品标识不匹配" };
   }
-  if (!component.version) {
-    return { ...base, status: "unknown", tested_version: "", matched_ranges: [], reason: "组件未锁定具体版本（约束 " + (component.constraint_raw || "缺失") + "）" };
+  if (!input.version) {
+    return { ...base, status: "unknown", tested_version: "", matched_ranges: [], reason: "未提供具体版本（约束 " + (input.constraint_raw || "缺失") + "）" };
   }
-  const version = parseVersion(component.version);
+  const version = parseVersion(input.version);
   if (!version) {
-    return { ...base, status: "unknown", tested_version: component.version, matched_ranges: [], reason: "组件版本格式不受支持：" + component.version };
+    return { ...base, status: "unknown", tested_version: input.version, matched_ranges: [], reason: "版本格式不受支持：" + input.version };
   }
   const ranges = item.entities.version_range;
   if (ranges.length === 0) {
-    return { ...base, status: "unknown", tested_version: component.version, matched_ranges: [], reason: "情报未提供受影响版本规则" };
+    return { ...base, status: "unknown", tested_version: input.version, matched_ranges: [], reason: "情报未提供受影响版本规则" };
   }
 
   let unsupportedRule = false;
@@ -93,18 +117,41 @@ export function matchComponent(item: IntelLite, component: MatchedComponent): Co
   }
 
   if (matchedRanges.length > 0) {
-    const caveat = component.version_is_range_floor
-      ? "；版本取自范围约束下界（原约束 " + component.constraint_raw + "），实际安装版本可能更高"
+    const caveat = input.version_is_range_floor
+      ? "；版本取自范围约束下界（原约束 " + input.constraint_raw + "），实际安装版本可能更高"
       : "";
-    return { ...base, status: "affected", tested_version: component.version, matched_ranges: matchedRanges, reason: "组件版本满足受影响版本规则（厂商身份未经本地核实）" + caveat };
+    return { ...base, status: "affected", tested_version: input.version, matched_ranges: matchedRanges, reason: "版本满足受影响版本规则（厂商身份未经本地核实）" + caveat };
   }
   if (unsupportedRule) {
-    return { ...base, status: "unknown", tested_version: component.version, matched_ranges: [], reason: "至少一条版本规则无法解析，不能排除受影响" };
+    return { ...base, status: "unknown", tested_version: input.version, matched_ranges: [], reason: "至少一条版本规则无法解析，不能排除受影响" };
   }
-  if (component.version_is_range_floor) {
-    return { ...base, status: "unknown", tested_version: component.version, matched_ranges: [], reason: "版本为范围下界（原约束 " + component.constraint_raw + "），无法排除更高版本落入受影响区间" };
+  if (input.version_is_range_floor) {
+    return { ...base, status: "unknown", tested_version: input.version, matched_ranges: [], reason: "版本为范围下界（原约束 " + input.constraint_raw + "），无法排除更高版本落入受影响区间" };
   }
-  return { ...base, status: "not_affected", tested_version: component.version, matched_ranges: [], reason: "组件版本不在已解析的受影响版本范围内" };
+  return { ...base, status: "not_affected", tested_version: input.version, matched_ranges: [], reason: "版本不在已解析的受影响版本范围内" };
+}
+
+export function matchComponent(item: IntelLite, component: MatchedComponent): ComponentMatch {
+  const core = assessVersionImpact(item, component);
+  return {
+    component_key: componentKey(component.ecosystem, component.name),
+    ecosystem: component.ecosystem,
+    name: component.name,
+    version: component.version,
+    repo_path: component.repo_path,
+    source_file: component.source_file,
+    constraint_raw: component.constraint_raw,
+    version_is_range_floor: component.version_is_range_floor,
+    intel_id: item.intel_id,
+    cve_ids: [...item.cve_ids],
+    group_id: component.group_id ?? "adhoc",
+    vendor_unverified: true,
+    rule: core.rule,
+    status: core.status,
+    tested_version: core.tested_version,
+    matched_ranges: core.matched_ranges,
+    reason: core.reason,
+  };
 }
 
 /** 产品名索引：归一化产品名 → 情报列表（避免全量组件×全量情报的双重循环）。 */

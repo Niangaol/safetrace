@@ -41,6 +41,7 @@ function templateOnlyOptions(options: StepFunAnswerOptions): SynthesizeOptions {
     ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.injectionGuard !== undefined ? { injectionGuard: options.injectionGuard } : {}),
     ...(options.source_conflicts !== undefined ? { source_conflicts: options.source_conflicts } : {}),
+    ...(options.version_impact !== undefined ? { version_impact: options.version_impact } : {}),
   };
 }
 

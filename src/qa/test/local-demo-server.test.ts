@@ -136,6 +136,44 @@ test("本地演示 API：P-05 多源分值冲突显式进问答答案（不压�
   }
 });
 
+test("本地演示 API：P-03 版本影响结构化查询（确定性规则，非相似度/模型）", async () => {
+  const affected = await fetch(base + "/api/v1/qa/version-impact", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ product: "log4j", version: "2.14.1", cve_id: "CVE-2021-44228" }),
+  });
+  assert.equal(affected.status, 200);
+  const hit = await affected.json() as { status: string; rule: string; matched_ranges: string[]; reason: string; vendor_unverified: boolean; data_mode: string };
+  assert.equal(hit.data_mode, "fixture");
+  assert.equal(hit.status, "affected");
+  assert.deepEqual(hit.matched_ranges, ["<=2.14.1"]);
+  assert.ok(hit.rule.includes("<=2.14.1"));
+  assert.equal(hit.vendor_unverified, true);
+  const outside = await fetch(base + "/api/v1/qa/version-impact", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ product: "Spring Framework", version: "5.3.20" }),
+  });
+  const miss = await outside.json() as { status: string };
+  assert.equal(miss.status, "unknown", "fixture 无 Spring 情报 → 无法判定（不等于安全）");
+  const bad = await fetch(base + "/api/v1/qa/version-impact", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ product: "log4j" }),
+  });
+  assert.equal(bad.status, 400, "version 必填");
+});
+
+test("本地演示 API：P-03 问答链路带产品+版本槽位时答案含确定性版本判定", async () => {
+  const response = await fetch(base + "/api/v1/qa/chat", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ question: "Log4Shell 2.14.1 是否受 CVE-2021-44228 影响？", stream: true }),
+  });
+  assert.equal(response.status, 200);
+  const text = await response.text();
+  assert.match(text, /## 版本影响判定（确定性规则）/, "答案必须含确定性版本判定段");
+  assert.ok(text.includes("**受影响**"), "判定结论必须显式");
+  assert.ok(text.includes("<=2.14.1"), "命中区间必须可见");
+  assert.match(text, /P-03 版本影响判定/, "推理链须记录判定来自确定性规则");
+});
+
 test("采集诊断 API：无持久化 SQLite 时明确说明 fixture 不是真采集", async () => {
   const response = await fetch(base + "/api/v1/ingest/diagnostics");
   assert.equal(response.status, 200);

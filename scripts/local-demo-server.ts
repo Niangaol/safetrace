@@ -15,6 +15,7 @@ import type { EnrichmentOutcome } from "@safetrace/enrich";
 import { runIngestOnce } from "@safetrace/ingest";
 import { runEnrichment } from "@safetrace/enrich";
 import { buildRetrievalRequest } from "../src/qa/src/cli.js";
+import { answerVersionImpact } from "../src/qa/src/version-impact.js";
 import { classifyIntent } from "../src/qa/src/q1-intent.js";
 import { MemoryIndex, indexChunks, readFixtureChunks } from "../src/qa/src/q2-retrieval.js";
 
@@ -85,7 +86,7 @@ function fail(res: ServerResponse, status: number, message: string): void {
   sendJson(res, status, { error: { message }, data_mode: MODE });
 }
 
-async function bodyQuestion(req: import("node:http").IncomingMessage): Promise<string> {
+async function jsonBody(req: import("node:http").IncomingMessage): Promise<unknown> {
   if (!(req.headers["content-type"] ?? "").startsWith("application/json")) throw new Error("请求必须是 JSON");
   const parts: Buffer[] = [];
   let length = 0;
@@ -95,10 +96,13 @@ async function bodyQuestion(req: import("node:http").IncomingMessage): Promise<s
     if (length > MAX_BODY) throw new Error("问题超过 16KB 上限");
     parts.push(buf);
   }
-  let parsed: unknown;
-  try { parsed = JSON.parse(Buffer.concat(parts).toString("utf8")); }
+  try { return JSON.parse(Buffer.concat(parts).toString("utf8")) as unknown; }
   catch { throw new Error("请求体不是合法 JSON"); }
-  const question = (parsed as { question?: unknown } | null)?.question;
+}
+
+async function bodyQuestion(req: import("node:http").IncomingMessage): Promise<string> {
+  const parsed = (await jsonBody(req)) as { question?: unknown } | null;
+  const question = parsed?.question;
   if (typeof question !== "string" || !question.trim() || question.length > 2000) {
     throw new Error("question 必须为 1–2000 字的非空字符串");
   }
@@ -245,6 +249,19 @@ export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPat
         if (!item) { fail(res, 404, "情报不存在"); return; }
         sendJson(res, 200, match[2] ? evidenceView(data, item) : itemView(data, item)); return;
       }
+      // P-03：结构化查询入口——「某产品某版本是否受影响」走确定性规则，不靠相似度/模型
+      if (req.method === "POST" && path === "/api/v1/qa/version-impact") {
+        let payload: unknown;
+        try { payload = await jsonBody(req); }
+        catch (error) { fail(res, 400, (error as Error).message); return; }
+        const body = (payload ?? {}) as { product?: unknown; version?: unknown; cve_id?: unknown };
+        const product = typeof body.product === "string" ? body.product.trim() : "";
+        const version = typeof body.version === "string" ? body.version.trim() : "";
+        const cveId = typeof body.cve_id === "string" ? body.cve_id.trim() : "";
+        if (!product || !version) { fail(res, 400, "product 与 version 必填（cve_id 可选）"); return; }
+        sendJson(res, 200, { data_mode: MODE, ...answerVersionImpact(data.intel, { product, version, ...(cveId ? { cve_id: cveId } : {}) }) });
+        return;
+      }
       if (req.method === "POST" && path === "/api/v1/qa/chat") {
         let question: string;
         try { question = await bodyQuestion(req); }
@@ -278,6 +295,14 @@ export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPat
           sendSse(res, { event: "stage", stage: "plan", intent: plan.intents[0] ?? null,
             needs_clarify: plan.needs_clarify, classifier_source: plan.classifier_source ?? "rules" });
           const retrievalRequest = buildRetrievalRequest(question, plan, trace);
+          // P-03：问题带产品+版本槽位时，用确定性规则判「是否受影响」并随答案展示（含依据）
+          const versionImpact = plan.slots.products.length > 0 && plan.slots.versions.length > 0
+            ? answerVersionImpact(data.intel, {
+                product: plan.slots.products[0]!,
+                version: plan.slots.versions[0]!,
+                ...(plan.slots.cve_ids.length > 0 ? { cve_id: plan.slots.cve_ids[0]! } : {}),
+              })
+            : undefined;
           const q1LineageRows = await data.bus.readLineage(trace, 0, 1000);
           let retrieval = await data.index.search(retrievalRequest, { parent_lineage_ids: q1LineageRows.map((row) => row.lineage_id) });
           sendSse(res, { event: "stage", stage: "retrieve", hit: retrieval.chunks.length });
@@ -306,6 +331,7 @@ export function createLocalDemoServer(data: Dataset, options: { diagnosticsDbPat
             provider: answerProvider, modelId: answerModelId, apiKeyConfigured: Boolean(process.env.STEP_PLAN_API_KEY),
             ...(data.gateway ? { client: data.gateway } : {}),
             source_conflicts: conflictsForEvidence(data, retrieval),
+            ...(versionImpact ? { version_impact: versionImpact } : {}),
           });
           if (answerProvider === "stepplan" && generated.answer_mode !== "template") llmLayers.push("q4_answer");
           if (generated.fallback_reason) layerFallbacks.push("Q4: " + generated.fallback_reason);

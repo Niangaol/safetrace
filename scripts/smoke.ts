@@ -25,6 +25,7 @@ import {
   AGENT_ROLES,
   MemoryIndex,
   SelfHealAgent,
+  answerVersionImpact,
   classifyIntent,
   indexChunks,
   readFixtureChunks,
@@ -417,6 +418,36 @@ async function main(): Promise<number> {
       });
     } catch { p05Rejected = true; }
     check(p05Rejected, "同值无分歧的冲突条目 fail-closed 抛错（不静默丢弃）");
+  }
+
+  // ---------- 12) P-03 版本影响确定性入口（规则同资产线，不进相似度/模型） ----------
+  console.log("\n[12] P-03 版本影响（确定性规则判定 + 结构化查询）");
+  {
+    // ① 规则入口：fixture 情报（Log4j <=2.14.1 等）判定 2.14.1 受影响、区间外不能排除即 unknown
+    const p03Items = (await store.read<IntelItem>("intel.items")).map((e) => e.payload);
+    const p03Hit = answerVersionImpact(p03Items, { product: "log4j", version: "2.14.1", cve_id: "CVE-2021-44228" });
+    check(p03Hit.status === "affected" && p03Hit.matched_ranges.includes("<=2.14.1"),
+      "log4j 2.14.1 → affected 且命中区间 <=2.14.1（确定性规则）");
+    const p03Unknown = answerVersionImpact(p03Items, { product: "log4j", version: "2.16.0" });
+    check(p03Unknown.status === "unknown" && /不能排除受影响/.test(p03Unknown.reason),
+      "规则含不可解析项时不过度结论：2.16.0 → unknown 且说明原因（禁硬判 not_affected）");
+    const p03Absent = answerVersionImpact(p03Items, { product: "nginx", version: "1.0.0" });
+    check(p03Absent.status === "unknown" && p03Absent.candidates === 0,
+      "无该产品情报 → unknown（无法判定不等于安全）");
+    // ② 进答案：问题带产品+版本槽位时，正文/推理链展示判定与依据
+    const p03Turn: QueryTurn = { session_id: "sess_smoke_p03", turn_id: "turn_p03", text: "Log4Shell 2.14.1 是否受 CVE-2021-44228 影响？" };
+    const p03Plan = classifyIntent(p03Turn);
+    check(p03Plan.slots.products.length > 0 && p03Plan.slots.versions.length > 0,
+      "Q1 抽出产品与版本槽位（" + JSON.stringify(p03Plan.slots.products) + " " + JSON.stringify(p03Plan.slots.versions) + "）");
+    const p03Evidence = await engine.search({ query_id: "q_smoke_p03", query_text: p03Plan.rewrite_text, top_k: 5, trace_id: "tr_smoke_p03", schema_version: "1.0" });
+    const p03Answer = await synthesizeAnswer(p03Turn.text, p03Plan, p03Evidence, {
+      session_id: p03Turn.session_id, turn_id: p03Turn.turn_id, bus,
+      version_impact: answerVersionImpact(p03Items, { product: p03Plan.slots.products[0]!, version: p03Plan.slots.versions[0]!, cve_id: p03Plan.slots.cve_ids[0] }),
+    });
+    check(p03Answer.text_md.includes("## 版本影响判定（确定性规则）") && p03Answer.text_md.includes("**受影响**"),
+      "判定段与结论进答案正文");
+    check(p03Answer.reasoning_chain.some((s) => s.includes("P-03 版本影响判定") && s.includes("非相似度/模型生成")),
+      "推理链记录判定来自确定性规则");
   }
 
   console.log("\n== 冒烟结束 ==");

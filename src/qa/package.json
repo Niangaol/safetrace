@@ -5,5 +5,5 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "dependencies": { "@safetrace/shared": "*", "@safetrace/gateway": "*" }
+  "dependencies": { "@safetrace/shared": "*", "@safetrace/gateway": "*", "@safetrace/enrich": "*", "@safetrace/assets": "*" }
 }

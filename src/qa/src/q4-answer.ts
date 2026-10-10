@@ -7,6 +7,8 @@
  */
 import { degrade, nowIso, parseLoose, screenPromptInjection, sha256, sha256Json } from "@safetrace/shared";
 import type { Answer, EventBus, InjectionFlag, InjectionGuard, RetrievalResponse, SourceConflict, StaleWarning } from "@safetrace/shared";
+import { versionImpactStatusLabel } from "./version-impact.js";
+import type { VersionImpactAnswer } from "./version-impact.js";
 import type { QueryPlan } from "./q1-intent.js";
 
 /**
@@ -39,6 +41,11 @@ export interface SynthesizeOptions {
    * 禁止把冲突压成单一结论；缺省 = 本轮未提供冲突信息，不当当"无冲突"。
    */
   source_conflicts?: readonly SourceConflict[];
+  /**
+   * P-03：版本影响判定（确定性规则产出，问答侧入口）。提供即在答案中显式展示
+   * 判定结果与依据（含拒答路径）；缺省 = 本轮未做版本判定。
+   */
+  version_impact?: VersionImpactAnswer;
 }
 
 /** 没有独立 reranker 时，以当前可用的 dense/sparse 召回分做保守拒答门槛。 */
@@ -61,6 +68,8 @@ interface Ctx {
   injection: InjectionGuard;
   /** P-05：归一化后的多源冲突（可能为空数组 = 未提供）。 */
   conflicts: SourceConflict[];
+  /** P-03：版本影响判定（未提供为 undefined）。 */
+  versionImpact?: VersionImpactAnswer;
 }
 
 /** C-04 默认时效阈值（天）。A-05 将按意图细化；此处保证"过龄/未知"必须显式可见。 */
@@ -164,6 +173,26 @@ export function normalizeSourceConflicts(input: readonly SourceConflict[] | unde
   return out;
 }
 
+/** P-03：版本影响判定的用户可见段落（确定性规则；进正文）+ 推理链条目。 */
+function renderVersionImpact(vi: VersionImpactAnswer | undefined): { section: string[]; chainEntry: string | null } {
+  if (!vi) return { section: [], chainEntry: null };
+  const label = versionImpactStatusLabel(vi.status);
+  const lines: string[] = ["## 版本影响判定（确定性规则）"];
+  lines.push(
+    "产品 " + vi.product + " 版本 " + (vi.tested_version || "(未提供)") +
+    (vi.cve_id ? "（" + vi.cve_id + "）" : "") + "：**" + label + "**" +
+    (vi.intel_id ? "（依据情报 " + vi.intel_id + "，评估 " + vi.candidates + " 条）" : ""),
+  );
+  lines.push("- 判定规则：" + vi.rule);
+  if (vi.matched_ranges.length > 0) lines.push("- 命中区间：" + vi.matched_ranges.join("；"));
+  lines.push("- 依据说明：" + vi.reason);
+  if (vi.vendor_unverified) lines.push("- 厂商身份未经本地核实；无法判定不等于安全。");
+  const chainEntry =
+    "P-03 版本影响判定（确定性规则，非相似度/模型生成）：" + vi.product + " " +
+    (vi.tested_version || "(未提供)") + " → " + label + "（" + vi.reason + "）";
+  return { section: lines, chainEntry };
+}
+
 /** P-05：冲突的用户可见段落（进正文）+ 推理链条目。空数组返回空段落。 */
 function renderConflicts(conflicts: readonly SourceConflict[]): { section: string[]; chainEntry: string | null } {
   if (conflicts.length === 0) return { section: [], chainEntry: null };
@@ -242,6 +271,9 @@ function buildAbstain(
   const conflictView = renderConflicts(ctx.conflicts);
   for (const line of conflictView.section) lines.push(line);
   if (conflictView.chainEntry) chain.push(conflictView.chainEntry);
+  const impactView = renderVersionImpact(ctx.versionImpact);
+  for (const line of impactView.section) lines.push(line);
+  if (impactView.chainEntry) chain.push(impactView.chainEntry);
   lines.push("## 推理链");
   chain.forEach((s, i) => lines.push((i + 1) + ". " + s));
   lines.push("## 置信度");
@@ -302,6 +334,9 @@ function buildAnswer(
   const conflictView = renderConflicts(ctx.conflicts);
   for (const line of conflictView.section) lines.push(line);
   if (conflictView.chainEntry) chain.push(conflictView.chainEntry);
+  const impactView = renderVersionImpact(ctx.versionImpact);
+  for (const line of impactView.section) lines.push(line);
+  if (impactView.chainEntry) chain.push(impactView.chainEntry);
   lines.push("## 推理链");
   chain.forEach((s, i) => lines.push((i + 1) + ". " + s));
   lines.push("## 置信度");
@@ -369,6 +404,7 @@ export async function synthesizeAnswer(
       stale: assessStaleness(evidence, opts.now ?? new Date(), opts.stale_after_days ?? DEFAULT_STALE_THRESHOLD_DAYS),
       injection: assessInjectionGuard(question, evidence, opts),
       conflicts: normalizeSourceConflicts(opts.source_conflicts),
+      ...(opts.version_impact ? { versionImpact: opts.version_impact } : {}),
     };
     const reasons: string[] = [];
     if (evidence.chunks.length === 0) reasons.push("检索没有返回任何证据块");

@@ -35,7 +35,7 @@ test("not_affected：精确锁定版本在区间外", () => {
 test("unknown：组件未锁定具体版本", () => {
   const match = matchComponent(item("vue", ["<3.5.0"]), comp("vue", "", "*", true));
   assert.equal(match.status, "unknown");
-  assert.match(match.reason, /未锁定具体版本/);
+  assert.match(match.reason, /未提供具体版本/);
 });
 
 test("unknown：版本为范围下界且未命中——不猜实际版本", () => {
