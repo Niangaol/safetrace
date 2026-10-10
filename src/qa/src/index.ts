@@ -15,6 +15,7 @@ export * from "./orchestrator/runtime.js";
 export * from "./orchestrator/compile.js";
 export * from "./orchestrator/taskgraph-machine.js";
 export * from "./ladder/decision-ladder.js";
+export * from "./ladder/human-queue.js";
 export * from "./ladder/stepfun-decision.js";
 export * from "./ladder/jev-local.js";
 export * from "./ladder/openjev-decision.js";

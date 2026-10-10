@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { Envelope, Topic } from "./envelope.js";
-import type { QualityVerdict } from "./types.js";
+import type { DecisionKind, QualityVerdict, TypedQuestion } from "./types.js";
 
 export type LineageStatus = "success" | "degraded" | "rejected" | "review" | "failed";
 export interface LineageArtifactRef { kind: string; id: string; sha256?: string; url?: string }
@@ -88,6 +88,32 @@ export interface QuarantineRecord {
  * spec 含函数不可序列化，故只持久化「进度 + 状态快照」；resume 时由调用方提供同一 spec。
  * 恢复值不落库——它由 resume 调用方当场给出（resume(threadId, value) 的 value）。
  */
+/**
+ * A-02：人工工单（四层阶梯全链未决时入队；契约 decided_by=human 的落地载体）。
+ * 隐私边界：只落 typed questions（结构信息）与轨迹 id，**私有 state 一律不落库**；
+ * 人工决策经 decision.replies（decided_by=human）回流，reply_event_id 关联可回放。
+ */
+export type HumanTicketStatus = "pending" | "claimed" | "resolved";
+
+export interface HumanTicket {
+  ticket_id: string;
+  decision_id: string;
+  trace_id: string;
+  kind: DecisionKind;
+  /** typed questions（结构信息；用于人工侧校验决策形状）。 */
+  questions: TypedQuestion[];
+  status: HumanTicketStatus;
+  /** 入队原因（阶梯各层弃权/失败摘要；不含私有 state 内容）。 */
+  reason: string;
+  created_at: string;
+  claimed_by?: string;
+  claimed_at?: string;
+  resolved_by?: string;
+  resolved_at?: string;
+  /** 人工决策 reply 的 event_id（decision.replies）；resolved 时必填。 */
+  reply_event_id?: string;
+}
+
 export interface ThreadCheckpoint {
   thread_id: string;
   trace_id: string;
@@ -149,6 +175,15 @@ export interface EventStore {
   loadThreadCheckpoint(threadId: string): Promise<ThreadCheckpoint | undefined>;
   /** A-01：全部线程检查点（运维查看挂起/已完成线程）。 */
   threadCheckpoints(): Promise<ThreadCheckpoint[]>;
+  /** A-02：人工工单入队（幂等按 ticket_id；已存在不覆盖，返回是否新入队）。 */
+  enqueueHumanTicket(ticket: HumanTicket): Promise<boolean>;
+  /** A-02：接单（pending → claimed；已 claim/resolve 返回 false）。 */
+  claimHumanTicket(ticketId: string, claimant: string, claimedAt: string): Promise<boolean>;
+  /** A-02：人工决并销单（claimed/pending → resolved；重复决返回 false）。 */
+  resolveHumanTicket(ticketId: string, resolver: string, resolvedAt: string, replyEventId: string): Promise<boolean>;
+  getHumanTicket(ticketId: string): Promise<HumanTicket | undefined>;
+  /** A-02：工单列表（按状态过滤 + 时间序；A1 看板与运维 CLI 消费）。 */
+  listHumanTickets(status?: HumanTicket["status"]): Promise<HumanTicket[]>;
   appendLineage(record: LineageRecord): Promise<boolean>;
   readLineage(traceId: string, offset?: number, limit?: number): Promise<LineageRecord[]>;
   getLastGoodPageSnapshot(sourceUrl: string): Promise<StoredPageSnapshot | undefined>;
@@ -250,6 +285,21 @@ CREATE TABLE IF NOT EXISTS machine_threads (
   state            TEXT NOT NULL,
   status           TEXT NOT NULL,
   updated_at       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS human_tickets (
+  ticket_id     TEXT PRIMARY KEY,
+  decision_id   TEXT NOT NULL,
+  trace_id      TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  questions     TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  reason        TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  claimed_by    TEXT,
+  claimed_at    TEXT,
+  resolved_by   TEXT,
+  resolved_at   TEXT,
+  reply_event_id TEXT
 );
 `;
 
@@ -528,6 +578,60 @@ export class SqliteEventStore implements EventStore {
     }));
   }
 
+  async enqueueHumanTicket(ticket: HumanTicket): Promise<boolean> {
+    const existing = this.db.prepare("SELECT ticket_id FROM human_tickets WHERE ticket_id = ?").get(ticket.ticket_id);
+    if (existing) return false;
+    this.db
+      .prepare("INSERT INTO human_tickets (ticket_id, decision_id, trace_id, kind, questions, status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(ticket.ticket_id, ticket.decision_id, ticket.trace_id, ticket.kind, JSON.stringify(ticket.questions), ticket.status, ticket.reason, ticket.created_at);
+    return true;
+  }
+
+  async claimHumanTicket(ticketId: string, claimant: string, claimedAt: string): Promise<boolean> {
+    const row = this.db.prepare("SELECT status FROM human_tickets WHERE ticket_id = ?").get(ticketId) as { status: HumanTicketStatus } | undefined;
+    if (!row || row.status !== "pending") return false;
+    this.db
+      .prepare("UPDATE human_tickets SET status = ?, claimed_by = ?, claimed_at = ? WHERE ticket_id = ?")
+      .run("claimed", claimant, claimedAt, ticketId);
+    return true;
+  }
+
+  async resolveHumanTicket(ticketId: string, resolver: string, resolvedAt: string, replyEventId: string): Promise<boolean> {
+    const row = this.db.prepare("SELECT status FROM human_tickets WHERE ticket_id = ?").get(ticketId) as { status: HumanTicketStatus } | undefined;
+    if (!row || row.status === "resolved") return false;
+    this.db
+      .prepare("UPDATE human_tickets SET status = ?, resolved_by = ?, resolved_at = ?, reply_event_id = ? WHERE ticket_id = ?")
+      .run("resolved", resolver, resolvedAt, replyEventId, ticketId);
+    return true;
+  }
+
+  async getHumanTicket(ticketId: string): Promise<HumanTicket | undefined> {
+    return this.humanTicketRow(this.db.prepare("SELECT * FROM human_tickets WHERE ticket_id = ?").get(ticketId) as Record<string, unknown> | undefined);
+  }
+
+  async listHumanTickets(status?: HumanTicket["status"]): Promise<HumanTicket[]> {
+    const rows = status
+      ? this.db.prepare("SELECT * FROM human_tickets WHERE status = ? ORDER BY created_at").all(status) as Array<Record<string, unknown>>
+      : this.db.prepare("SELECT * FROM human_tickets ORDER BY created_at").all() as Array<Record<string, unknown>>;
+    return rows.map((r) => this.humanTicketRow(r)!).filter((t): t is HumanTicket => Boolean(t));
+  }
+
+  private humanTicketRow(r: Record<string, unknown> | undefined): HumanTicket | undefined {
+    if (!r) return undefined;
+    return {
+      ticket_id: r.ticket_id as string,
+      decision_id: r.decision_id as string,
+      trace_id: r.trace_id as string,
+      kind: r.kind as DecisionKind,
+      questions: JSON.parse(r.questions as string) as TypedQuestion[],
+      status: r.status as HumanTicketStatus,
+      reason: r.reason as string,
+      created_at: r.created_at as string,
+      ...(r.claimed_by !== null && r.claimed_by !== undefined ? { claimed_by: r.claimed_by as string, claimed_at: r.claimed_at as string } : {}),
+      ...(r.resolved_by !== null && r.resolved_by !== undefined ? { resolved_by: r.resolved_by as string, resolved_at: r.resolved_at as string, reply_event_id: r.reply_event_id as string } : {}),
+    };
+  }
+
   close(): void {
     this.db.close();
   }
@@ -680,6 +784,40 @@ export class MemoryEventStore implements EventStore {
 
   async threadCheckpoints(): Promise<ThreadCheckpoint[]> {
     return [...this.threads.values()].map((row) => ({ ...row, executed: [...row.executed], state: structuredClone(row.state) }));
+  }
+
+  private tickets = new Map<string, HumanTicket>();
+
+  async enqueueHumanTicket(ticket: HumanTicket): Promise<boolean> {
+    if (this.tickets.has(ticket.ticket_id)) return false;
+    this.tickets.set(ticket.ticket_id, structuredClone(ticket));
+    return true;
+  }
+
+  async claimHumanTicket(ticketId: string, claimant: string, claimedAt: string): Promise<boolean> {
+    const row = this.tickets.get(ticketId);
+    if (!row || row.status !== "pending") return false;
+    this.tickets.set(ticketId, { ...row, status: "claimed", claimed_by: claimant, claimed_at: claimedAt });
+    return true;
+  }
+
+  async resolveHumanTicket(ticketId: string, resolver: string, resolvedAt: string, replyEventId: string): Promise<boolean> {
+    const row = this.tickets.get(ticketId);
+    if (!row || row.status === "resolved") return false;
+    this.tickets.set(ticketId, { ...row, status: "resolved", resolved_by: resolver, resolved_at: resolvedAt, reply_event_id: replyEventId });
+    return true;
+  }
+
+  async getHumanTicket(ticketId: string): Promise<HumanTicket | undefined> {
+    const row = this.tickets.get(ticketId);
+    return row ? structuredClone(row) : undefined;
+  }
+
+  async listHumanTickets(status?: HumanTicket["status"]): Promise<HumanTicket[]> {
+    return [...this.tickets.values()]
+      .filter((t) => status === undefined || t.status === status)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map((t) => structuredClone(t));
   }
 
   close(): void { /* 内存实现无资源可释放 */ }

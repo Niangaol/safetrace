@@ -8,7 +8,7 @@
  * - escalation_trace 记录完整阶梯路径（含每层耗时与失败原因）。
  */
 import { degrade, nowIso, sha256Json } from "@safetrace/shared";
-import type { DecisionReply, DecisionRequest, EventBus, FallbackEvent } from "@safetrace/shared";
+import type { DecisionReply, DecisionRequest, EventBus, FallbackEvent, HumanTicket, TypedQuestion } from "@safetrace/shared";
 
 /** 阶梯层名。tool 层的 decided_by 记 rule_fallback（契约无 tool 通道）。 */
 export type LadderLayer = "tool" | "rule" | "llm" | "human";
@@ -33,6 +33,13 @@ export interface LadderResult {
   escalation_trace: LadderAttempt[];
   /** 阶梯是否发生过下坠（冒烟/审计断言用）。 */
   escalated: boolean;
+  /** A-02：全链未决时入队的人工工单 id；已决时为 undefined。 */
+  ticket_id?: string;
+}
+
+/** A-02：人工工单存储（shared EventStore 的结构性子集；测试可用内存实现）。 */
+export interface HumanTicketStore {
+  enqueueHumanTicket(ticket: HumanTicket): Promise<boolean>;
 }
 
 /** 工具层：调用方已备好的确定性结果。 */
@@ -53,6 +60,8 @@ export interface LadderOptions {
   human?: HumanResolver;
   bus?: EventBus;
   onFallback?: (event: FallbackEvent) => void | Promise<void>;
+  /** A-02：全链未决时入队人工工单；缺省只挂起不派单（显式告知无队列）。 */
+  ticketStore?: HumanTicketStore;
 }
 
 const SCHEMA_VERSION = "1.1";
@@ -64,14 +73,18 @@ export function decidedByFor(layer: LadderLayer): DecisionReply["decided_by"] {
   return "rule_fallback";
 }
 
-function decisionValidationError(req: DecisionRequest, decision: DecisionReply["decision"]): string | undefined {
+/**
+ * 决策形状校验（人工工单侧复用同一口径：人工决策也要过契约校验，不许绕过的自由文本）。
+ * 返回 undefined = 合法；否则为可读的非法原因。
+ */
+export function validateDecision(questions: TypedQuestion[], decision: DecisionReply["decision"]): string | undefined {
   const record = decision as Record<string, unknown>;
   if (Object.keys(record).some((key) => !["choice", "score", "abstain"].includes(key))) return "decision contains unsupported fields";
   if (record.abstain === true) {
     return record.choice === undefined && record.score === undefined ? undefined : "abstain cannot include choice or score";
   }
-  if (req.questions.length !== 1) return "single-decision reply requires exactly one typed question";
-  const question = req.questions[0]!;
+  if (questions.length !== 1) return "single-decision reply requires exactly one typed question";
+  const question = questions[0]!;
   if (record.abstain !== undefined && record.abstain !== false) return "abstain must be boolean";
   if (question.type === "choice") {
     if (typeof record.choice !== "string" || !question.options?.includes(record.choice)) return "choice must exactly match a typed option";
@@ -154,7 +167,7 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
         ? raw
         : { decision: raw as DecisionReply["decision"], calibrated_prob: typeof raw.score === "number" ? raw.score : (raw.choice ? 1 : 0) };
       if (!Number.isFinite(resolution.calibrated_prob) || resolution.calibrated_prob < 0 || resolution.calibrated_prob > 1) throw new Error("calibrated_prob must be within 0..1");
-      const invalid = decisionValidationError(req, resolution.decision);
+      const invalid = validateDecision(req.questions, resolution.decision);
       if (invalid) throw new Error("结构化决策输出未通过验证：" + invalid);
       if (resolution.decision.abstain === true) {
         trace.push({ layer, status: "abstained", reason: layer + " 层显式 abstain", latency_ms: Date.now() - t0 });
@@ -182,6 +195,21 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
       schema_version: SCHEMA_VERSION,
     };
     const eventId = await publishReply(reply);
+    // A-02：全链未决 → 入队人工工单（幂等按 ticket_id）。缺省不派单时显式记录，不假装有人接。
+    const ticketId = "ticket_" + req.decision_id;
+    let queued: boolean | undefined;
+    if (opts.ticketStore) {
+      queued = await opts.ticketStore.enqueueHumanTicket({
+        ticket_id: ticketId,
+        decision_id: req.decision_id,
+        trace_id: req.trace_id,
+        kind: req.kind,
+        questions: req.questions,
+        status: "pending",
+        reason: trace.map((a) => a.layer + ":" + a.status).join("; "),
+        created_at: startedAt,
+      });
+    }
     await opts.bus?.recordLineage({
       trace_id: req.trace_id,
       parent_lineage_ids: [],
@@ -191,10 +219,18 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
       status: "review",
       started_at: startedAt,
       input_refs: [{ kind: "DecisionRequest", id: req.decision_id, sha256: sha256Json(req) }],
-      output_refs: [{ kind: "DecisionReply", id: reply.decision_id, sha256: sha256Json(reply) }],
-      decision: { reason: "ladder unresolved; await human review", review_required: true },
+      output_refs: [
+        { kind: "DecisionReply", id: reply.decision_id, sha256: sha256Json(reply) },
+        ...(opts.ticketStore ? [{ kind: "HumanTicket", id: ticketId, sha256: sha256Json({ ticket_id: ticketId, decision_id: req.decision_id, kind: req.kind, status: "pending" }) }] : []),
+      ],
+      decision: {
+        reason: opts.ticketStore
+          ? "ladder unresolved; human ticket queued (" + (queued ? "new" : "idempotent replay") + ")"
+          : "ladder unresolved; await human review (no ticket store attached)",
+        review_required: true,
+      },
     });
-    return { reply, escalation_trace: trace, escalated: true };
+    return { reply, escalation_trace: trace, escalated: true, ...(opts.ticketStore ? { ticket_id: ticketId } : {}) };
   };
 
   const toolDecision = await attemptLayer("tool", opts.tool);

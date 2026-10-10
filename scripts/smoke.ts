@@ -27,12 +27,14 @@ import {
   MemoryIndex,
   SelfHealAgent,
   answerVersionImpact,
+  claimHumanTicket,
   classifyIntent,
+  resolveHumanTicket,
   resumeMachine,
+  runDecisionLadder,
   runMachine,
   indexChunks,
   readFixtureChunks,
-  runDecisionLadder,
   runTaskGraph,
   synthesizeAnswer,
   type TaskGraph,
@@ -488,6 +490,59 @@ async function main(): Promise<number> {
     try { await resumeMachine(a01First.thread_id, a01Spec, { store: threadStore, config: a01Config, resumeValue: 1 }); } catch { a01Rejected += 1; }
     check(a01Rejected === 2, "completed 线程重复 invoke/resume 均显式抛错（fail-closed）");
     threadStore.close();
+  }
+
+  // ---------- 14) A-02 人工工单队列（转人工后有人接） ----------
+  console.log("\n[14] A-02 人工工单队列（转人工后有人接）");
+  {
+    const ticketStore = new Store();
+    const ticketBus = new EventBus({ store: ticketStore });
+    const hqReq: DecisionRequest = {
+      decision_id: "dec_smoke_ticket",
+      kind: "q1_route",
+      state: { question: "冒烟人工队列", private_marker: "do-not-store" },
+      questions: [{ q_id: "q1", type: "choice", options: ["impact_range", "remediation"] }],
+      trace_id: "tr_smoke_ticket",
+      schema_version: "1.1",
+    };
+    // ① 全链未决 → 入队（幂等；工单不落私有 state）
+    const hqPending = await runDecisionLadder(hqReq, { bus: ticketBus, ticketStore: ticketStore });
+    check(hqPending.reply.decided_by === "human" && hqPending.ticket_id === "ticket_dec_smoke_ticket",
+      "全链未决：abstain + decided_by=human + 工单入队");
+    const hqTicket = await ticketStore.getHumanTicket(hqPending.ticket_id!);
+    check(hqTicket?.status === "pending" && !JSON.stringify(hqTicket).includes("do-not-store"),
+      "工单 pending 且不落私有 state（只存 questions 与轨迹 id）");
+    await runDecisionLadder(hqReq, { bus: ticketBus, ticketStore: ticketStore });
+    check((await ticketStore.listHumanTickets()).length === 1, "同一 decision_id 重放不产生重复工单（幂等）");
+    // ② 接单（重复接单被拒）
+    const hqClaimed = await claimHumanTicket(ticketStore, hqPending.ticket_id!, "reviewer-smoke");
+    check(hqClaimed.status === "claimed" && hqClaimed.claimed_by === "reviewer-smoke", "接单成功（pending → claimed）");
+    let hqDoubleClaim = false;
+    try { await claimHumanTicket(ticketStore, hqPending.ticket_id!, "reviewer-other"); } catch { hqDoubleClaim = true; }
+    check(hqDoubleClaim, "重复接单显式抛错（不静默改状态）");
+    // ③ 人工决单：契约校验 + decision.replies 回流 + 销单
+    const hqResolved = await resolveHumanTicket({
+      store: ticketStore, bus: ticketBus, ticket_id: hqPending.ticket_id!, resolver_id: "reviewer-smoke",
+      decision: { choice: "remediation" }, rationale: "冒烟人工复核：按修复路径处置",
+    });
+    check(hqResolved.reply.decided_by === "human" && hqResolved.reply.decision.choice === "remediation",
+      "人工决策以 decided_by=human 回流（契约通道）");
+    check(hqResolved.ticket.status === "resolved" && hqResolved.ticket.reply_event_id !== undefined,
+      "工单销单并关联 reply event_id（可回放）");
+    const hqReplies = await ticketStore.read<DecisionReply>("decision.replies");
+    check(hqReplies.some((e) => e.payload.decided_by === "human" && e.payload.decision.choice === "remediation"),
+      "decision.replies 可 replay 到人工决策");
+    const hqLineage = await ticketStore.readLineage("tr_smoke_ticket");
+    check(hqLineage.some((r) => r.stage === "human.ticket_resolve" && r.status === "success")
+      && !JSON.stringify(hqLineage).includes("do-not-store"),
+      "人工决单落 lineage 且不复制私有 state");
+    // ④ 重复决单被拒
+    let hqDoubleResolve = false;
+    try {
+      await resolveHumanTicket({ store: ticketStore, bus: ticketBus, ticket_id: hqPending.ticket_id!, resolver_id: "r2", decision: { abstain: true } });
+    } catch { hqDoubleResolve = true; }
+    check(hqDoubleResolve, "重复决单显式抛错（fail-closed）");
+    ticketStore.close();
   }
 
   console.log("\n== 冒烟结束 ==");
