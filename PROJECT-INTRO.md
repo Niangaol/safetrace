@@ -12,9 +12,9 @@
 | **参赛人** | 李念（队长，问答线 + 编排）、甲（监测线）、乙（富化线） |
 | **学校 / 专业** | 杭州电子科技大学 · 2026 级 智能科学与技术 |
 | **指导老师** | （待定，不超过 2 人） |
-| **编排框架** | pi-agent-core（earendil-works，MIT，TypeScript） |
-| **检索底座** | BGE-M3 + bge-reranker + Qdrant |
-| **工程目录** | `C:\Users\niangao\safetrace\`（契约与骨架）、`C:\Users\niangao\asktrace9\`（四篇报告 + 三张图） |
+| **编排框架** | 自研 TaskGraph（`statemachine.ts` 适配层 + native 后端）；pi-agent-core **已评估未采用**（从未安装、零代码、零 spike），LangGraph 后端 2026-09-30 移除（依赖从未进 package.json、用例永久 SKIP，属死代码） |
+| **检索底座** | BGE-M3 + bge-reranker + Qdrant（本机：llama.cpp + bge-m3-Q8_0 + Qdrant 二进制，2026-09-30 D4 已验收，见 `docs/LOCAL-STACK.md`） |
+| **工程目录** | `D:\AgentPrograms\safetrace\`（本仓库）、`D:\AgentPrograms\safetrace-models\`（bge-m3-Q8_0 + Qwen2.5-7B-Q4_K_M，5.0G）、`D:\AgentPrograms\qdrant\`（Qdrant 单文件二进制，实测运行中） |
 
 ---
 
@@ -72,7 +72,7 @@
  └───────────────────────┘   └───────────────────────────┘
             ▲
  ┌──────────┴────────────────────────────────────────────┐
- │ 编排层 pi-agent-core：监测/富化/问答/自愈 四 Agent      │
+ │ 编排层 自研 TaskGraph：监测/富化/问答/自愈 四 Agent         │
  │      ├─ D4 Jev 决策旁路：Y5分级 / Q1路由 / 证据充分性   │
  │      └─ MG1 模型网关：本地vLLM↔云端API 仅改配置        │
  └───────────────────────────────────────────────────────┘
@@ -135,11 +135,8 @@
 | 本地推理栈 | [`docs/LOCAL-STACK.md`](docs/LOCAL-STACK.md)（本仓库） | llama.cpp + Qdrant + 模型一键起停 |
 | 落地项目指导（骨架） | [`README.md`](README.md)（本仓库根） | 照着就能开工 |
 | 项目路线图（三周） | [`ROADMAP.md`](ROADMAP.md)（本仓库根） | 硬节点、砍单顺序、拿分地图 |
-| 深度报告（21 模块契约） | `asktrace9\docs\02-report.md` | 工程依据，模块五要素（**不在本仓库**） |
-| 零基础通识报告 | `asktrace9\docs\01-primer.md` | 给队员和指导老师看（**不在本仓库**） |
-| 落地路线图（D1–D22） | `asktrace9\docs\03-roadmap.md` | 逐日计划（**不在本仓库**） |
-| 开源项目图鉴 | `asktrace9\docs\04-open-source-map.md` | 选型、许可证、合规红线（**不在本仓库**） |
-| 三张图（架构/泳道/甘特） | `asktrace9\assets\` | SVG 源文件 + JPG（**不在本仓库**） |
-| 完整合订本 | `asktrace9\SafeTrace-备赛合订本.docx` | 68 页 Word 版（**不在本仓库**） |
+| 深度报告 / 通识报告 / 路线图 / 开源图鉴 | ~~`asktrace9\docs\01–04`~~ **源目录已不存在**（2026-10-05 核实：`C:\Users\niangao\asktrace9\` 整个目录不在，文件系统无副本） | 台账 D-07 升级：不只是"未迁入"，而是**需重建或从合订本导出**；交件前 S-03 依赖这四篇 |
+| 三张图（架构/泳道/甘特） | ~~`asktrace9\assets\`~~ 同上去向待定 | 架构图需在 S-03 前重绘或导出 |
+| 完整合订本 | `SafeTrace-三件套-内部版.docx/.pdf`（**已在本仓库根目录**，实测存在） | README/ROADMAP/PROJECT-INTRO 合订，早于 D1 交付；**实为 15 页，不是 68 页**（台账 D-08） |
 
-> ⚠️ 带 `asktrace9\` 的条目**当前不在本仓库内**（在队长本机另一目录），路径也未按本仓库更正——台账 **D-07** 已登记，尚未修；找文件请以本仓库为准。§一 表格里的 `C:\Users\niangao\safetrace\` 旧路径同理（台账 **D-06**）。
+> ⚠️ 台账 **D-06/D-07/D-08 仍未关闭**：asktrace9 源目录 2026-10-05 确认不存在，四篇报告需重建；§一 表格里的旧路径已在本轮更正为 `D:\AgentPrograms\safetrace\`。找文件请以本仓库为准。
