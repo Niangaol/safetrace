@@ -97,6 +97,34 @@ test("MemoryIndex：doc_types / cve_ids 过滤", async () => {
   assert.ok(byCve.chunks.every((c) => c.text.includes("CVE-2021-44228")));
 });
 
+test("MemoryIndex：published_after 时效过滤真实生效（A-05）", async () => {
+  const idx = new MemoryIndex();
+  const base = {
+    doc_type: "vuln_advisory",
+    text: "Log4Shell 影响版本 修复 CVE-2021-4428",
+    provenance: { url: "https://nvd.nist.gov/vuln/detail/CVE-2021-44228", section: "body" },
+  } as const;
+  await idx.upsert([
+    { ...base, chunk_id: "chunk_time_fresh", published_at: "2026-09-01T00:00:00.000Z" },
+    { ...base, chunk_id: "chunk_time_stale", published_at: "2021-12-10T00:00:00.000Z" },
+    { ...base, chunk_id: "chunk_time_unknown" }, // 无 published_at = 时效未知
+  ]);
+  const fresh = await idx.search(req({ published_after: "2026-01-01T00:00:00Z" }));
+  assert.deepEqual(fresh.chunks.map((c) => c.chunk_id), ["chunk_time_fresh"], "只有窗口内的新鲜 chunk 应召回");
+  const wide = await idx.search(req({ published_after: "2020-01-01T00:00:00Z" }));
+  assert.ok(wide.chunks.some((c) => c.chunk_id === "chunk_time_stale"), "窗口足够宽时旧 chunk 应召回");
+  assert.ok(!wide.chunks.some((c) => c.chunk_id === "chunk_time_unknown"), "时效未知按最不新鲜处理：时间窗内一律滤除");
+  const future = await idx.search(req({ published_after: "2027-01-01T00:00:00Z" }));
+  assert.deepEqual(future.chunks, [], "窗口在未来 → 空结果（abstain 链路上游）");
+  const unfiltered = await idx.search(req({}));
+  assert.equal(unfiltered.chunks.length, 3, "未指定 published_after 时不做时效过滤（兼容既有行为）");
+});
+
+test("MemoryIndex：published_after 不可解析 → 抛错（A-05 fail-closed，不静默放过）", async () => {
+  const idx = seedIndex();
+  await assert.rejects(idx.search(req({ published_after: "昨天" })), /published_after/);
+});
+
 test("MemoryIndex：无答案问题 → 空结果（abstain 链路上游）", async () => {
   const idx = seedIndex();
   const res = await idx.search(
@@ -356,6 +384,33 @@ test("QdrantEngine：index、dense、BM25 与 RRF 每一步都落 lineage", asyn
   assert.equal(vectorIndex.execution?.model_version, "v2026.09");
   const searchBody = requests[2]!.body as { filter: { must: Array<{ key: string; match?: { value?: string } }> } };
   assert.ok(searchBody.filter.must.some((clause) => clause.key === "embedding_model_version" && clause.match?.value === "v2026.09"));
+});
+
+test("QdrantEngine：published_after 下推服务端范围过滤（A-05）", async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    requests.push({ url: String(_input), body: init?.body ? JSON.parse(String(init.body)) : null });
+    if (init?.method === "POST") {
+      return new Response(JSON.stringify({ result: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ result: { status: "completed" } }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const engine = new QdrantEngine({
+    url: "http://127.0.0.1:6333", collection: "c_time", model_id: "bge-m3", model_version: "v2026.09", embedding_dim: 2,
+    embedder: async (texts) => ({ vectors: texts.map(() => [0.2, 0.8]), model_id: "bge-m3", model_version: "v2026.09", provider: "vllm", degraded_to: "" }),
+    fetch_impl: fetchImpl,
+  });
+  await engine.search(req({ published_after: "2026-09-01T00:00:00Z" }));
+  const searchCall = requests.find((r) => r.url.includes("/points/search"));
+  assert.ok(searchCall, "应有一次 Qdrant points/search 请求");
+  const must = (searchCall!.body as { filter: { must: Array<{ key: string; range?: { gte?: string } }> } }).filter.must;
+  const clause = must.find((c) => c.key === "published_at");
+  assert.ok(clause, "published_after 必须下推为 Qdrant 范围过滤（双引擎同口径）");
+  assert.equal(clause!.range!.gte, "2026-09-01T00:00:00.000Z", "归一为 ISO-8601 UTC，字典序即时间序");
+  const noWindow = await engine.search(req({}));
+  assert.ok(noWindow.chunks.length === 0);
+  const lastMust = (requests.at(-1)!.body as { filter: { must: Array<{ key: string }> } }).filter.must;
+  assert.ok(!lastMust.some((c) => c.key === "published_at"), "未指定 published_after 时不得注入时间过滤");
 });
 
 test("indexChunks：S3 绑定登记 + 模型冲突抛错（禁止静默混用）", async () => {

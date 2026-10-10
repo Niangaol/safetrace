@@ -1,5 +1,6 @@
 import { degrade, screenPromptInjection } from "@safetrace/shared";
 import type { Answer, EventBus, RetrievalResponse } from "@safetrace/shared";
+import { staleThresholdDays } from "./q1-intent.js";
 import type { QueryPlan } from "./q1-intent.js";
 import { synthesizeAnswer } from "./q4-answer.js";
 import type { SynthesizeOptions } from "./q4-answer.js";
@@ -124,7 +125,12 @@ export async function synthesizeAnswerWithStepFun(
     flags: [...new Set([...scan.flags, ...(suppliedGuard?.flags ?? [])])].sort(),
     note: [scan.note, suppliedGuard?.note].filter(Boolean).join(" "),
   };
-  const guardedOptions: StepFunAnswerOptions = { ...options, injectionGuard };
+  // A-05：调用方未显式给时效阈值时，按意图推导（trend ≤7d / impact_range ≤90d / 其余 365d）。
+  const guardedOptions: StepFunAnswerOptions = {
+    ...options,
+    injectionGuard,
+    stale_after_days: options.stale_after_days ?? staleThresholdDays(plan),
+  };
   const plainOptions = templateOnlyOptions(guardedOptions);
   const template = await synthesizeAnswer(question, plan, evidence, plainOptions);
   if (template.abstained) {

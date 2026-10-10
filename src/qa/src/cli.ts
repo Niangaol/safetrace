@@ -7,20 +7,26 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { EventBus, nextId, nowIso, sha256, sha256Json, SqliteEventStore } from "@safetrace/shared";
 import type { Answer, QueryTurn, RetrievalRequest } from "@safetrace/shared";
-import { classifyIntent } from "./q1-intent.js";
+import { classifyIntent, publishedAfterFor, staleThresholdDays } from "./q1-intent.js";
 import type { QueryPlan } from "./q1-intent.js";
 import { MemoryIndex, indexChunks, readFixtureChunks } from "./q2-retrieval.js";
 import { synthesizeAnswer } from "./q4-answer.js";
 
 const SEED_COLLECTION = "safetrace_chunks_p0";
 
-/** Q1 槽位 → Q2 请求：CVE 槽位转 cve_ids 过滤（问题指定的漏洞必须被证据覆盖）。 */
-export function buildRetrievalRequest(question: string, plan: QueryPlan, traceId: string): RetrievalRequest {
+/**
+ * Q1 槽位 → Q2 请求：CVE 槽位转 cve_ids 过滤（问题指定的漏洞必须被证据覆盖）；
+ * A-05：time_range 槽位转 published_after 硬过滤（"最近 7 天"只召回 7 天内发布的证据）。
+ * now 可注入（测试确定性）；缺省当前时间。
+ */
+export function buildRetrievalRequest(question: string, plan: QueryPlan, traceId: string, now: Date = new Date()): RetrievalRequest {
+  const publishedAfter = plan.slots.time_range === null ? null : publishedAfterFor(plan.slots.time_range, now);
   return {
     query_id: nextId("q"),
     query_text: plan.rewrite_text,
     top_k: 5,
     ...(plan.slots.cve_ids.length > 0 ? { cve_ids: plan.slots.cve_ids } : {}),
+    ...(publishedAfter !== null ? { published_after: publishedAfter } : {}),
     trace_id: traceId,
     schema_version: "1.0",
   };
@@ -56,7 +62,8 @@ export async function ask(
     dim: 256,
     metric: "cosine",
   }, { trace_id: traceId });
-  const request = buildRetrievalRequest(turn.text, plan, traceId);
+  const now = new Date();
+  const request = buildRetrievalRequest(turn.text, plan, traceId, now);
   const evidence = await engine.search(request, {
     ...(q1Lineage ? { parent_lineage_ids: [q1Lineage.lineage_id] } : {}),
   });
@@ -67,6 +74,10 @@ export async function ask(
     turn_id: turn.turn_id,
     bus: opts.bus,
     parent_lineage_ids: [q1Lineage?.lineage_id, q2Lineage?.lineage_id].filter((id): id is string => Boolean(id)),
+    // A-05：时效阈值由意图驱动（trend ≤7d / impact_range ≤90d / 其余 365d），
+    // 同一 now 同时驱动检索时间窗与过龄判定，避免两处时钟漂移。
+    stale_after_days: staleThresholdDays(plan),
+    now,
   });
 }
 

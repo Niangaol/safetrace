@@ -65,6 +65,45 @@ export function strategyForIntent(intent: IntentKind): QueryStrategy {
   return STRATEGY_BY_INTENT[intent];
 }
 
+/**
+ * A-05：时间窗代码 → published_after 截止时间（ISO-8601 UTC）。
+ * 识别不了的代码返回 null（不猜时间）；ytd = 今年 1 月 1 日（UTC）。
+ * 与 q2-retrieval 的 published_after 过滤配套："最近 7 天"从此是硬检索条件，
+ * 不再只是 rewrite_text 里的装饰后缀。
+ */
+export function publishedAfterFor(timeRange: string, now: Date): string | null {
+  const DAY_MS = 86_400_000;
+  switch (timeRange) {
+    case "7d": return new Date(now.getTime() - 7 * DAY_MS).toISOString();
+    case "30d": return new Date(now.getTime() - 30 * DAY_MS).toISOString();
+    case "90d": return new Date(now.getTime() - 90 * DAY_MS).toISOString();
+    case "1y": return new Date(now.getTime() - 365 * DAY_MS).toISOString();
+    case "ytd": return new Date(Date.UTC(now.getUTCFullYear(), 0, 1)).toISOString();
+    default: return null;
+  }
+}
+
+/**
+ * A-05：意图时效阈值（天）。趋势/KEV 动态类问题要新（≤7d）；影响范围类放宽到 90d；
+ * 其余意图与未识别意图维持 365d 默认（与 q4-answer 的 DEFAULT_STALE_THRESHOLD_DAYS 同口径）。
+ * KEV 动态类提问含"最近/热点/近期"等词，按关键词表落入 trend，因此不单列 KEV 意图。
+ */
+export const STALE_THRESHOLD_DAYS_BY_INTENT: Readonly<Partial<Record<IntentKind, number>>> = {
+  trend: 7,
+  impact_range: 90,
+};
+
+export const DEFAULT_INTENT_STALE_THRESHOLD_DAYS = 365;
+
+/** 主意图优先取阈值；多意图时取榜单第一个有配置的意图（最严口径）。 */
+export function staleThresholdDays(plan: QueryPlan): number {
+  for (const intent of plan.intents) {
+    const days = STALE_THRESHOLD_DAYS_BY_INTENT[intent];
+    if (days !== undefined) return days;
+  }
+  return DEFAULT_INTENT_STALE_THRESHOLD_DAYS;
+}
+
 /** 产品词典：[规范名, 别名...]；别名命中即归一到规范名。 */
 const PRODUCT_DICT: ReadonlyArray<readonly [string, ...string[]]> = [
   ["log4j", "log4shell", "log4j2", "log4j-core"],

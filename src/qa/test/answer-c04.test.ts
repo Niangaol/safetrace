@@ -83,6 +83,18 @@ test("缺 published_at 按未知时效提示，不用当前时间顶替", async 
   assert.ok(ans.text_md.includes("时效未知"));
 });
 
+test("A-05：trend 意图按时效阈值 7 天判定过龄（阈值随意图收紧）", async () => {
+  const plan = classifyIntent({ session_id: "s", turn_id: "t", text: "最近一个月安全社区的热点漏洞趋势是怎样的？" });
+  assert.deepEqual(plan.intents[0], "trend");
+  const old = chunk("c_trend_old", { published_at: "2026-09-01T00:00:00.000Z", trust: "trusted" });
+  const ans = await synthesizeAnswer("最近一个月安全社区的热点漏洞趋势是怎样的？", plan, evidence([old]), {
+    session_id: "s", turn_id: "t", now: NOW, stale_after_days: 7,
+  });
+  assert.ok(ans.stale_warning, "trend 阈值 7 天下，39 天前的证据必须过龄提示");
+  assert.equal(ans.stale_warning!.threshold_days, 7, "阈值按意图收紧为 7 天");
+  assert.ok(ans.text_md.includes("阈值 7 天"), "正文提示须写明收紧后的阈值");
+});
+
 test("证据新鲜且时间齐全时不加 stale_warning", async () => {
   const plan = classifyIntent({ session_id: "s", turn_id: "t", text: "Log4Shell 影响哪些版本？" });
   const fresh = chunk("c_fresh", { published_at: "2026-09-01T00:00:00.000Z", trust: "trusted" });

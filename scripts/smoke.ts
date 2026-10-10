@@ -34,6 +34,8 @@ import {
   type TaskGraph,
 } from "@safetrace/qa";
 import { ModelGateway } from "@safetrace/gateway";
+import { buildRetrievalRequest } from "../src/qa/src/cli.js";
+import { staleThresholdDays } from "../src/qa/src/q1-intent.js";
 
 interface GoldenQuestion {
   qid: string;
@@ -339,6 +341,50 @@ async function main(): Promise<number> {
   check(health.circuits_observed === false && health.notes.some((n) => n.includes("未注入熔断探针")),
     "未注入熔断探针时显式注明（不冒充健康）");
   releaseFix();
+
+  // ---------- 10) A-05 时效性：published_after 真过滤 + 意图时效阈值 ----------
+  console.log("\n[10] A-05 时效性（published_after 真实生效 / 意图驱动过龄阈值）");
+  {
+    // ① 未来窗口 → 空结果：seed 为 2021 年样本，必须被时间窗滤掉（旧实现直接 return true）
+    const futureWindow = await engine.search({
+      query_id: "q_smoke_a05_future", query_text: "Log4Shell 影响版本 修复", top_k: 5,
+      published_after: "2999-01-01T00:00:00.000Z", trace_id: "tr_smoke_a05_future", schema_version: "1.0",
+    });
+    check(futureWindow.chunks.length === 0, "published_after=未来 → 空结果（时效过滤真实生效，不再是 return true）");
+    // ② 宽窗口 → 旧 seed 正常召回（时间过滤不误伤）
+    const wideWindow = await engine.search({
+      query_id: "q_smoke_a05_wide", query_text: "Log4Shell 影响版本 修复", top_k: 5,
+      published_after: "1999-01-01T00:00:00.000Z", trace_id: "tr_smoke_a05_wide", schema_version: "1.0",
+    });
+    check(wideWindow.chunks.length > 0, "published_after=1999 → 2021 年 seed 正常召回（过滤不误伤）");
+    // ③ 不可解析 → fail-closed 抛错（静默放过等于过滤失效）
+    let a05Rejected = false;
+    try {
+      await engine.search({
+        query_id: "q_smoke_a05_bad", query_text: "Log4Shell", top_k: 5,
+        published_after: "昨天", trace_id: "tr_smoke_a05_bad", schema_version: "1.0",
+      });
+    } catch { a05Rejected = true; }
+    check(a05Rejected, "published_after 不可解析 → 抛错（fail-closed，禁静默放过）");
+    // ④ Q1 time_range 槽位 → published_after 硬过滤（"最近 7 天"不再只是 rewrite 后缀）
+    const trendTurn: QueryTurn = { session_id: "sess_smoke_a05", turn_id: "turn_a05", text: "最近一周的漏洞趋势" };
+    const trendPlan = classifyIntent(trendTurn);
+    const trendReq = buildRetrievalRequest(trendTurn.text, trendPlan, "tr_smoke_a05_trend");
+    check(typeof trendReq.published_after === "string" && trendPlan.slots.time_range === "7d",
+      "Q1 time_range=7d 槽位转成 published_after 硬过滤（" + JSON.stringify(trendReq.published_after ?? null) + "）");
+    // ⑤ 意图阈值：trend 收紧为 7 天，过龄证据显式提示且答案不拒答
+    const trendEvidence = await engine.search({
+      query_id: "q_smoke_a05_trend_ev", query_text: trendPlan.rewrite_text, top_k: 5,
+      trace_id: "tr_smoke_a05_trend", schema_version: "1.0",
+    });
+    const trendAnswer = await synthesizeAnswer(trendTurn.text, trendPlan, trendEvidence, {
+      session_id: trendTurn.session_id, turn_id: trendTurn.turn_id, bus,
+      stale_after_days: staleThresholdDays(trendPlan),
+    });
+    check(trendAnswer.abstained === false && trendAnswer.stale_warning?.threshold_days === 7,
+      "trend 意图阈值 7 天：过龄证据显式带 stale_warning（threshold_days=7）且正常作答");
+    check(trendAnswer.text_md.includes("阈值 7 天"), "过龄提示在正文对用户可见（写明收紧后的阈值）");
+  }
 
   console.log("\n== 冒烟结束 ==");
   if (failures.length > 0) {

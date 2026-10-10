@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { classifyIntent } from "../src/q1-intent.js";
+import { classifyIntent, publishedAfterFor, staleThresholdDays } from "../src/q1-intent.js";
 import type { QueryTurn } from "@safetrace/shared";
 import type { IntentKind } from "../src/q1-intent.js";
 
@@ -29,6 +29,27 @@ function loadGolden(): GoldenCase[] {
 function turn(text: string): QueryTurn {
   return { session_id: "sess_t", turn_id: "turn_t", text };
 }
+
+test("A-05：publishedAfterFor 把时间窗代码转成 ISO-8601 UTC 截止时间", () => {
+  const now = new Date("2026-10-10T12:00:00.000Z");
+  assert.equal(publishedAfterFor("7d", now), "2026-10-03T12:00:00.000Z");
+  assert.equal(publishedAfterFor("30d", now), "2026-09-10T12:00:00.000Z");
+  assert.equal(publishedAfterFor("90d", now), "2026-07-12T12:00:00.000Z");
+  assert.equal(publishedAfterFor("1y", now), "2025-10-10T12:00:00.000Z");
+  assert.equal(publishedAfterFor("ytd", now), "2026-01-01T00:00:00.000Z", "ytd = 今年 1 月 1 日（UTC）");
+  assert.equal(publishedAfterFor("eternity", now), null, "识别不了的代码不猜时间");
+});
+
+test("A-05：意图时效阈值 trend ≤7d / impact_range ≤90d / 其余 365d", () => {
+  const trend = classifyIntent(turn("最近一个月安全社区的热点漏洞趋势是怎样的？"));
+  assert.equal(staleThresholdDays(trend), 7, "trend 意图阈值 7 天");
+  const impact = classifyIntent(turn("Log4Shell 影响哪些版本？"));
+  assert.equal(staleThresholdDays(impact), 90, "impact_range 意图阈值 90 天");
+  const concept = classifyIntent(turn("什么是 Log4Shell？"));
+  assert.equal(staleThresholdDays(concept), 365, "concept 意图维持默认 365 天");
+  const unclear = classifyIntent(turn("嗯"));
+  assert.equal(staleThresholdDays(unclear), 365, "未识别意图维持默认 365 天");
+});
 
 test("Q1：golden-qa.v0.json 二十条逐一断言意图与 cve_ids 槽位", () => {
   const cases = loadGolden();

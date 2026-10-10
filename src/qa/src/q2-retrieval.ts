@@ -4,6 +4,8 @@
  * - 离线优先：OFFLINE_FIXTURES=true 或 QDRANT_URL 未配 / Qdrant 请求失败 →
  *   经 shared.degrade() 退回 MemoryIndex，响应带 degraded_to（"fixture" / "memory_index"），禁止静默兜底。
  * - S3 索引-模型绑定：indexChunks 校验 meta.model_id 与引擎 modelId 一致，不一致直接抛错。
+ * - A-05 时效过滤真实生效：published_after 一旦指定，双引擎（MemoryIndex/Qdrant）都必须按
+ *   chunk.published_at 过滤；缺 published_at = 时效未知，按最不新鲜处理（时间窗内一律滤除）。
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -154,7 +156,7 @@ export class MemoryIndex implements IndexableEngine {
   async searchWithLineage(req: RetrievalRequest, context: IndexLineageContext = {}): Promise<{ response: RetrievalResponse; lineage_id?: string }> {
     const startedAt = nowIso();
     const t0 = Date.now();
-    const candidates = this.docs.filter((d) => passesFilter(d.chunk, req));
+    const candidates = this.docs.filter((d) => passesFilter(d.chunk, req, publishedAfterBound(req.published_after)));
     const qTokens = [...new Set(tokenize(req.query_text))];
     const scored: Array<{ chunk: EvidenceChunk; score: number }> = [];
     for (const doc of candidates) {
@@ -233,8 +235,19 @@ export class MemoryIndex implements IndexableEngine {
   }
 }
 
-/** doc_types / min_quality / cve_ids 过滤；published_after 在 chunk 级无字段可依（见注释）。 */
-function passesFilter(chunk: EvidenceChunk, req: RetrievalRequest): boolean {
+/**
+ * A-05：published_after 归一为 epoch ms。
+ * 不可解析 → 抛错（fail-closed）：静默放过等于让"时效过滤"重新变成假的。
+ */
+function publishedAfterBound(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const ms = parseLoose(raw);
+  if (ms === null) throw new Error("published_after 无法解析为时间戳：" + raw);
+  return ms;
+}
+
+/** doc_types / min_quality / cve_ids / published_after 过滤（A-05：时效过滤真实生效）。 */
+function passesFilter(chunk: EvidenceChunk, req: RetrievalRequest, afterMs?: number): boolean {
   if (req.doc_types && req.doc_types.length > 0 && !req.doc_types.includes(chunk.doc_type)) return false;
   // min_quality：DQ1 质量分下限；无质量分的 chunk 视为未校验，不放过任何下限关卡
   if (req.min_quality !== undefined && (chunk.quality_score ?? -1) < req.min_quality) return false;
@@ -242,7 +255,12 @@ function passesFilter(chunk: EvidenceChunk, req: RetrievalRequest): boolean {
     const hay = chunk.text.toLowerCase();
     if (!req.cve_ids.some((id) => hay.includes(id.toLowerCase()))) return false;
   }
-  // published_after：EvidenceChunk 契约无发布时间字段；入索引资格由上游 IntelItem.published_at 决定
+  // published_after（A-05）：EvidenceChunk.published_at 缺省 = 时效未知，按最不新鲜处理；
+  // 时间窗一经指定，未知时效一律滤除——不用抓取时间顶替，也不静默放过。
+  if (afterMs !== undefined) {
+    const published = chunk.published_at === undefined ? null : parseLoose(chunk.published_at);
+    if (published === null || published < afterMs) return false;
+  }
   return true;
 }
 
@@ -626,6 +644,11 @@ function qdrantFilter(req: RetrievalRequest, modelId: string, modelVersion?: str
   if (req.doc_types && req.doc_types.length > 0) must.push({ key: "doc_type", match: { any: req.doc_types } });
   if (req.min_quality !== undefined) must.push({ key: "quality_score", range: { gte: req.min_quality } });
   if (req.cve_ids && req.cve_ids.length > 0) must.push({ key: "cve_ids", match: { any: req.cve_ids } });
+  // A-05：published_after 下推 Qdrant 服务端范围过滤。载荷缺 published_at 的点不匹配
+  // （与 MemoryIndex「未知时效按最不新鲜处理」同口径）；归一为 ISO-8601 UTC，
+  // 保证字典序即时间序（Qdrant 对字符串范围按字典序比较）。
+  const after = publishedAfterBound(req.published_after);
+  if (after !== undefined) must.push({ key: "published_at", range: { gte: new Date(after).toISOString() } });
   return { must };
 }
 

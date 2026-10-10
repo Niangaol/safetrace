@@ -1,7 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventBus, MemoryEventStore } from "@safetrace/shared";
-import { ask } from "../src/cli.js";
+import { ask, buildRetrievalRequest } from "../src/cli.js";
+import { classifyIntent } from "../src/q1-intent.js";
+import type { QueryTurn } from "@safetrace/shared";
+
+test("A-05：buildRetrievalRequest 把 time_range 槽位转成 published_after 硬过滤", () => {
+  const now = new Date("2026-10-10T12:00:00.000Z");
+  const plan = classifyIntent({ session_id: "s", turn_id: "t", text: "最近一周的漏洞趋势" } as QueryTurn);
+  assert.equal(plan.slots.time_range, "7d");
+  const req = buildRetrievalRequest("最近一周的漏洞趋势", plan, "tr_t", now);
+  assert.equal(req.published_after, "2026-10-03T12:00:00.000Z", "「最近一周」= 只召回 7 天内发布的证据");
+  const cvePlan = classifyIntent({ session_id: "s", turn_id: "t", text: "CVE-2021-44228 怎么修复？" } as QueryTurn);
+  const cveReq = buildRetrievalRequest("CVE-2021-44228 怎么修复？", cvePlan, "tr_t", now);
+  assert.deepEqual(cveReq.cve_ids, ["CVE-2021-44228"], "CVE 槽位过滤保持原行为");
+  assert.equal(cveReq.published_after, undefined, "无时间表述不得注入 published_after（兼容既有行为）");
+});
 
 test("ask lineage：Q1 → BM25 index/search → Q4 answer shares trace and parent links", async () => {
   const store = new MemoryEventStore();
