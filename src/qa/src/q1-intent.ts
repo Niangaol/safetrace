@@ -95,13 +95,9 @@ export const STALE_THRESHOLD_DAYS_BY_INTENT: Readonly<Partial<Record<IntentKind,
 
 export const DEFAULT_INTENT_STALE_THRESHOLD_DAYS = 365;
 
-/** 主意图优先取阈值；多意图时取榜单第一个有配置的意图（最严口径）。 */
+/** 多意图取最严阈值，不能因 impact_range 排前而把 trend 放宽到 90 天。 */
 export function staleThresholdDays(plan: QueryPlan): number {
-  for (const intent of plan.intents) {
-    const days = STALE_THRESHOLD_DAYS_BY_INTENT[intent];
-    if (days !== undefined) return days;
-  }
-  return DEFAULT_INTENT_STALE_THRESHOLD_DAYS;
+  return Math.min(DEFAULT_INTENT_STALE_THRESHOLD_DAYS, ...plan.intents.map(intent => STALE_THRESHOLD_DAYS_BY_INTENT[intent] ?? DEFAULT_INTENT_STALE_THRESHOLD_DAYS));
 }
 
 /** 产品词典：[规范名, 别名...]；别名命中即归一到规范名。 */
@@ -128,6 +124,16 @@ const PRODUCT_DICT: ReadonlyArray<readonly [string, ...string[]]> = [
   ["kubernetes", "k8s"],
   ["docker"],
 ];
+
+/** 仅按显式产品词典归一，未知名称保留原样；不猜相近产品。 */
+export function canonicalProductName(value: string): string {
+  const name = value.trim().toLowerCase();
+  return PRODUCT_DICT.find(([canonical, ...aliases]) => canonical === name || aliases.includes(name))?.[0] ?? name;
+}
+export function productNameAliases(value: string): string[] {
+  const canonical = canonicalProductName(value);
+  return [...(PRODUCT_DICT.find(row => row[0] === canonical) ?? [canonical])];
+}
 
 /** 时间表述 → 归一化时间窗（长周期在前，避免「近一年」被「月」抢先）。 */
 const TIME_RANGE_RULES: ReadonlyArray<readonly [RegExp, string]> = [

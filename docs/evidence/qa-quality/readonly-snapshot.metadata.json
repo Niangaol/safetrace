@@ -1,0 +1,23 @@
+{
+  "mode": "readonly-captured-projection",
+  "captured_at": "2026-10-10T14:34:37.801Z",
+  "read_only": true,
+  "event_watermark": 29665,
+  "projection_fingerprint": "28a42784eee79524e73c6fce0dd04ae57034b4bf59e41dc2bf5ac314e969a32e",
+  "corpus_sha256": "9f8bd77a9725aab4374c15c9c0f03c8787d53db5d251dab68df7c2c498e16ca4",
+  "chunk_count": 9653,
+  "rejected_count": 3278,
+  "rejection_reasons": {
+    "missing intel": 8,
+    "enrichment state missing or ambiguous": 2828,
+    "artifact metadata missing/ambiguous": 442
+  },
+  "db_sha256_before": "5512cb7539668068761f8b461c04a40621a39d7134507603dd37ae6d8cc6a83f",
+  "db_sha256_after": "5512cb7539668068761f8b461c04a40621a39d7134507603dd37ae6d8cc6a83f",
+  "db_bytes_unchanged": true,
+  "model_calls": 0,
+  "network_calls": 0,
+  "business_writes": 0,
+  "vector_writes": 0,
+  "limitations": "Corpus capture only. No automatically generated gold answers and no factual score for real corpus until independent human labels are authored. Snapshot DB byte equality is a before/after observation, not concurrent write proof."
+}

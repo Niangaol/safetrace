@@ -81,6 +81,29 @@ test("A-06 fallback 登记：订阅后全部降级事件入账并外发 Trace", 
   detach();
 });
 
+test("A-06 fallback退订后可重订阅，旧detach不影响新订阅", async () => {
+  const { bus, agent } = setup();
+  const oldDetach = agent.subscribeFallbackEvents();
+  assert.equal(agent.subscribeFallbackEvents(), oldDetach, "同一次订阅幂等");
+  oldDetach();
+  oldDetach();
+  const newDetach = agent.subscribeFallbackEvents();
+  assert.notEqual(newDetach, oldDetach);
+  oldDetach();
+  assert.equal(agent.subscribeFallbackEvents(), newDetach, "旧detach不得清空新订阅句柄");
+  await degrade({
+    layer: "L3", trigger: "restart", degradedOf: "test:restart", traceId: "tr_sh_restart",
+    label: "重启测试", emit: async (e) => { await bus.publish("fallback.events", e); },
+  });
+  assert.equal(agent.registeredFallbackEvents.length, 1, "新订阅仅登记一次");
+  newDetach();
+  await degrade({
+    layer: "L3", trigger: "stopped", degradedOf: "test:stopped", traceId: "tr_sh_stopped",
+    label: "停止测试", emit: async (e) => { await bus.publish("fallback.events", e); },
+  });
+  assert.equal(agent.registeredFallbackEvents.length, 1);
+});
+
 test("A-06 死信重投：指数退避窗口内不重投，到拍重投成功即销档", async () => {
   const { store, bus, agent } = setup({ backoff: { baseMs: 1000, maxMs: 60_000, maxAttempts: 3 } });
   agent.subscribeFallbackEvents();
@@ -112,19 +135,43 @@ test("A-06 死信重投：指数退避窗口内不重投，到拍重投成功即
   assert.ok(env.event_id.length > 0);
 });
 
-test("A-06 死信重投：超过 maxAttempts 仍失败 → still_failed 并保留死信转人工", async () => {
-  const { store, agent } = setup({ backoff: { baseMs: 10, maxMs: 20, maxAttempts: 2 } });
-  const bus = (agent as unknown as { opts: { bus: EventBus } }).opts.bus;
-  bus.subscribe("decision.replies", async () => { throw new Error("always broken"); });
-  await bus.publish("decision.replies", drillReply(), { trace_id: "tr_sh_dl2" });
-  let now = 0;
-  for (let i = 0; i < 3; i += 1) {
-    now += 1000;
-    await agent.dead_letter_drain({ now });
+test("A-06 死信重投：达到maxAttempts后时钟推进也不得再次redeliver", async (t) => {
+  for (const maxAttempts of [2, undefined]) {
+    await t.test(maxAttempts === undefined ? "缺省最多8次" : "显式最多2次", async (t) => {
+      const limit = maxAttempts ?? 8;
+      const { store, bus, agent } = setup({ backoff: {
+        baseMs: 10, maxMs: 20, ...(maxAttempts === undefined ? {} : { maxAttempts }),
+      } });
+      let broken = true;
+      bus.subscribe("decision.replies", async () => { if (broken) throw new Error("always broken"); });
+      await bus.publish("decision.replies", drillReply(), { trace_id: "tr_sh_dl_exhausted" });
+      const redeliver = t.mock.method(bus, "redeliver");
+      let now = 0;
+      for (let i = 0; i < limit; i += 1) {
+        now += 1000;
+        const report = await agent.dead_letter_drain({ now });
+        assert.equal(report.retried, 1);
+        assert.equal(report.details[0]?.attempt, i + 1);
+        if (i === limit - 1) assert.equal(report.still_failed, 1);
+      }
+      assert.equal(redeliver.mock.callCount(), limit);
+      // Even a healthy consumer and a clock well beyond backoff cannot silently resume exhausted work.
+      broken = false;
+      for (const nextNow of [now + 1, now + 1000, now + 300_000]) {
+        const report = await agent.dead_letter_drain({ now: nextNow });
+        assert.equal(report.retried, 0);
+        assert.equal(report.recovered, 0);
+        assert.equal(report.deferred, 0);
+        assert.equal(report.still_failed, 1);
+        assert.equal(report.details[0]?.attempt, limit);
+        const lineage = await store.readLineage("tr_selfheal_drain_" + nextNow.toString(36));
+        assert.equal(lineage[0]?.status, "degraded");
+        assert.equal(lineage[0]?.decision?.review_required, true);
+      }
+      assert.equal(redeliver.mock.callCount(), limit, "超限不再重投业务副作用");
+      assert.equal((await store.deadLetters()).length, 1, "保留死信供人工处理");
+    });
   }
-  const report = await agent.dead_letter_drain({ now: now + 1000 });
-  assert.equal(report.still_failed, 1, "超过重投上限后显式记 still_failed（转人工，不无限重试）");
-  assert.equal((await store.deadLetters()).length, 1, "仍保留死信供人工处理");
 });
 
 test("A-06 replay 工具：按主题重读重投且留 lineage", async () => {

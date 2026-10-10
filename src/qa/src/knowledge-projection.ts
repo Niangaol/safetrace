@@ -2,6 +2,8 @@ import { sha256, sha256Json, enrichmentInputHash } from "@safetrace/shared";
 import type { EnrichmentResult, EvidenceChunk, IntelItem, LineageRecord, RawDoc, StoredPageSnapshot } from "@safetrace/shared";
 import { latestIntelSnapshot } from "./intel-index-plan.js";
 import type { IntelIndexEvent } from "./intel-index-plan.js";
+import { cnaVersionFacts, nvdVersionFacts, recordScoreFacts } from "./raw-structured-facts.js";
+import type { RawVersionFact, RawScoreFact } from "./raw-structured-facts.js";
 
 export interface KnowledgeEvent extends Omit<IntelIndexEvent, "topic"> {
   topic: IntelIndexEvent["topic"] | "enrich.items";
@@ -51,6 +53,10 @@ export interface ProjectedEvidence {
   artifact_sha256?: string;
   text_sha256: string;
   parent_lineage_ids: string[];
+  /** 仅在原文/hash/DQ/逐记录身份门禁之后填充；不扩展公共 EvidenceChunk 契约。 */
+  source_cve_ids?: string[];
+  version_facts?: RawVersionFact[];
+  score_facts?: RawScoreFact[];
 }
 export interface KnowledgeProjection {
   chunks: EvidenceChunk[];
@@ -79,7 +85,7 @@ function safeLineage(r: LineageRecord): boolean {
 }
 function refMatches(refs: LineageRecord["input_refs"], id: string, hash: string): boolean { return refs.some(r => r.id === id && r.sha256 === hash); }
 /** Only supported per-record payloads are projected. Unknown adapters fail closed. */
-export interface RawKnowledgeRecord { id: string; aliases?: string[]; text: string; published_at: string; metrics: any[] }
+export interface RawKnowledgeRecord { id: string; aliases?: string[]; text: string; published_at: string; metrics: any[]; versions?: RawVersionFact[] }
 function sourceDate(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) return "";
   const normalized = /T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : /^\d{4}-\d{2}-\d{2}$/.test(value) ? value + "T00:00:00Z" : value + "Z";
@@ -90,7 +96,7 @@ export function rawKnowledgeRecords(raw: RawDoc, bytes: Uint8Array): RawKnowledg
   const data = object(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
   if (raw.source_type === "nvd_cve") return (data.vulnerabilities ?? []).flatMap((entry: any) => {
     const c = object(entry.cve); if (/REJECT|RESERVED|DISPUTED/i.test(c.vulnStatus ?? "")) return [];
-    return [{ id: c.id, text: (c.descriptions ?? []).filter((d: any) => d.lang === "en").map((d: any) => d.value).join("\n"), published_at: sourceDate(c.published), metrics: Object.values(c.metrics ?? {}).flat().map((m: any) => ({ ...m.cvssData, source_of_score: String(m.source ?? "").toLowerCase() === "nvd@nist.gov" ? "nvd" : m.source && String(m.source).toLowerCase() === String(c.sourceIdentifier ?? "").toLowerCase() ? "cna" : undefined })) }];
+    return [{ id: c.id, versions: nvdVersionFacts(c), text: (c.descriptions ?? []).filter((d: any) => d.lang === "en").map((d: any) => d.value).join("\n"), published_at: sourceDate(c.published), metrics: Object.values(c.metrics ?? {}).flat().map((m: any) => ({ ...m.cvssData, source_of_score: String(m.source ?? "").toLowerCase() === "nvd@nist.gov" ? "nvd" : m.source && String(m.source).toLowerCase() === String(c.sourceIdentifier ?? "").toLowerCase() ? "cna" : undefined })) }];
   });
   if (raw.source_type === "kev") return (data.vulnerabilities ?? []).map((v: any) => ({ id: v.cveID,
     text: [v.vulnerabilityName, v.shortDescription, v.requiredAction].filter(Boolean).join("\n"), published_at: sourceDate(v.dateAdded), metrics: [] }));
@@ -99,7 +105,7 @@ export function rawKnowledgeRecords(raw: RawDoc, bytes: Uint8Array): RawKnowledg
   if (raw.source_type === "osv") return (typeof data.id === "string" ? [data] : (data.results ?? []).flatMap((r: any) => r.vulns ?? [])).map((v: any) => ({ id: v.id, aliases: v.aliases ?? [], text: [v.summary, v.details].filter(Boolean).join("\n"), published_at: sourceDate(v.published), metrics: [] }));
   if (raw.source_type === "cve_org") {
     if (/REJECT|RESERVED|DISPUTED/i.test(data.cveMetadata?.state ?? "")) return [];
-    const c = object(data.containers?.cna); return [{ id: data.cveMetadata?.cveId, text: (c.descriptions ?? []).map((d: any) => d.value).join("\n"), published_at: sourceDate(data.cveMetadata?.datePublished), metrics: (c.metrics ?? []).map((m: any) => ({ ...(m.cvssV3_1 ?? m.cvssV3_0), source_of_score: "cna" })) }];
+    const c = object(data.containers?.cna); return [{ id: data.cveMetadata?.cveId, versions: cnaVersionFacts(c), text: (c.descriptions ?? []).map((d: any) => d.value).join("\n"), published_at: sourceDate(data.cveMetadata?.datePublished), metrics: (c.metrics ?? []).map((m: any) => ({ ...(m.cvssV3_1 ?? m.cvssV3_0), source_of_score: "cna" })) }];
   }
   throw new Error("unsupported raw source adapter; no merged-summary fallback");
 }
@@ -183,7 +189,7 @@ export async function projectKnowledgeEvidence(input: KnowledgeProjectionInput):
         if (parsed.some(r => !r.text?.trim() || !stamp(r.published_at))) throw new Error("source record text/date invalid");
         sourceRecords.set(raw_ref, parsed); sourceParents.set(raw_ref, proof.map(r => r.lineage_id));
         for (const r of parsed) { const text = raw_ref.startsWith("sqlite-page:") ? r.text : r.id + "\n" + r.text;
-          add(item, intel_event, "source", text, raw.url, r.published_at, input.source_trust?.(raw) ?? "untrusted", hash, [...dqParents, ...proof.map(r => r.lineage_id)], { raw_ref, original_sha256: hash });
+          add(item, intel_event, "source", text, raw.url, r.published_at, input.source_trust?.(raw) ?? "untrusted", hash, [...dqParents, ...proof.map(r => r.lineage_id)], { raw_ref, original_sha256: hash, source_cve_ids: [r.id, ...(r.aliases ?? [])].filter(id => /^CVE-\d{4}-\d{4,}$/i.test(id)).map(id => id.toUpperCase()), version_facts: r.versions ?? [], score_facts: recordScoreFacts(r) });
           if (raw.source_type === "vendor_advisory") evidence.at(-1)!.chunk.doc_type = "vendor_advisory";
         }
       } catch (error) { fail(raw_ref, error); }

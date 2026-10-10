@@ -103,7 +103,7 @@ interface IndexedDoc {
 /** 内存 BM25-lite 索引：词项 TF*IDF + 长度归一；同时充当所有降级路径的兜底索引。 */
 export class MemoryIndex implements IndexableEngine {
   readonly modelId: string;
-  private docs: IndexedDoc[] = [];
+  private docs = new Map<string, IndexedDoc>();
   private df = new Map<string, number>();
   private totalTokens = 0;
   private collections = new Map<string, CollectionMeta>();
@@ -115,7 +115,7 @@ export class MemoryIndex implements IndexableEngine {
   }
 
   get size(): number {
-    return this.docs.length;
+    return this.docs.size;
   }
 
   /** 已绑定的集合元数据（S3 绑定记录查询）。 */
@@ -156,7 +156,8 @@ export class MemoryIndex implements IndexableEngine {
   async searchWithLineage(req: RetrievalRequest, context: IndexLineageContext = {}): Promise<{ response: RetrievalResponse; lineage_id?: string }> {
     const startedAt = nowIso();
     const t0 = Date.now();
-    const candidates = this.docs.filter((d) => passesFilter(d.chunk, req, publishedAfterBound(req.published_after)));
+    const afterMs = publishedAfterBound(req.published_after);
+    const candidates = [...this.docs.values()].filter(d => passesFilter(d.chunk, req, afterMs));
     const qTokens = [...new Set(tokenize(req.query_text))];
     const scored: Array<{ chunk: EvidenceChunk; score: number }> = [];
     for (const doc of candidates) {
@@ -196,10 +197,10 @@ export class MemoryIndex implements IndexableEngine {
   }
 
   private put(chunk: EvidenceChunk): void {
-    const oldIdx = this.docs.findIndex((d) => d.chunk.chunk_id === chunk.chunk_id);
-    if (oldIdx !== -1) {
-      const old = this.docs.splice(oldIdx, 1)[0];
-      if (old) {
+    const old = this.docs.get(chunk.chunk_id);
+    if (old) {
+      this.docs.delete(chunk.chunk_id);
+      {
         this.totalTokens -= old.length;
         for (const t of old.tf.keys()) {
           const n = (this.df.get(t) ?? 1) - 1;
@@ -212,13 +213,13 @@ export class MemoryIndex implements IndexableEngine {
     const tf = new Map<string, number>();
     for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
     const length = Math.max(1, tokens.length);
-    this.docs.push({ chunk, tf, length });
+    this.docs.set(chunk.chunk_id, { chunk, tf, length });
     this.totalTokens += length;
     for (const t of tf.keys()) this.df.set(t, (this.df.get(t) ?? 0) + 1);
   }
 
   private bm25(doc: IndexedDoc, qTokens: string[]): number {
-    const n = this.docs.length;
+    const n = this.docs.size;
     if (n === 0) return 0;
     const avgdl = this.totalTokens / n;
     let score = 0;
@@ -252,8 +253,8 @@ function passesFilter(chunk: EvidenceChunk, req: RetrievalRequest, afterMs?: num
   // min_quality：DQ1 质量分下限；无质量分的 chunk 视为未校验，不放过任何下限关卡
   if (req.min_quality !== undefined && (chunk.quality_score ?? -1) < req.min_quality) return false;
   if (req.cve_ids && req.cve_ids.length > 0) {
-    const hay = chunk.text.toLowerCase();
-    if (!req.cve_ids.some((id) => hay.includes(id.toLowerCase()))) return false;
+    const ids = new Set(extractCveIds(chunk.text));
+    if (!req.cve_ids.some(id => ids.has(id.toUpperCase()))) return false;
   }
   // published_after（A-05）：EvidenceChunk.published_at 缺省 = 时效未知，按最不新鲜处理；
   // 时间窗一经指定，未知时效一律滤除——不用抓取时间顶替，也不静默放过。
@@ -644,11 +645,10 @@ function qdrantFilter(req: RetrievalRequest, modelId: string, modelVersion?: str
   if (req.doc_types && req.doc_types.length > 0) must.push({ key: "doc_type", match: { any: req.doc_types } });
   if (req.min_quality !== undefined) must.push({ key: "quality_score", range: { gte: req.min_quality } });
   if (req.cve_ids && req.cve_ids.length > 0) must.push({ key: "cve_ids", match: { any: req.cve_ids } });
-  // A-05：published_after 下推 Qdrant 服务端范围过滤。载荷缺 published_at 的点不匹配
-  // （与 MemoryIndex「未知时效按最不新鲜处理」同口径）；归一为 ISO-8601 UTC，
-  // 保证字典序即时间序（Qdrant 对字符串范围按字典序比较）。
+  // Qdrant 的日期字段须用 datetime_range，numeric range 不支持字符串日期。
+  // 缺 published_at 的点不匹配；UTC 归一与内存筛选同口径。
   const after = publishedAfterBound(req.published_after);
-  if (after !== undefined) must.push({ key: "published_at", range: { gte: new Date(after).toISOString() } });
+  if (after !== undefined) must.push({ key: "published_at", datetime_range: { gte: new Date(after).toISOString() } });
   return { must };
 }
 

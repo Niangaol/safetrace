@@ -6,6 +6,7 @@
  * - 迁移期 taskgraph.ts 保持原语义不动，由 compile() 把旧图编译成状态机描述。
  */
 import { nextId } from "@safetrace/shared";
+import { createHash } from "node:crypto";
 import type { ThreadCheckpoint } from "@safetrace/shared";
 
 export type MachineFailurePolicy = "abort" | "degrade";
@@ -36,6 +37,8 @@ export interface MachineNode<S extends MachineState = MachineState> {
 
 export interface MachineSpec<S extends MachineState = MachineState> {
   nodes: MachineNode<S>[];
+  /** Bump when captured dependencies/closure values change; source hashing cannot see closures. */
+  version?: string;
   reducers?: MachineReducers;
 }
 
@@ -47,6 +50,8 @@ export interface MachineStepRecord {
 
 export interface MachineResult {
   ok: boolean;
+  /** Final business state, excluding runtime-reserved metadata. */
+  state: MachineState;
   /** 实际执行过的节点 id（含 degrade 继续的节点）。 */
   executed: string[];
   /** 降级继续的节点标记：nodeId→degraded_to。 */
@@ -68,10 +73,20 @@ export interface MachineResult {
  */
 export const RESUME_VALUE_KEY = "__resume_value";
 
+/** Checkpoints/results expose business state only; resume metadata is ephemeral. */
+export function businessState(state: MachineState): MachineState {
+  const snapshot = structuredClone(state);
+  delete snapshot[RESUME_VALUE_KEY];
+  return snapshot;
+}
+
 /** A-01：线程检查点存储（shared EventStore 的结构性子集，测试可用内存实现）。 */
 export interface ThreadStore {
   saveThreadCheckpoint(checkpoint: ThreadCheckpoint): Promise<void>;
   loadThreadCheckpoint(threadId: string): Promise<ThreadCheckpoint | undefined>;
+  /** Durable exclusive claim. No automatic expiry: crashes require manual audit. */
+  acquireThreadLease(threadId: string, token: string): Promise<boolean>;
+  releaseThreadLease(threadId: string, token: string): Promise<boolean>;
 }
 
 export interface BackendContext<S extends MachineState = MachineState> {
@@ -87,6 +102,8 @@ export interface BackendContext<S extends MachineState = MachineState> {
   onInterrupt?: (nodeId: string, value: unknown, state: S) => void | Promise<void>;
   /** 外部恢复值（resume(threadId, value) 写入）。 */
   resumeValue?: unknown;
+  /** Persist every successful/degraded step before another node executes. */
+  onStep?: (executed: string[], state: S) => void | Promise<void>;
 }
 
 /** 后端接口（当前仅 native 一个实现）。 */
@@ -97,7 +114,7 @@ export interface MachineBackend<S extends MachineState = MachineState> {
 
 /*** 默认 reducers：last-write-wins 之外提供常用合并策略。 */
 export const defaultReducers: MachineReducers = {
-  // 数组累加（同名字段多次写入时拼接去重）
+  // 数组累加（同名字段多次写入时拼接，保留重复项）
   collect: (current, incoming) => {
     const left = Array.isArray(current) ? current : [];
     const right = Array.isArray(incoming) ? incoming : [incoming];
@@ -110,7 +127,9 @@ export const defaultReducers: MachineReducers = {
 /** 校验 spec：缺依赖 / 成环直接抛错（配置错误不兜底）。 */
 export function validateSpec<S extends MachineState>(nodes: MachineNode<S>[]): void {
   const byId = new Map(nodes.map((n) => [n.id, n] as const));
+  if (byId.size !== nodes.length) throw new Error("状态机节点 id 重复");
   for (const n of nodes) {
+    if (n.writes?.includes(RESUME_VALUE_KEY)) throw new Error("状态保留键冲突：" + RESUME_VALUE_KEY);
     for (const d of n.deps ?? []) {
       if (!byId.has(d)) throw new Error("状态机依赖不存在：" + n.id + " → " + d);
     }
@@ -140,6 +159,18 @@ export function topoOrder<S extends MachineState>(nodes: MachineNode<S>[]): Mach
     order.push(node);
   }
   return order;
+}
+
+/** Bind graph structure and executable sources, never serialize function values.
+ * Callers must version closure/dependency changes explicitly. */
+export function specFingerprint<S extends MachineState>(spec: MachineSpec<S>): string {
+  return createHash("sha256").update(JSON.stringify({
+    version: spec.version ?? "",
+    nodes: spec.nodes.map(n => ({ id: n.id, role: n.role, deps: n.deps ?? [],
+      writes: n.writes ?? [], on_fail: n.on_fail ?? "abort", run: n.run.toString() })),
+    reducers: Object.entries(spec.reducers ?? {}).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, reducer]) => [key, reducer.toString()]),
+  })).digest("hex");
 }
 
 /** 生成 threadId（resume 的挂载点）。 */

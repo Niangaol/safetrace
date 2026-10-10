@@ -8,7 +8,7 @@
  * - escalation_trace 记录完整阶梯路径（含每层耗时与失败原因）。
  */
 import { degrade, nowIso, sha256Json } from "@safetrace/shared";
-import type { DecisionReply, DecisionRequest, EventBus, FallbackEvent, HumanTicket, TypedQuestion } from "@safetrace/shared";
+import type { DecisionReply, DecisionRequest, EventBus, EventStore, FallbackEvent, TypedQuestion } from "@safetrace/shared";
 
 /** 阶梯层名。tool 层的 decided_by 记 rule_fallback（契约无 tool 通道）。 */
 export type LadderLayer = "tool" | "rule" | "llm" | "human";
@@ -38,9 +38,7 @@ export interface LadderResult {
 }
 
 /** A-02：人工工单存储（shared EventStore 的结构性子集；测试可用内存实现）。 */
-export interface HumanTicketStore {
-  enqueueHumanTicket(ticket: HumanTicket): Promise<boolean>;
-}
+export type HumanTicketStore = Pick<EventStore, "bindDecisionRequest" | "getHumanTicketReceipt" | "getHumanTicket">;
 
 /** 工具层：调用方已备好的确定性结果。 */
 export type ToolResolver = (ctx: LadderContext) => Promise<DecisionReply["decision"] | null>;
@@ -104,6 +102,18 @@ function isDecisionResolution(value: unknown): value is DecisionResolution {
 
 /** 执行四层阶梯。任一层不可用时登记 FallbackEvent 并显式下坠（禁静默）。 */
 export async function runDecisionLadder(req: DecisionRequest, opts: LadderOptions = {}): Promise<LadderResult> {
+  if (opts.ticketStore) {
+    if (!opts.bus) throw new Error("human ticket queue requires bus");
+    opts.bus.assertTicketStore(opts.ticketStore);
+    // Includes trace_id, kind, questions, schema_version and private state HASH only.
+    await opts.ticketStore.bindDecisionRequest(req.decision_id, sha256Json(req));
+    const receipt = await opts.ticketStore.getHumanTicketReceipt("ticket_" + req.decision_id);
+    if (receipt) {
+      const ticket = await opts.ticketStore.getHumanTicket("ticket_" + req.decision_id);
+      return { reply: receipt.payload, escalation_trace: [], escalated: true,
+        ...(ticket?.status !== "resolved" ? { ticket_id: "ticket_" + req.decision_id } : {}) };
+    }
+  }
   const ctx: LadderContext = {
     decision_id: req.decision_id,
     kind: req.kind,
@@ -194,12 +204,13 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
       fallback_reason: "阶梯未决：等待人工复核",
       schema_version: SCHEMA_VERSION,
     };
-    const eventId = await publishReply(reply);
+    let eventId: string | null = null;
+    let committedReply = reply;
     // A-02：全链未决 → 入队人工工单（幂等按 ticket_id）。缺省不派单时显式记录，不假装有人接。
     const ticketId = "ticket_" + req.decision_id;
     let queued: boolean | undefined;
     if (opts.ticketStore) {
-      queued = await opts.ticketStore.enqueueHumanTicket({
+      const committed = await opts.bus!.enqueueHumanTicket({
         ticket_id: ticketId,
         decision_id: req.decision_id,
         trace_id: req.trace_id,
@@ -208,8 +219,11 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
         status: "pending",
         reason: trace.map((a) => a.layer + ":" + a.status).join("; "),
         created_at: startedAt,
-      });
-    }
+      }, reply);
+      queued = committed.inserted;
+      eventId = committed.envelope.event_id;
+      committedReply = committed.envelope.payload;
+    } else { eventId = await publishReply(reply); }
     await opts.bus?.recordLineage({
       trace_id: req.trace_id,
       parent_lineage_ids: [],
@@ -220,7 +234,7 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
       started_at: startedAt,
       input_refs: [{ kind: "DecisionRequest", id: req.decision_id, sha256: sha256Json(req) }],
       output_refs: [
-        { kind: "DecisionReply", id: reply.decision_id, sha256: sha256Json(reply) },
+        { kind: "DecisionReply", id: committedReply.decision_id, sha256: sha256Json(committedReply) },
         ...(opts.ticketStore ? [{ kind: "HumanTicket", id: ticketId, sha256: sha256Json({ ticket_id: ticketId, decision_id: req.decision_id, kind: req.kind, status: "pending" }) }] : []),
       ],
       decision: {
@@ -230,7 +244,8 @@ export async function runDecisionLadder(req: DecisionRequest, opts: LadderOption
         review_required: true,
       },
     });
-    return { reply, escalation_trace: trace, escalated: true, ...(opts.ticketStore ? { ticket_id: ticketId } : {}) };
+    const ticket = await opts.ticketStore?.getHumanTicket(ticketId);
+    return { reply: committedReply, escalation_trace: trace, escalated: true, ...(ticket && ticket.status !== "resolved" ? { ticket_id: ticketId } : {}) };
   };
 
   const toolDecision = await attemptLayer("tool", opts.tool);

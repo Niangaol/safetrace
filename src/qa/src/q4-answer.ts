@@ -9,7 +9,9 @@ import { degrade, nowIso, parseLoose, screenPromptInjection, sha256, sha256Json 
 import type { Answer, EventBus, InjectionFlag, InjectionGuard, RetrievalResponse, SourceConflict, StaleWarning } from "@safetrace/shared";
 import { versionImpactStatusLabel } from "./version-impact.js";
 import type { VersionImpactAnswer } from "./version-impact.js";
+import { staleThresholdDays } from "./q1-intent.js";
 import type { QueryPlan } from "./q1-intent.js";
+import { coversProducts, evidenceCveIds } from "./evidence-identity.js";
 
 /**
  * 注入接口：由上层编排连接 StepFun 等模型；原模板继续负责证据门禁并作为模型失败时的兜底。
@@ -98,12 +100,10 @@ function firstSentence(text: string, maxLen = 160): string {
   return s;
 }
 
-/** 问题指定了 CVE 时，证据必须覆盖其中至少一个，否则视为答非所问 → 拒答。 */
+/** 多 CVE 请求必须逐个覆盖；完整标识符匹配，不能用编号前缀或邻近漏洞代替。 */
 function coversRequestedCve(plan: QueryPlan, evidence: RetrievalResponse): boolean {
-  if (plan.slots.cve_ids.length === 0) return true;
-  return plan.slots.cve_ids.some((id) =>
-    evidence.chunks.some((c) => c.text.toUpperCase().includes(id.toUpperCase())),
-  );
+  const covered = new Set(evidence.chunks.flatMap(c => (c.text.match(/CVE-\d{4}-\d{4,}/gi) ?? []).map(id => id.toUpperCase())));
+  return plan.slots.cve_ids.every(id => covered.has(id.toUpperCase()));
 }
 
 function intentLabel(plan: QueryPlan): string {
@@ -212,6 +212,33 @@ function renderConflicts(conflicts: readonly SourceConflict[]): { section: strin
   return { section: lines, chainEntry };
 }
 
+function bindVersionImpact(plan: QueryPlan, impact: VersionImpactAnswer | undefined): VersionImpactAnswer | undefined {
+  if (!impact || plan.slots.versions.length !== 1 || impact.tested_version !== plan.slots.versions[0] || plan.slots.cve_ids.length > 1) return undefined;
+  if (plan.slots.cve_ids.length === 1 && (impact.cve_id?.toUpperCase() !== plan.slots.cve_ids[0]!.toUpperCase() || !impact.cve_ids.some(id => id.toUpperCase() === plan.slots.cve_ids[0]!.toUpperCase()))) return undefined;
+  if (!coversProducts(plan.slots.products, [impact.product])) return undefined;
+  return impact;
+}
+
+
+/** 文本证据里的显式评分分歧只做提示，不推断来源权威身份、不自行仲裁。 */
+function observedScoreDisagreement(evidence: RetrievalResponse): string[] {
+  const groups = new Map<string, Set<number>>();
+  for (const chunk of evidence.chunks) {
+    if (chunk.doc_type !== "enrichment") continue;
+    const id = chunk.text.match(/^(CVE-\d{4}-\d{4,})\b/i)?.[1]?.toUpperCase();
+    const score = chunk.text.match(/CVSS\s+v3(?:\.1)?(?:\s+base score:\s*|[^\n]{0,35}?(?:评分|基础分)\s*)(\d+(?:\.\d+)?)/i)?.[1];
+    const value = Number(score);
+    if (!id || score === undefined || !Number.isFinite(value) || value < 0 || value > 10) continue;
+    const values = groups.get(id) ?? new Set<number>(); values.add(value); groups.set(id, values);
+  }
+  return [...groups].filter(([,values]) => values.size > 1).map(([id,values]) => id + " 的证据存在评分冲突（" + [...values].join(" / ") + "）；这是来源陈述分歧，未自行仲裁，需核对原文与评分版本。");
+}
+function hasRepairVersionEvidence(evidence: RetrievalResponse): boolean {
+  return evidence.chunks.some(c => c.text.split(/[。！？\n]/).some(sentence =>
+    /(?:fixed|fix|修复|补丁|升级|upgrade)/i.test(sentence) && /\d+\.\d+(?:\.\d+)?/.test(sentence)
+    && !/(?:没有|未提供|未知|无可靠|未修复|未解决|未验证|尚未|不成立|并非|不是|不可确认|据说|声称|如果|除非|unavailable|not\s+(?:known|fixed|patched|resolved|verified)|no\s+(?:known|fix|patch)|never\s+fixed|unpatched)/i.test(sentence)));
+}
+
 /** C-04/A-04 部分筛查状态：screened 表示本地启发式扫描已运行，不保证能识别所有注入；未运行时必须显式为 false。 */
 function assessInjectionGuard(question: string, evidence: RetrievalResponse, opts: SynthesizeOptions): InjectionGuard {
   const untrusted = evidence.chunks.filter((chunk) => chunk.trust === "untrusted").length;
@@ -268,6 +295,8 @@ function buildAbstain(
       ? "处置：先向用户澄清——" + plan.clarify_question
       : "处置：请补充检索条件（如指定 CVE、放宽 min_quality、扩大时间范围）后重试",
   ];
+  const observations = ctx.conflicts.length === 0 ? observedScoreDisagreement(evidence) : [];
+  if (observations.length) { lines.push("## 来源冲突", ...observations); chain.push(...observations); }
   const conflictView = renderConflicts(ctx.conflicts);
   for (const line of conflictView.section) lines.push(line);
   if (conflictView.chainEntry) chain.push(conflictView.chainEntry);
@@ -331,6 +360,8 @@ function buildAnswer(
     "逐条核对 provenance：" + n + " 条证据均可回溯到原文 URL，正文角标 [1]-[" + n + "] 与 citations 一一对应",
     "置信度 = 0.6×最高召回分 + 0.05×附加证据数(≤3) + 0.2×平均质量分 = " + confidence.toFixed(2),
   ];
+  const observations = ctx.conflicts.length === 0 ? observedScoreDisagreement(evidence) : [];
+  if (observations.length) { lines.push("## 来源冲突", ...observations); chain.push(...observations); }
   const conflictView = renderConflicts(ctx.conflicts);
   for (const line of conflictView.section) lines.push(line);
   if (conflictView.chainEntry) chain.push(conflictView.chainEntry);
@@ -341,7 +372,7 @@ function buildAnswer(
   chain.forEach((s, i) => lines.push((i + 1) + ". " + s));
   lines.push("## 置信度");
   lines.push(
-    confidence.toFixed(2) + "（依据：最高召回分 " + ctx.topScore.toFixed(2) +
+    confidence.toFixed(2) + "（启发式分值，非校准概率或准确率；依据：最高召回分 " + ctx.topScore.toFixed(2) +
     "、证据 " + n + " 条、平均质量分 " + ctx.avgQuality.toFixed(2) + "）",
   );
   const note = degradedNote(evidence);
@@ -401,10 +432,10 @@ export async function synthesizeAnswer(
     const ctx: Ctx = {
       topScore,
       avgQuality: qs.length > 0 ? qs.reduce((sum, q) => sum + q, 0) / qs.length : 0,
-      stale: assessStaleness(evidence, opts.now ?? new Date(), opts.stale_after_days ?? DEFAULT_STALE_THRESHOLD_DAYS),
+      stale: assessStaleness(evidence, opts.now ?? new Date(), opts.stale_after_days ?? staleThresholdDays(plan)),
       injection: assessInjectionGuard(question, evidence, opts),
       conflicts: normalizeSourceConflicts(opts.source_conflicts),
-      ...(opts.version_impact ? { versionImpact: opts.version_impact } : {}),
+      versionImpact: bindVersionImpact(plan, opts.version_impact),
     };
     const reasons: string[] = [];
     if (evidence.chunks.length === 0) reasons.push("检索没有返回任何证据块");
@@ -412,7 +443,15 @@ export async function synthesizeAnswer(
       reasons.push("最高召回分 " + topScore.toFixed(2) + " 低于阈值 " + ABSTAIN_RETRIEVAL_SCORE_FLOOR.toFixed(2));
     }
     if (plan.needs_clarify) reasons.push("问题意图不明确（Q1 低置信度，需澄清）");
-    if (!coversRequestedCve(plan, evidence)) reasons.push("证据未覆盖问题指定的 CVE：" + plan.slots.cve_ids.join("、"));
+    if (plan.slots.cve_ids.length === 0 && !coversProducts(plan.slots.products, evidence.chunks.map(c => c.text))) reasons.push("证据未覆盖问题指定的产品，不能用 BM25 相对榜首分冒充相关性");
+    if (!coversRequestedCve(plan, evidence)) reasons.push("证据未覆盖问题指定的全部 CVE：" + plan.slots.cve_ids.join("、"));
+    if (plan.intents.includes("impact_range") && plan.slots.versions.length > 0 && plan.slots.cve_ids.length > 1) reasons.push("多个 CVE 的具体版本影响须逐漏洞绑定规则，不能用一个汇总判定替代所有漏洞");
+    if (plan.intents.includes("impact_range") && plan.slots.versions.length > 0 && (!ctx.versionImpact || ctx.versionImpact.status === "unknown")) {
+      reasons.push("缺少可判定的版本规则，无法确认指定版本是否受影响（unknown 不等于安全）");
+    }
+    if (/(?:修复版本|安全版本|fixed\s+version|(?:具体)?升级(?:到)?(?:哪个|什么)(?:版本)?)/i.test(question) && !hasRepairVersionEvidence(evidence)) {
+      reasons.push("没有来源明确说明修复版本，不能把受影响版本或 CVSS 数值当成修复版本");
+    }
     if ((ctx.injection.flags?.length ?? 0) > 0) reasons.push("注入筛查命中风险标记；本次拒答并不展示可疑原文");
     const externalSynth = Boolean(opts.synth) && opts.synthesizer?.provider !== "template";
     const trustConfirmed = evidence.chunks.every((chunk) => chunk.trust === "trusted");

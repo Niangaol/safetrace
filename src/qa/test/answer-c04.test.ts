@@ -77,7 +77,7 @@ test("过龄证据必须显式带 stale_warning，并把说明写进正文", asy
   const old = chunk("c_old", { published_at: "2021-12-10T10:15:08.540Z", trust: "trusted" });
   const ans = await synthesizeAnswer("Log4Shell 影响哪些版本？", plan, evidence([old]), { session_id: "s", turn_id: "t", now: NOW });
   assert.ok(ans.stale_warning, "过龄证据必须提示");
-  assert.equal(ans.stale_warning!.threshold_days, 365);
+  assert.equal(ans.stale_warning!.threshold_days, 90);
   assert.equal(ans.stale_warning!.oldest_published_at, "2021-12-10T10:15:08.540Z");
   assert.equal(ans.stale_warning!.unknown_published_at, 0);
   assert.ok(ans.text_md.includes("证据时效提示"), "用户可见正文须含时效提示");

@@ -9,6 +9,8 @@
 
 - 2026-10-10 晚间续修：决策 HTTP 服务接入 SQLite 人工工单；无消费者重投不再清除死信。全量 **766/766**、四门禁通过。生产一致性与跨进程自愈仍有未闭环项，详见 [接线验收边界](INTEGRATION-CLOSURE-2026-10-10.md)。
 
+- 2026-10-11 收口：已复现的工单/检查点/自愈安全问题已补修，live结构化事实接线与问答身份门禁已验证；全量827/827、四门禁与冒烟通过。最终安全合成题同接线21/24、新natural接线22/24，真实已保存语料HTTP来源保真9/9；这不是比赛准确率。详见 [修复与质量报告](REPAIR-QA-QUALITY-2026-10-11.md)。
+
 **未伪称完成**：真实论文检索准确率/人工标注、统一富化公用契约里的修复建议、长期演示服务替换、语义多跳/资产定位/PoC验证及全部赛题交付。当前闭环属于工程验收，不是比赛准确率证明。
 
 详情与证据见[富化整改报告](<D:/AgentPrograms/safetrace/docs/ENRICHMENT-REMEDIATION-2026-10-04.md>)、[参考评测](<D:/AgentPrograms/safetrace/docs/ENRICHMENT-EVALUATION.md>)及[任务台账](<D:/AgentPrograms/safetrace/docs/TASKS.md>)。

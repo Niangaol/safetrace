@@ -1,171 +1,118 @@
-/**
- * A-01 编排运行时：invoke / resume 的真实入口（threadId 持久化 + 挂起恢复）。
- *
- * 口径：
- * - invoke：新线程执行；threadId 缺省由 newThreadId() 生成；挂起点落检查点（suspended）；
- * - resume：按 threadId 取回检查点续跑——跳过已执行节点、恢复状态快照，
- *   并把调用方给出的恢复值注入 state[RESUME_VALUE_KEY]；全部跑完落 completed；
- * - fail-closed：completed 线程禁止重复 invoke；未挂起的线程禁止 resume；
- *   同一 threadId 重复 invoke（已挂起）必须显式走 resume，不静默重跑；
- * - spec 含函数不可序列化：检查点只持久化「进度 + 状态快照」，resume 时调用方提供同一 spec。
- */
+/** Durable invoke/resume. A lease is never expired automatically.
+ * Snapshot/transport failure after execution starts retains the lease and requires
+ * manual audit. External side effects still require caller-owned idempotency. */
+import { randomUUID } from "node:crypto";
 import { nextId } from "@safetrace/shared";
-import type { MachineSpec, MachineState, ThreadStore } from "./statemachine.js";
-import { newThreadId } from "./statemachine.js";
+import type { ThreadCheckpoint } from "@safetrace/shared";
+import type { MachineSpec, MachineState, MachineResult, ThreadStore } from "./statemachine.js";
+import { newThreadId, RESUME_VALUE_KEY, specFingerprint, topoOrder, businessState } from "./statemachine.js";
 import { compile } from "./compile.js";
 import type { OrchestrationConfig } from "./compile.js";
 
 export interface RunMachineOptions<S extends MachineState = MachineState> {
-  /** 线程 id；缺省 newThreadId()。给出已存在的 threadId 时按 resume 语义校验。 */
   threadId?: string;
   traceId?: string;
-  /** 初始状态（仅新线程有效）。 */
   initialState?: S;
-  /** 检查点存储；缺省不持久化（纯内存执行，挂起后无法跨进程 resume）。 */
   store?: ThreadStore;
-  /** 编排配置（缺省读 config/orchestration.yml）。 */
   config?: OrchestrationConfig;
 }
-
 export interface ResumeMachineOptions<S extends MachineState = MachineState> {
   traceId?: string;
-  /** 外部恢复值（resume(threadId, value) 的 value；会注入 state[RESUME_VALUE_KEY]）。 */
   resumeValue?: unknown;
   store?: ThreadStore;
   config?: OrchestrationConfig;
 }
+export interface MachineRunResult extends MachineResult { thread_id: string }
 
-export interface MachineRunResult {
-  thread_id: string;
-  ok: boolean;
-  executed: string[];
-  degraded_nodes: string[];
-  failed: { node_id: string; error: string } | null;
-  /** 是否因 interrupt 挂起（等待外部 resume）。 */
-  interrupted: boolean;
-  interrupted_at: string | null;
-  trace_id: string;
-}
-
-function nowIso(): string { return new Date().toISOString(); }
-
-/** 新线程执行（invoke）。已存在同 id 检查点 → 显式抛错，禁静默重跑。 */
 export async function runMachine<S extends MachineState = MachineState>(
-  spec: MachineSpec<S>,
-  opts: RunMachineOptions<S> = {},
+  spec: MachineSpec<S>, opts: RunMachineOptions<S> = {},
 ): Promise<MachineRunResult> {
-  const { backend, config } = compile(spec, { config: opts.config });
-  const store = opts.store;
-  const threadId = opts.threadId ?? newThreadId();
-  const traceId = opts.traceId ?? nextId("tr");
-  if (store) {
-    const prior = await store.loadThreadCheckpoint(threadId);
-    if (prior) {
-      throw new Error(
-        "thread 已存在（status=" + prior.status + "）：重复 invoke 会重跑已执行节点，请改用 resumeMachine（" + threadId + "）",
-      );
-    }
-  }
-  const suspension: { current: { node_id: string; state: S } | null } = { current: null };
-  const result = await backend.run({
-    traceId,
-    spec,
-    ...(opts.initialState ? { initialState: opts.initialState } : {}),
-    onInterrupt: async (nodeId, _value, state) => {
-      suspension.current = { node_id: nodeId, state: structuredClone(state) };
-    },
-  });
-  if (store) {
-    if (suspension.current) {
-      await store.saveThreadCheckpoint({
-        thread_id: threadId,
-        trace_id: traceId,
-        executed: [...result.executed],
-        interrupt_node_id: suspension.current.node_id,
-        state: suspension.current.state as Record<string, unknown>,
-        status: "suspended",
-        updated_at: nowIso(),
-      });
-    } else if (result.ok) {
-      await store.saveThreadCheckpoint({
-        thread_id: threadId,
-        trace_id: traceId,
-        executed: [...result.executed],
-        interrupt_node_id: result.executed.at(-1) ?? "",
-        state: {},
-        status: "completed",
-        updated_at: nowIso(),
-      });
-    }
-    // result.ok=false（abort）不落检查点：失败路径无状态可恢复，重试即全新执行。
-  }
-  return {
-    thread_id: threadId,
-    ok: result.ok,
-    executed: result.executed,
-    degraded_nodes: result.degraded_nodes,
-    failed: result.failed,
-    interrupted: result.interrupted,
-    interrupted_at: result.interrupted_at,
-    trace_id: result.trace_id,
-  };
+  return execute(spec, opts, false);
 }
 
-/** 按 threadId 恢复挂起的线程（resume）。未挂起 / 不存在 → 显式抛错。 */
+/** Retry failed threads explicitly; completed/running threads cannot be resumed. */
 export async function resumeMachine<S extends MachineState = MachineState>(
-  threadId: string,
-  spec: MachineSpec<S>,
-  opts: ResumeMachineOptions<S> = {},
+  threadId: string, spec: MachineSpec<S>, opts: ResumeMachineOptions<S> = {},
 ): Promise<MachineRunResult> {
+  if (!opts.store) throw new Error("resume 必须提供 thread store（检查点是恢复的唯一依据）");
+  return execute(spec, { ...opts, threadId }, true, opts.resumeValue);
+}
+
+async function execute<S extends MachineState>(
+  spec: MachineSpec<S>, opts: RunMachineOptions<S>, resume: boolean, resumeValue?: unknown,
+): Promise<MachineRunResult> {
+  let compiled = compile(spec, { config: opts.config });
+  const threadId = opts.threadId ?? newThreadId();
   const store = opts.store;
-  if (!store) throw new Error("resume 必须提供 thread store（检查点是恢复的唯一依据）");
-  const prior = await store.loadThreadCheckpoint(threadId);
-  if (!prior) throw new Error("thread 不存在：" + threadId);
-  if (prior.status !== "suspended") throw new Error("thread 非挂起态（status=" + prior.status + "），不能 resume：" + threadId);
-  const { backend, config } = compile(spec, { config: opts.config });
-  const traceId = opts.traceId ?? prior.trace_id;
-  const suspension: { current: { node_id: string; state: S } | null } = { current: null };
-  const result = await backend.run({
-    traceId,
-    spec,
-    initialState: prior.state as S,
-    executed: [...prior.executed],
-    isResume: true,
-    ...(opts.resumeValue !== undefined ? { resumeValue: opts.resumeValue } : {}),
-    onInterrupt: async (nodeId, _value, state) => {
-      suspension.current = { node_id: nodeId, state: structuredClone(state) };
-    },
-  });
-  // resume 后可能再次挂起（多层交互）：覆盖检查点保持 suspended；否则 completed。
-  if (result.interrupted && result.interrupted_at && suspension.current) {
-    await store.saveThreadCheckpoint({
-      thread_id: threadId,
-      trace_id: traceId,
-      executed: [...result.executed],
-      interrupt_node_id: suspension.current.node_id,
-      state: suspension.current.state as Record<string, unknown>,
-      status: "suspended",
-      updated_at: nowIso(),
-    });
-  } else if (result.ok) {
-    await store.saveThreadCheckpoint({
-      thread_id: threadId,
-      trace_id: traceId,
-      executed: [...result.executed],
-      interrupt_node_id: result.executed.at(-1) ?? "",
-      state: {},
-      status: "completed",
-      updated_at: nowIso(),
-    });
+  const token = randomUUID();
+  const fingerprint = specFingerprint(spec);
+  const order = topoOrder(spec.nodes);
+  if (!resume && compiled.config.interrupts.enabled &&
+      (!compiled.config.interrupts.node_id || !order.some(n => n.id === compiled.config.interrupts.node_id))) {
+    throw new Error("interrupt 节点不存在，禁止静默绕过挂起");
   }
-  return {
-    thread_id: threadId,
-    ok: result.ok,
-    executed: result.executed,
-    degraded_nodes: result.degraded_nodes,
-    failed: result.failed,
-    interrupted: result.interrupted,
-    interrupted_at: result.interrupted_at,
-    trace_id: result.trace_id,
-  };
+  if (!resume && opts.initialState && RESUME_VALUE_KEY in opts.initialState) {
+    throw new Error("状态保留键冲突：" + RESUME_VALUE_KEY);
+  }
+  if (store && !await store.acquireThreadLease(threadId, token)) {
+    throw new Error("thread 租约占用，禁止并发执行；需人工审计解锁：" + threadId);
+  }
+  let started = false;
+  try {
+    const prior = store ? await store.loadThreadCheckpoint(threadId) : undefined;
+    if (!resume && prior) {
+      throw new Error("thread 已存在（status=" + prior.status + "），请显式 resume：" + threadId);
+    }
+    if (resume) {
+      if (!prior) throw new Error("thread 不存在：" + threadId);
+      if (prior.status !== "suspended" && prior.status !== "failed") {
+        throw new Error("thread 非挂起态/可重试失败态（status=" + prior.status + "），不能 resume：" + threadId);
+      }
+      if (!prior.spec_fingerprint || prior.spec_fingerprint !== fingerprint) {
+        throw new Error("thread spec_fingerprint 不匹配（旧检查点需人工迁移）：" + threadId);
+      }
+      if (prior.executed.some((id, i) => order[i]?.id !== id) ||
+          order[prior.executed.length]?.id !== prior.interrupt_node_id) {
+        throw new Error("thread 检查点进度/挂起节点与图不匹配：" + threadId);
+      }
+      if (RESUME_VALUE_KEY in prior.state) throw new Error("状态保留键冲突：" + RESUME_VALUE_KEY);
+      // The checkpoint, not today's config, defines where the value belongs.
+      compiled = compile(spec, { config: { backend: "native", interrupts: {
+        enabled: true, node_id: prior.interrupt_node_id,
+      } } });
+    }
+    const traceId = opts.traceId ?? prior?.trace_id ?? nextId("tr");
+    const initialState = (prior?.state ?? opts.initialState ?? {}) as S;
+    businessState(initialState); // validate before any node side effects
+    const save = async (status: ThreadCheckpoint["status"], executed: string[],
+      state: MachineState, target: string) => {
+      if (store) await store.saveThreadCheckpoint({
+        thread_id: threadId, trace_id: traceId, executed: [...executed],
+        state: businessState(state), interrupt_node_id: target, status,
+        spec_fingerprint: fingerprint, updated_at: new Date().toISOString(),
+      });
+    };
+    // From here on, any unexpected failure keeps the durable claim (fail closed).
+    started = true;
+    await save("running", prior?.executed ?? [], initialState,
+      prior?.interrupt_node_id ?? order[0]?.id ?? "");
+    const result = await compiled.backend.run({
+      traceId, spec, initialState, executed: prior?.executed ?? [],
+      isResume: resume, resumeValue,
+      onStep: async (executed, state) => {
+        await save("running", executed, state, order[executed.length]?.id ?? "");
+      },
+    });
+    await save(result.interrupted ? "suspended" : result.ok ? "completed" : "failed",
+      result.executed, result.state,
+      result.interrupted_at ?? result.failed?.node_id ?? result.executed.at(-1) ?? "");
+    if (store && !await store.releaseThreadLease(threadId, token)) {
+      throw new Error("thread 租约所有权丢失，需人工审计：" + threadId);
+    }
+    return { ...result, thread_id: threadId };
+  } catch (error) {
+    // Validation happens before execution and may safely relinquish ownership.
+    if (store && !started) await store.releaseThreadLease(threadId, token);
+    throw error;
+  }
 }

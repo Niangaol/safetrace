@@ -10,17 +10,13 @@
  *   （人工决策不做概率校准，不伪造中间置信度）。
  */
 import { nowIso, sha256Json } from "@safetrace/shared";
-import type { DecisionReply, EventBus, HumanTicket } from "@safetrace/shared";
+import type { DecisionReply, EventBus, EventStore, HumanTicket } from "@safetrace/shared";
 import { validateDecision } from "./decision-ladder.js";
 
 const SCHEMA_VERSION = "1.1";
 
 /** 人工工单队列存储（shared EventStore 的结构性子集；测试可用内存实现）。 */
-export interface HumanTicketQueueStore {
-  getHumanTicket(ticketId: string): Promise<HumanTicket | undefined>;
-  claimHumanTicket(ticketId: string, claimant: string, claimedAt: string): Promise<boolean>;
-  resolveHumanTicket(ticketId: string, resolver: string, resolvedAt: string, replyEventId: string): Promise<boolean>;
-}
+export type HumanTicketQueueStore = Pick<EventStore, "getHumanTicket" | "claimHumanTicket">;
 
 export interface ResolveHumanTicketOptions {
   store: HumanTicketQueueStore;
@@ -48,7 +44,7 @@ export async function claimHumanTicket(store: HumanTicketQueueStore, ticketId: s
   return updated!;
 }
 
-/** 人工决单：校验 → 发布 decision.replies（decided_by=human）→ 销单 → lineage。 */
+/** 人工决单：校验 → 同库原子提交 reply 与 resolved → 本地投递 → lineage。 */
 export async function resolveHumanTicket(opts: ResolveHumanTicketOptions): Promise<ResolveHumanTicketResult> {
   const ticket = await opts.store.getHumanTicket(opts.ticket_id);
   if (!ticket) throw new Error("人工工单不存在：" + opts.ticket_id);
@@ -67,11 +63,10 @@ export async function resolveHumanTicket(opts: ResolveHumanTicketOptions): Promi
     ...(opts.rationale ? { fallback_reason: opts.rationale } : {}),
     schema_version: SCHEMA_VERSION,
   };
-  const envelope = await opts.bus?.publish("decision.replies", reply, { trace_id: ticket.trace_id });
-  if (!envelope) throw new Error("人工决策必须落总线（decision.replies）才能回放；bus 未提供");
+  if (!opts.bus) throw new Error("人工决策必须落总线（decision.replies）才能回放；bus 未提供");
+  opts.bus.assertTicketStore(opts.store);
   const resolvedAt = nowIso();
-  const applied = await opts.store.resolveHumanTicket(opts.ticket_id, opts.resolver_id, resolvedAt, envelope.event_id);
-  if (!applied) throw new Error("工单状态已变化，决单未生效（并发竞争）：" + opts.ticket_id);
+  const envelope = await opts.bus.resolveHumanTicket(ticket, opts.resolver_id, resolvedAt, reply);
   await opts.bus?.recordLineage({
     trace_id: ticket.trace_id,
     parent_lineage_ids: [],

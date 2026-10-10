@@ -33,12 +33,12 @@ test("P-03：版本命中受影响区间 → affected 且带规则与命中区�
   assert.ok(v.reason.includes("厂商身份未经本地核实"));
 });
 
-test("P-03：产品标识大小写归一；别名 canonical 化是 Q1 职责（链路传规范名，禁模糊匹配）", () => {
+test("P-03：产品标识使用显式词典别名归一，不依赖模糊相似度", () => {
   const upper = answerVersionImpact([LOG4J], { product: "LOG4J", version: "2.14.0" });
   assert.equal(upper.status, "affected", "大小写归一后应命中");
   const alias = answerVersionImpact([LOG4J], { product: "log4shell", version: "2.14.0" });
-  assert.equal(alias.status, "unknown", "别名不经 Q1 规范化时不模糊匹配（禁猜产品）");
-  assert.equal(alias.candidates, 0);
+  assert.equal(alias.status, "affected", "Log4Shell 是词典中显式登记的 Log4j 别名");
+  assert.equal(alias.candidates, 1);
 });
 
 test("P-03：版本不在区间 → not_affected（确定性结论，不靠模型）", () => {
@@ -86,7 +86,7 @@ test("P-03：同产品多源聚合——任一 affected 优先，否则 unknown�
   const notAffected = answerVersionImpact([SPRING], { product: "Spring Framework", version: "5.3.20" });
   assert.equal(notAffected.status, "not_affected");
   // 产品标识不精确相等 → 不候选（禁模糊匹配把 not_affected 说成 affected 或反之）
-  const mismatch = answerVersionImpact([SPRING], { product: "spring", version: "5.3.10" });
+  const mismatch = answerVersionImpact([SPRING], { product: "springlike", version: "5.3.10" });
   assert.equal(mismatch.status, "unknown");
   assert.equal(mismatch.candidates, 0);
 });

@@ -28,6 +28,7 @@ test("A-01：节点共享 state，reducers 按声明合并重复写入字段", a
     reducers: { hits: (current, incoming) => [...(current as string[]), ...(incoming as string[])], count: (current, incoming) => (current as number) + (incoming as number) },
   };
   const res = await runMachine(spec, { config: NO_INTERRUPT });
+  assert.deepEqual(res.state, { hits: ["a", "b"], count: 7 });
   assert.equal(res.ok, true);
   assert.deepEqual(res.executed, ["a", "b", "c"]);
 });
@@ -78,6 +79,7 @@ test("A-01：resume 续跑——跳过已执行、恢复值注入保留键、检
   assert.deepEqual(resumed.executed, ["a", "b", "c"]);
   const cp = await store.loadThreadCheckpoint(first.thread_id);
   assert.equal(cp!.status, "completed", "跑完必须落 completed");
+  assert.deepEqual(cp!.state, { log: "b-ran", final: "b-ran+c" });
 });
 
 test("A-01：fail-closed——重复 invoke / resume 不存在 / resume 已完成都显式抛错", async () => {
@@ -139,7 +141,7 @@ test("A-01：SQLite 检查点跨重启保留（挂起→重开→resume）", asy
   }
 });
 
-test("A-01：TaskGraph 适配层挂起→resume 全链路（thread_id 贯穿）", async () => {
+test("A-01：TaskGraph 适配层默认完成及重复拒绝（thread_id 贯穿）", async () => {
   const store = new MemoryEventStore();
   const seen: string[] = [];
   const graph: TaskGraph = {

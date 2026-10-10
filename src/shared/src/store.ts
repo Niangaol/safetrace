@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { Envelope, Topic } from "./envelope.js";
-import type { DecisionKind, QualityVerdict, TypedQuestion } from "./types.js";
+import type { DecisionReply, DecisionKind, QualityVerdict, TypedQuestion } from "./types.js";
 
 export type LineageStatus = "success" | "degraded" | "rejected" | "review" | "failed";
 export interface LineageArtifactRef { kind: string; id: string; sha256?: string; url?: string }
@@ -123,7 +123,8 @@ export interface ThreadCheckpoint {
   interrupt_node_id: string;
   /** 可序列化状态快照（挂起点或完成点的 machine state）。 */
   state: Record<string, unknown>;
-  status: "suspended" | "completed";
+  status: "suspended" | "completed" | "running" | "failed";
+  spec_fingerprint?: string;
   updated_at: string;
 }
 
@@ -150,7 +151,13 @@ function intelAdmissionRows(db: DatabaseSync): IntelAdmissionEvent[] {
   return db.prepare("SELECT seq,event_id,trace_id,causation_id,topic,payload FROM events WHERE topic IN ('raw.docs','intel.items','dq.verdicts') ORDER BY seq").all().map(row=>({seq:Number(row.seq),event_id:String(row.event_id),trace_id:String(row.trace_id),causation_id:row.causation_id===null?null:String(row.causation_id),topic:row.topic as IntelAdmissionEvent["topic"],payload:JSON.parse(String(row.payload))}));
 }
 
+export interface HumanTicketCommit { envelope: Envelope<DecisionReply>; inserted: boolean }
+
 export interface EventStore {
+  bindDecisionRequest(decisionId: string, requestHash: string): Promise<void>;
+  getHumanTicketReceipt(ticketId: string): Promise<Envelope<DecisionReply> | undefined>;
+  enqueueHumanTicketWithReply(ticket: HumanTicket, envelope: Envelope<DecisionReply>): Promise<HumanTicketCommit>;
+  resolveHumanTicketWithReply(ticketId: string, resolver: string, resolvedAt: string, envelope: Envelope<DecisionReply>): Promise<boolean>;
   /** 写入事件。返回是否为新事件（false = 重复投递被幂等去重）。 */
   append<T>(env: Envelope<T>): Promise<boolean>;
   /** 按主题顺序读取（offset 分页）。 */
@@ -170,6 +177,8 @@ export interface EventStore {
   /** 隔离区内容（可查可导出；A1/S1 看板与运维脚本消费）。 */
   quarantineEntries(): Promise<QuarantineRecord[]>;
   /** A-01：保存编排线程检查点（挂起/完成；幂等按 thread_id）。 */
+  acquireThreadLease(threadId: string, token: string): Promise<boolean>;
+  releaseThreadLease(threadId: string, token: string): Promise<boolean>;
   saveThreadCheckpoint(checkpoint: ThreadCheckpoint): Promise<void>;
   /** A-01：读取编排线程检查点；不存在返回 undefined。 */
   loadThreadCheckpoint(threadId: string): Promise<ThreadCheckpoint | undefined>;
@@ -277,6 +286,10 @@ CREATE TABLE IF NOT EXISTS quarantine (
   verdict        TEXT NOT NULL,
   quarantined_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS machine_thread_leases (
+  thread_id TEXT PRIMARY KEY,
+  owner_token TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS machine_threads (
   thread_id        TEXT PRIMARY KEY,
   trace_id         TEXT NOT NULL,
@@ -285,6 +298,14 @@ CREATE TABLE IF NOT EXISTS machine_threads (
   state            TEXT NOT NULL,
   status           TEXT NOT NULL,
   updated_at       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decision_request_identity (
+  decision_id TEXT PRIMARY KEY,
+  request_sha256 TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS human_ticket_receipts (
+  ticket_id TEXT PRIMARY KEY,
+  pending_event_id TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS human_tickets (
   ticket_id     TEXT PRIMARY KEY,
@@ -305,6 +326,69 @@ CREATE TABLE IF NOT EXISTS human_tickets (
 
 export class SqliteEventStore implements EventStore {
   private db: DatabaseSync;
+
+  private transaction<T>(work: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try { const result = work(); this.db.exec("COMMIT"); return result; }
+    catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  private insertTicketEvent(env: Envelope<DecisionReply>): void {
+    const next = this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM events").get() as { n: number };
+    this.db.prepare("INSERT INTO events (event_id, topic, occurred_at, trace_id, causation_id, payload, schema_version, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(env.event_id, env.topic, env.occurred_at, env.trace_id, env.causation_id, JSON.stringify(env.payload), env.schema_version, next.n);
+  }
+
+  async bindDecisionRequest(decisionId: string, requestHash: string): Promise<void> {
+    this.transaction(() => {
+      const identity = this.db.prepare("SELECT request_sha256 FROM decision_request_identity WHERE decision_id = ?").get(decisionId);
+      if (!identity && this.db.prepare("SELECT 1 FROM human_tickets WHERE decision_id = ?").get(decisionId)) throw new Error("legacy human ticket request identity unavailable; manual audit required");
+      this.db.prepare("INSERT OR IGNORE INTO decision_request_identity VALUES (?, ?)").run(decisionId, requestHash);
+      const row = this.db.prepare("SELECT request_sha256 FROM decision_request_identity WHERE decision_id = ?").get(decisionId)!;
+      if (row.request_sha256 !== requestHash) throw new Error("decision_id request identity conflict");
+    });
+  }
+
+  private ticketReceipt(ticketId: string): Envelope<DecisionReply> | undefined {
+    const ticket = this.db.prepare("SELECT status, reply_event_id FROM human_tickets WHERE ticket_id = ?").get(ticketId);
+    if (!ticket) return undefined;
+    const pending = this.db.prepare("SELECT pending_event_id FROM human_ticket_receipts WHERE ticket_id = ?").get(ticketId);
+    const id = ticket.status === "resolved" ? ticket.reply_event_id : pending?.pending_event_id;
+    if (!id) throw new Error("human ticket has no durable receipt (legacy ticket)");
+    const row = this.db.prepare("SELECT * FROM events WHERE event_id = ?").get(id);
+    if (!row) throw new Error("human ticket receipt missing");
+    return toEnvelope(row) as Envelope<DecisionReply>;
+  }
+
+  async getHumanTicketReceipt(ticketId: string): Promise<Envelope<DecisionReply> | undefined> {
+    // Single transaction prevents reading pending status with a newly resolved receipt.
+    return this.transaction(() => this.ticketReceipt(ticketId));
+  }
+
+  async enqueueHumanTicketWithReply(ticket: HumanTicket, envelope: Envelope<DecisionReply>): Promise<HumanTicketCommit> {
+    return this.transaction(() => {
+      const existing = this.ticketReceipt(ticket.ticket_id);
+      if (existing) return { envelope: existing, inserted: false };
+      assertTicketEnvelope(ticket, envelope);
+      this.db.prepare("INSERT INTO human_tickets (ticket_id, decision_id, trace_id, kind, questions, status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(ticket.ticket_id, ticket.decision_id, ticket.trace_id, ticket.kind, JSON.stringify(ticket.questions), "pending", ticket.reason, ticket.created_at);
+      this.insertTicketEvent(envelope);
+      this.db.prepare("INSERT INTO human_ticket_receipts VALUES (?, ?)").run(ticket.ticket_id, envelope.event_id);
+      return { envelope, inserted: true };
+    });
+  }
+
+  async resolveHumanTicketWithReply(ticketId: string, resolver: string, resolvedAt: string, envelope: Envelope<DecisionReply>): Promise<boolean> {
+    return this.transaction(() => {
+      const ticket = this.humanTicketRow(this.db.prepare("SELECT * FROM human_tickets WHERE ticket_id = ?").get(ticketId));
+      if (!ticket || ticket.status === "resolved") return false;
+      assertTicketEnvelope(ticket, envelope);
+      this.insertTicketEvent(envelope);
+      this.db.prepare("UPDATE human_tickets SET status = 'resolved', resolved_by = ?, resolved_at = ?, reply_event_id = ? WHERE ticket_id = ?")
+        .run(resolver, resolvedAt, envelope.event_id, ticketId);
+      return true;
+    });
+  }
   readIntelAdmissionEvents(): IntelAdmissionEvent[] { return intelAdmissionRows(this.db); }
   withIntelAdmissionSnapshot<T>(operation:(events:IntelAdmissionEvent[])=>T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -328,6 +412,8 @@ export class SqliteEventStore implements EventStore {
         }
       }
       this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_seq_unique ON events(seq)");
+      const columns = this.db.prepare("PRAGMA table_info(machine_threads)").all();
+      if (!columns.some(column => column.name === "spec_fingerprint")) this.db.exec("ALTER TABLE machine_threads ADD COLUMN spec_fingerprint TEXT");
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction may already be closed */ }
@@ -545,10 +631,18 @@ export class SqliteEventStore implements EventStore {
     }));
   }
 
+  async acquireThreadLease(threadId: string, token: string): Promise<boolean> {
+    return this.db.prepare("INSERT OR IGNORE INTO machine_thread_leases VALUES (?, ?)").run(threadId, token).changes === 1;
+  }
+
+  async releaseThreadLease(threadId: string, token: string): Promise<boolean> {
+    return this.db.prepare("DELETE FROM machine_thread_leases WHERE thread_id = ? AND owner_token = ?").run(threadId, token).changes === 1;
+  }
+
   async saveThreadCheckpoint(checkpoint: ThreadCheckpoint): Promise<void> {
     this.db
-      .prepare("INSERT OR REPLACE INTO machine_threads (thread_id, trace_id, executed, interrupt_node_id, state, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(checkpoint.thread_id, checkpoint.trace_id, JSON.stringify(checkpoint.executed), checkpoint.interrupt_node_id, JSON.stringify(checkpoint.state), checkpoint.status, checkpoint.updated_at);
+      .prepare("INSERT OR REPLACE INTO machine_threads (thread_id, trace_id, executed, interrupt_node_id, state, status, updated_at, spec_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(checkpoint.thread_id, checkpoint.trace_id, JSON.stringify(checkpoint.executed), checkpoint.interrupt_node_id, JSON.stringify(checkpoint.state), checkpoint.status, checkpoint.updated_at, checkpoint.spec_fingerprint ?? null);
   }
 
   async loadThreadCheckpoint(threadId: string): Promise<ThreadCheckpoint | undefined> {
@@ -561,6 +655,7 @@ export class SqliteEventStore implements EventStore {
       interrupt_node_id: row.interrupt_node_id as string,
       state: JSON.parse(row.state as string) as Record<string, unknown>,
       status: row.status as ThreadCheckpoint["status"],
+      ...(typeof row.spec_fingerprint === "string" ? { spec_fingerprint: row.spec_fingerprint } : {}),
       updated_at: row.updated_at as string,
     };
   }
@@ -574,6 +669,7 @@ export class SqliteEventStore implements EventStore {
       interrupt_node_id: r.interrupt_node_id as string,
       state: JSON.parse(r.state as string) as Record<string, unknown>,
       status: r.status as ThreadCheckpoint["status"],
+      ...(typeof r.spec_fingerprint === "string" ? { spec_fingerprint: r.spec_fingerprint } : {}),
       updated_at: r.updated_at as string,
     }));
   }
@@ -588,12 +684,8 @@ export class SqliteEventStore implements EventStore {
   }
 
   async claimHumanTicket(ticketId: string, claimant: string, claimedAt: string): Promise<boolean> {
-    const row = this.db.prepare("SELECT status FROM human_tickets WHERE ticket_id = ?").get(ticketId) as { status: HumanTicketStatus } | undefined;
-    if (!row || row.status !== "pending") return false;
-    this.db
-      .prepare("UPDATE human_tickets SET status = ?, claimed_by = ?, claimed_at = ? WHERE ticket_id = ?")
-      .run("claimed", claimant, claimedAt, ticketId);
-    return true;
+    return this.db.prepare("UPDATE human_tickets SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE ticket_id = ? AND status = 'pending'")
+      .run(claimant, claimedAt, ticketId).changes === 1;
   }
 
   async resolveHumanTicket(ticketId: string, resolver: string, resolvedAt: string, replyEventId: string): Promise<boolean> {
@@ -635,6 +727,10 @@ export class SqliteEventStore implements EventStore {
   close(): void {
     this.db.close();
   }
+}
+
+function assertTicketEnvelope(ticket: HumanTicket, envelope: Envelope<DecisionReply>): void {
+  if (envelope.topic !== "decision.replies" || envelope.trace_id !== ticket.trace_id || envelope.payload.decision_id !== ticket.decision_id || envelope.payload.kind !== ticket.kind || envelope.payload.decided_by !== "human") throw new Error("ticket reply identity mismatch");
 }
 
 function event_id(v: string): string { return v; }
@@ -768,6 +864,19 @@ export class MemoryEventStore implements EventStore {
   }
 
   private threads = new Map<string, ThreadCheckpoint>();
+  private threadLeases = new Map<string, string>();
+
+  async acquireThreadLease(threadId: string, token: string): Promise<boolean> {
+    if (this.threadLeases.has(threadId)) return false;
+    this.threadLeases.set(threadId, token);
+    return true;
+  }
+
+  async releaseThreadLease(threadId: string, token: string): Promise<boolean> {
+    if (this.threadLeases.get(threadId) !== token) return false;
+    this.threadLeases.delete(threadId);
+    return true;
+  }
 
   async saveThreadCheckpoint(checkpoint: ThreadCheckpoint): Promise<void> {
     this.threads.set(checkpoint.thread_id, {
@@ -787,6 +896,51 @@ export class MemoryEventStore implements EventStore {
   }
 
   private tickets = new Map<string, HumanTicket>();
+  private requestHashes = new Map<string, string>();
+  private pendingReceipts = new Map<string, string>();
+
+  async bindDecisionRequest(decisionId: string, requestHash: string): Promise<void> {
+    const existing = this.requestHashes.get(decisionId);
+    if (!existing && [...this.tickets.values()].some(ticket => ticket.decision_id === decisionId)) throw new Error("legacy human ticket request identity unavailable; manual audit required");
+    if (existing && existing !== requestHash) throw new Error("decision_id request identity conflict");
+    this.requestHashes.set(decisionId, requestHash);
+  }
+
+  private ticketReceipt(ticketId: string): Envelope<DecisionReply> | undefined {
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket) return undefined;
+    const id = ticket.status === "resolved" ? ticket.reply_event_id : this.pendingReceipts.get(ticketId);
+    const event = this.events.find(e => e.event_id === id);
+    if (!event) throw new Error("human ticket has no durable receipt (legacy ticket)");
+    return structuredClone(event) as Envelope<DecisionReply>;
+  }
+
+  async getHumanTicketReceipt(ticketId: string): Promise<Envelope<DecisionReply> | undefined> { return this.ticketReceipt(ticketId); }
+
+  async enqueueHumanTicketWithReply(ticket: HumanTicket, envelope: Envelope<DecisionReply>): Promise<HumanTicketCommit> {
+    const existing = this.ticketReceipt(ticket.ticket_id);
+    if (existing) return { envelope: existing, inserted: false };
+    assertTicketEnvelope(ticket, envelope);
+    if (this.events.some(e => e.event_id === envelope.event_id)) throw new Error("duplicate ticket event");
+    // Prepare all fallible cloning before touching either collection; no await in atomic segment.
+    const savedTicket = structuredClone(ticket), savedEnvelope = structuredClone(envelope);
+    this.tickets.set(ticket.ticket_id, savedTicket);
+    this.events.push(savedEnvelope);
+    this.pendingReceipts.set(ticket.ticket_id, envelope.event_id);
+    return { envelope: structuredClone(savedEnvelope), inserted: true };
+  }
+
+  async resolveHumanTicketWithReply(ticketId: string, resolver: string, resolvedAt: string, envelope: Envelope<DecisionReply>): Promise<boolean> {
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket || ticket.status === "resolved") return false;
+    assertTicketEnvelope(ticket, envelope);
+    if (this.events.some(e => e.event_id === envelope.event_id)) throw new Error("duplicate ticket event");
+    const savedEnvelope = structuredClone(envelope);
+    const savedTicket = structuredClone({ ...ticket, status: "resolved" as const, resolved_by: resolver, resolved_at: resolvedAt, reply_event_id: envelope.event_id });
+    this.events.push(savedEnvelope);
+    this.tickets.set(ticketId, savedTicket);
+    return true;
+  }
 
   async enqueueHumanTicket(ticket: HumanTicket): Promise<boolean> {
     if (this.tickets.has(ticket.ticket_id)) return false;

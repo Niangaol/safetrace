@@ -6,7 +6,8 @@
  */
 import { makeEnvelope, type Envelope, type Topic } from "./envelope.js";
 import { recordLineage as persistLineage } from "./lineage.js";
-import type { EventStore, LineageDraft, LineageRecord, ReviewCase, ReviewCaseDecision, ReviewCaseDraft, StoredPageSnapshot } from "./store.js";
+import type { DecisionReply } from "./types.js";
+import type { HumanTicket, HumanTicketCommit, EventStore, LineageDraft, LineageRecord, ReviewCase, ReviewCaseDecision, ReviewCaseDraft, StoredPageSnapshot } from "./store.js";
 
 export type Handler<T = unknown> = (payload: T, env: Envelope<T>) => Promise<void> | void;
 
@@ -42,6 +43,26 @@ export class EventBus {
     const env = makeEnvelope(topic, payload, meta);
     const accepted = await this.opts.store.append(env);
     if (!accepted) return env; // 重复事件不重复投递
+    await this.deliver(env);
+    return env;
+  }
+
+  /** Queue commits must use this exact store; never split event and ticket databases. */
+  assertTicketStore(store: unknown): void {
+    if (store !== this.opts.store) throw new Error("human ticket store must be the bus event store");
+  }
+
+  async enqueueHumanTicket(ticket: HumanTicket, reply: DecisionReply): Promise<HumanTicketCommit> {
+    const env = makeEnvelope("decision.replies", reply, { trace_id: ticket.trace_id });
+    const committed = await this.opts.store.enqueueHumanTicketWithReply(ticket, env);
+    if (committed.inserted) await this.deliver(committed.envelope);
+    return committed;
+  }
+
+  async resolveHumanTicket(ticket: HumanTicket, resolver: string, resolvedAt: string, reply: DecisionReply): Promise<Envelope<DecisionReply>> {
+    const env = makeEnvelope("decision.replies", reply, { trace_id: ticket.trace_id });
+    if (!await this.opts.store.resolveHumanTicketWithReply(ticket.ticket_id, resolver, resolvedAt, env)) throw new Error("工单状态已变化，决单未生效（并发竞争）：" + ticket.ticket_id);
+    // Crash here cannot lose the reply: it is already durable and can be replayed.
     await this.deliver(env);
     return env;
   }

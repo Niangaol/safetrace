@@ -403,10 +403,11 @@ test("QdrantEngine：published_after 下推服务端范围过滤（A-05）", asy
   await engine.search(req({ published_after: "2026-09-01T00:00:00Z" }));
   const searchCall = requests.find((r) => r.url.includes("/points/search"));
   assert.ok(searchCall, "应有一次 Qdrant points/search 请求");
-  const must = (searchCall!.body as { filter: { must: Array<{ key: string; range?: { gte?: string } }> } }).filter.must;
+  const must = (searchCall!.body as { filter: { must: Array<{ key: string; datetime_range?: { gte?: string }; range?: unknown }> } }).filter.must;
   const clause = must.find((c) => c.key === "published_at");
   assert.ok(clause, "published_after 必须下推为 Qdrant 范围过滤（双引擎同口径）");
-  assert.equal(clause!.range!.gte, "2026-09-01T00:00:00.000Z", "归一为 ISO-8601 UTC，字典序即时间序");
+  assert.equal(clause!.datetime_range!.gte, "2026-09-01T00:00:00.000Z", "归一为 ISO-8601 UTC 并使用 Qdrant datetime_range");
+  assert.equal(clause!.range, undefined, "不能用 numeric range 传字符串时间");
   const noWindow = await engine.search(req({}));
   assert.ok(noWindow.chunks.length === 0);
   const lastMust = (requests.at(-1)!.body as { filter: { must: Array<{ key: string }> } }).filter.must;

@@ -72,7 +72,11 @@ test("A-02 HTTP 实际处理器：未决工单持久化、重复请求不重复�
       const replies = await second.read<DecisionReply>("decision.replies", 0, 100);
       assert.ok(replies.some(e => e.event_id === resolved.ticket.reply_event_id && e.payload.decision.choice === "remediation"));
       // 既有工单不因同一请求重发而被重新打开。
-      assert.equal((await decide(restarted.base, request)).status, 200);
+      const replay = await decide(restarted.base, request);
+      assert.equal(replay.status, 200);
+      assert.deepEqual(await replay.json(), resolved.reply);
+      assert.equal((await second.read("decision.replies")).length, 2);
+      assert.equal((await decide(restarted.base, { ...request, trace_id: "different-trace" })).status, 503);
       assert.equal((await second.getHumanTicket(id))?.status, "resolved");
       assert.equal((await second.listHumanTickets()).length, 1);
     } finally { await restarted.close(); second.close(); }
@@ -97,13 +101,14 @@ test("A-02 处理器：规则已决、非法请求不会生成工单", async () 
 
 test("A-02 处理器：工单落库失败显式失败，不能返回成功冒充已交接", async () => {
   const store = new MemoryEventStore();
-  store.enqueueHumanTicket = async () => { throw new Error("ticket storage unavailable"); };
+  store.enqueueHumanTicketWithReply = async () => { throw new Error("ticket storage unavailable"); };
   const app = await serve(store);
   try {
     const response = await decide(app.base, request);
     assert.equal(response.status, 503);
     assert.equal((await response.json() as { degraded_to: string }).degraded_to, "request_failed");
     assert.equal((await store.listHumanTickets()).length, 0);
+    assert.equal((await store.read("decision.replies")).length, 0, "入队失败不得孤立未决event");
   } finally { await app.close(); store.close(); }
 });
 

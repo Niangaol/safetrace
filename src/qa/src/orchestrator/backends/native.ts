@@ -1,24 +1,14 @@
-/**
- * A-01 native 后端：自研顺序执行器（迁移自 taskgraph.ts 的拓扑+失败策略语义）。
- * 作为默认后端保 main 可演示；不引入外部依赖。
- * A-01（2026-10-10）补齐挂起/恢复的状态流：
- * - 节点间共享同一个 state（初始状态 / resume 快照可注入）；
- * - 节点声明 writes 的字段在重复写入时按 spec.reducers 合并（缺省 last-write-wins）；
- * - interrupt 命中且非 resume → 挂起并交出挂起点状态；resume → 跳过已执行节点，
- *   把外部恢复值注入 state[RESUME_VALUE_KEY] 后继续执行挂起节点。
- */
+/** Native sequential executor. State commits/reducers precede durable per-step progress.
+ * External side effects are not transactional: callers must use idempotency keys. */
 import { nextId } from "@safetrace/shared";
-import type { BackendContext, MachineBackend, MachineNode, MachineResult, MachineState } from "../statemachine.js";
-import { RESUME_VALUE_KEY, topoOrder } from "../statemachine.js";
+import { isDeepStrictEqual } from "node:util";
+import type { BackendContext, MachineBackend, MachineResult, MachineState } from "../statemachine.js";
+import { RESUME_VALUE_KEY, topoOrder, businessState } from "../statemachine.js";
 
-export interface NativeRunOptions {
-  /** interrupt 节点 id：执行到该节点时挂起（等待 resume）。 */
-  interruptAt?: string;
-}
+export interface NativeRunOptions { interruptAt?: string }
 
 export class NativeMachineBackend<S extends MachineState = MachineState> implements MachineBackend<S> {
   readonly name = "native" as const;
-
   constructor(private readonly opts: NativeRunOptions = {}) {}
 
   async run(context: BackendContext<S>): Promise<MachineResult> {
@@ -29,56 +19,62 @@ export class NativeMachineBackend<S extends MachineState = MachineState> impleme
     const steps: MachineResult["steps"] = [];
     const alreadyRun = new Set(context.executed ?? []);
     const state = (context.initialState ?? {}) as S;
-    // 同一对象的非泛型可变视图：泛型 S 的索引只读，写入经此视图（节点拿到的仍是 S）。
     const writable = state as MachineState;
-    if (context.isResume && context.resumeValue !== undefined && RESUME_VALUE_KEY in state) {
-      throw new Error("恢复值与状态保留键冲突：" + RESUME_VALUE_KEY);
-    }
-
+    if (RESUME_VALUE_KEY in state) throw new Error("状态保留键冲突：" + RESUME_VALUE_KEY);
+    const finish = (ok: boolean, failed: MachineResult["failed"] = null,
+      interruptedAt: string | null = null): MachineResult => ({
+      ok, state: businessState(state), executed, degraded_nodes: degraded, failed,
+      interrupted: interruptedAt !== null, interrupted_at: interruptedAt, steps, trace_id: traceId,
+    });
     for (const node of order) {
-      // resume：跳过检查点里已执行的节点（不重跑，副作用不重复）。
-      if (alreadyRun.has(node.id)) {
-        executed.push(node.id);
-        continue;
-      }
-      // interrupt：命中挂起点。
-      if (this.opts.interruptAt && node.id === this.opts.interruptAt) {
-        if (context.isResume) {
-          // resume 续跑：恢复值注入保留键后执行该节点（挂起点本身尚未执行过）。
-          if (context.resumeValue !== undefined) writable[RESUME_VALUE_KEY] = context.resumeValue;
-        } else {
+      if (alreadyRun.has(node.id)) { executed.push(node.id); continue; }
+      if (node.id === this.opts.interruptAt) {
+        if (!context.isResume) {
           await context.onInterrupt?.(node.id, context.resumeValue, state);
-          return { ok: true, executed, degraded_nodes: degraded, failed: null, interrupted: true, interrupted_at: node.id, steps, trace_id: traceId };
+          return finish(true, null, node.id);
         }
+        if (context.resumeValue !== undefined) writable[RESUME_VALUE_KEY] = context.resumeValue;
       }
-      const writes = node.writes ?? [];
-      const before = new Map<string, unknown>(writes.map((field) => [field, state[field]]));
+      const before = structuredClone(state);
+      const changed = new Set<string>();
+      const assertKey = (key: string | symbol) => {
+        if (key === RESUME_VALUE_KEY) throw new Error("状态保留键冲突：" + RESUME_VALUE_KEY);
+        if (typeof key === "string") changed.add(key);
+      };
+      const view = new Proxy(state, {
+        set(target, key, value) { assertKey(key); return Reflect.set(target, key, value); },
+        defineProperty(target, key, descriptor) { assertKey(key); return Reflect.defineProperty(target, key, descriptor); },
+        deleteProperty(target, key) { assertKey(key); return Reflect.deleteProperty(target, key); },
+        setPrototypeOf() { throw new Error("禁止修改状态原型"); },
+      });
       try {
-        await node.run(state);
+        await node.run(view);
+        for (const field of node.writes ?? []) {
+          const reducer = context.spec.reducers?.[field];
+          if (reducer && before[field] !== undefined &&
+              (changed.has(field) || !isDeepStrictEqual(before[field], writable[field]))) {
+            writable[field] = reducer(before[field], writable[field]);
+          }
+        }
         executed.push(node.id);
         steps.push({ node_id: node.id, status: "ok" });
       } catch (err) {
+        // Failed/degraded partial state must not leak to downstream nodes.
+        for (const key of Object.keys(writable)) delete writable[key];
+        Object.assign(writable, before);
         const error = err instanceof Error ? err.message : String(err);
-        if (node.on_fail === "degrade") {
-          // 降级语义由上层（taskgraph/runtime）登记 FallbackEvent；后端只标记状态。
+        if (node.on_fail === "degrade" && !error.includes("保留键冲突")) {
           degraded.push(node.id + "→degraded");
           executed.push(node.id);
           steps.push({ node_id: node.id, status: "degraded", error });
-          continue;
-        }
-        // abort（默认）：停止并交出失败路径，不产生降级答案。
-        steps.push({ node_id: node.id, status: "failed", error });
-        return { ok: false, executed, degraded_nodes: degraded, failed: { node_id: node.id, error }, interrupted: false, interrupted_at: null, steps, trace_id: traceId };
-      }
-      // reducers：节点重复写入同名字段时按声明的合并策略收敛（缺省 last-write-wins）。
-      for (const field of writes) {
-        const reducer = context.spec.reducers?.[field];
-        const previous = before.get(field);
-        if (reducer && previous !== undefined && writable[field] !== previous) {
-          writable[field] = reducer(previous, writable[field]);
+        } else {
+          steps.push({ node_id: node.id, status: "failed", error });
+          return finish(false, { node_id: node.id, error });
         }
       }
+      // Outside node catch: persistence failure is fatal, never treated as degrade.
+      await context.onStep?.([...executed], businessState(state) as S);
     }
-    return { ok: true, executed, degraded_nodes: degraded, failed: null, interrupted: false, interrupted_at: null, steps, trace_id: traceId };
+    return finish(true);
   }
 }

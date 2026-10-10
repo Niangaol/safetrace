@@ -177,6 +177,10 @@ async function main(): Promise<number> {
       turn_id: turn.turn_id,
       bus,
       parent_lineage_ids: [q1Lineage.lineage_id, ...(q2Lineage ? [q2Lineage.lineage_id] : [])],
+      // 版本题通过同一确定性规则入口，不能以旧模板自由摘录代替版本判定。
+      ...(plan.slots.products.length === 1 && plan.slots.versions.length === 1 && plan.slots.cve_ids.length <= 1 ? {
+        version_impact: answerVersionImpact(items, { product: plan.slots.products[0]!, version: plan.slots.versions[0]!, ...(plan.slots.cve_ids.length ? {cve_id: plan.slots.cve_ids[0]} : {}) }),
+      } : {}),
       synth: undefined, // P0 默认模板合成器；LLM 合成经 MG1 注入（见第 4 步）
     });
     answers.push(ans);

@@ -45,7 +45,7 @@ test("A-02：全链未决入队人工工单（幂等、带 questions、不落私
   assert.equal((await store.listHumanTickets()).length, 1);
   // 人工决策回流后，总线可 replay 到 human 回复
   const replies = await store.read<DecisionReply>("decision.replies");
-  assert.ok(replies.length >= 2, "每次未决都发布 abstain+human 回复（可回放）");
+  assert.equal(replies.length, 1, "重发复用持久未决回执，不重复发布");
 });
 
 test("A-02：人工层已决时不入队（有人决策就不派单）", async () => {
@@ -158,4 +158,76 @@ test("A-02：SQLite 工单跨重启保留（挂起→重开→决单）", async 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+for (const backend of ["memory", "sqlite"] as const) {
+  test("A-02 原子决单/入队、身份与回执复用：" + backend, async () => {
+    const dir = await mkdtemp(join(tmpdir(), "safetrace-atomic-ticket-"));
+    const first = backend === "memory" ? new MemoryEventStore() : new SqliteEventStore(join(dir, "tickets.sqlite"));
+    const second = backend === "memory" ? first : new SqliteEventStore(join(dir, "tickets.sqlite"));
+    const busA = new EventBus({ store: first }), busB = new EventBus({ store: second });
+    let delivered = 0;
+    busA.subscribe("decision.replies", () => { delivered++; });
+    busB.subscribe("decision.replies", () => { delivered++; });
+    try {
+      const queued = await Promise.all([
+        runDecisionLadder(request(), { bus: busA, ticketStore: first }),
+        runDecisionLadder(request(), { bus: busB, ticketStore: second }),
+      ]);
+      assert.equal(queued[0]!.ticket_id, queued[1]!.ticket_id);
+      assert.equal((await first.read("decision.replies")).length, 1);
+      assert.equal(delivered, 1);
+      const id = queued[0]!.ticket_id!;
+      const resolutions = await Promise.allSettled([
+        resolveHumanTicket({ store: first, bus: busA, ticket_id: id, resolver_id: "a", decision: { choice: "impact_range" } }),
+        resolveHumanTicket({ store: second, bus: busB, ticket_id: id, resolver_id: "b", decision: { choice: "remediation" } }),
+      ]);
+      assert.equal(resolutions.filter(x => x.status === "fulfilled").length, 1);
+      const winner = resolutions.find(x => x.status === "fulfilled")!;
+      assert.equal(winner.status, "fulfilled");
+      if (winner.status !== "fulfilled") throw new Error("no winner");
+      assert.equal((await first.read("decision.replies")).length, 2);
+      assert.equal(delivered, 2);
+      const replay = await runDecisionLadder(request(), { bus: busB, ticketStore: second, tool: async () => { throw new Error("must not run resolver"); } });
+      assert.deepEqual(replay.reply, winner.value.reply);
+      assert.equal(replay.ticket_id, undefined);
+      for (const over of [
+        { state: { question: "changed-private-state" } }, { trace_id: "changed-trace" },
+        { kind: "q2_rerank" as DecisionRequest["kind"] },
+        { questions: [{ q_id: "changed", type: "choice" as const, options: ["impact_range"] }] },
+      ]) await assert.rejects(runDecisionLadder(request(over), { bus: busB, ticketStore: second }), /identity conflict/);
+      assert.equal((await first.read("decision.replies")).length, 2);
+      await assert.rejects(runDecisionLadder(request({ decision_id: "split-store" }), { bus: busA, ticketStore: new MemoryEventStore() }), /bus event store/);
+    } finally {
+      first.close(); if (second !== first) second.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("A-02 提交后lineage失败也不丢reply：请求重发复用回执，不能再次执行resolver", async () => {
+  const store = new MemoryEventStore(), bus = new EventBus({ store });
+  const pending = await runDecisionLadder(request(), { bus, ticketStore: store });
+  bus.recordLineage = async () => { throw new Error("audit storage unavailable"); };
+  await assert.rejects(resolveHumanTicket({ store, bus, ticket_id: pending.ticket_id!, resolver_id: "r", decision: { choice: "remediation" } }), /audit storage unavailable/);
+  assert.equal((await store.getHumanTicket(pending.ticket_id!))?.status, "resolved");
+  const replay = await runDecisionLadder(request(), { bus, ticketStore: store, tool: async () => { throw new Error("must not rerun"); } });
+  assert.equal(replay.reply.decision.choice, "remediation");
+  assert.equal((await store.read("decision.replies")).length, 2);
+});
+
+test("A-02 决单过程中同请求已在执行阶梯：原子入队复用winner而非迟到abstain", async () => {
+  const store = new MemoryEventStore(), bus = new EventBus({ store });
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const delayed = runDecisionLadder(request(), { bus, ticketStore: store, tool: async () => { entered(); await gate; return null; } });
+  await ready;
+  const pending = await runDecisionLadder(request(), { bus, ticketStore: store });
+  const resolved = await resolveHumanTicket({ store, bus, ticket_id: pending.ticket_id!, resolver_id: "r", decision: { choice: "impact_range" } });
+  release();
+  const late = await delayed;
+  assert.deepEqual(late.reply, resolved.reply);
+  assert.equal(late.ticket_id, undefined);
+  assert.equal((await store.read("decision.replies")).length, 2);
 });

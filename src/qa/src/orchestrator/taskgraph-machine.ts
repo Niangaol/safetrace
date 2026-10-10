@@ -5,8 +5,9 @@
  */
 import type { TaskGraph, RunTaskGraphOptions } from "./taskgraph.js";
 import type { TaskGraphMachineResult } from "./taskgraph.js";
-import { compile } from "./compile.js";
-import type { MachineNode, MachineSpec, MachineState, ThreadStore } from "./statemachine.js";
+import { runMachine, resumeMachine } from "./runtime.js";
+import type { OrchestrationConfig } from "./compile.js";
+import type { MachineNode, MachineSpec, ThreadStore } from "./statemachine.js";
 import { newThreadId } from "./statemachine.js";
 import { degrade, EventBus } from "@safetrace/shared";
 import type { FallbackEvent } from "@safetrace/shared";
@@ -16,7 +17,7 @@ export function taskGraphToSpec(graph: TaskGraph): MachineSpec {
   const nodes: MachineNode[] = graph.nodes.map((n) => ({
     id: n.id,
     role: n.role,
-    run: (state?: MachineState) => n.run(state),
+    run: n.run,
     ...(n.on_fail ? { on_fail: n.on_fail } : {}),
     ...(n.deps ? { deps: n.deps } : {}),
   }));
@@ -31,6 +32,9 @@ async function emitFallback(bus: EventBus | undefined, event: FallbackEvent): Pr
 export interface RunTaskGraphViaMachineOptions extends RunTaskGraphOptions {
   /** 线程 id；缺省新生成。给出已挂起的 threadId 时按 resume 语义校验（禁静默重跑）。 */
   threadId?: string;
+  config?: OrchestrationConfig;
+  /** Bump when graph node closures/dependencies change. */
+  specVersion?: string;
   /** 检查点存储；提供才具备跨进程挂起/恢复能力。 */
   threadStore?: ThreadStore;
   /** resume 用的外部恢复值（注入 state[RESUME_VALUE_KEY]）。 */
@@ -41,43 +45,19 @@ export interface RunTaskGraphViaMachineOptions extends RunTaskGraphOptions {
  * 经适配层执行 TaskGraph。失败语义与 runTaskGraph 一致：
  * - degrade：登记 FallbackEvent 并继续；
  * - abort（默认）：停止并返回失败路径；
- * - interrupt（config/interchestration.yml 启用时）：挂起并落检查点，返回 interrupted=true。
+ * - interrupt（config/orchestration.yml 启用时）：挂起并落检查点，返回 interrupted=true。
  */
 export async function runTaskGraphViaMachine(graph: TaskGraph, opts: RunTaskGraphViaMachineOptions = {}): Promise<TaskGraphMachineResult> {
-  const traceId = opts.traceId;
   const spec = taskGraphToSpec(graph);
-  const { backend, config } = compile(spec);
-  // threadId 缺省自动生成（与 runMachine 同口径：线程身份始终存在，挂起后才能据它 resume）
+  if (opts.specVersion !== undefined) spec.version = opts.specVersion;
   const threadId = opts.threadId ?? newThreadId();
-  const store = opts.threadStore;
-  const suspension: { current: { node_id: string; state: MachineState } | null } = { current: null };
-  const isResume = store !== undefined && opts.resumeValue !== undefined;
-  let initialState: MachineState | undefined;
-  let executedBefore: string[] | undefined;
-  if (store) {
-    const prior = await store.loadThreadCheckpoint(threadId);
-    if (prior) {
-      if (prior.status !== "suspended") {
-        throw new Error("thread 非挂起态（status=" + prior.status + "），不能续跑：" + threadId);
-      }
-      if (opts.resumeValue === undefined) {
-        throw new Error("thread 已挂起，续跑必须提供 resumeValue：" + threadId);
-      }
-      initialState = prior.state;
-      executedBefore = [...prior.executed];
-    }
+  const common = { store: opts.threadStore, traceId: opts.traceId, config: opts.config };
+  if (opts.resumeValue !== undefined && (!opts.threadStore || !opts.threadId)) {
+    throw new Error("resume 必须提供 thread store 和已有 threadId");
   }
-  const result = await backend.run({
-    traceId: traceId ?? "",
-    spec,
-    ...(initialState ? { initialState } : {}),
-    ...(executedBefore ? { executed: executedBefore } : {}),
-    ...(isResume ? { isResume: true } : {}),
-    ...(isResume && opts.resumeValue !== undefined ? { resumeValue: opts.resumeValue } : {}),
-    onInterrupt: async (nodeId, _value, state) => {
-      suspension.current = { node_id: nodeId, state: structuredClone(state) };
-    },
-  });
+  const result = opts.resumeValue !== undefined
+    ? await resumeMachine(threadId, spec, { ...common, resumeValue: opts.resumeValue })
+    : await runMachine(spec, { ...common, threadId });
   const degraded: string[] = [];
   // 后端只标记 degraded 状态；FallbackEvent 登记在此完成（与 taskgraph.ts 同口径）。
   for (const step of result.steps) {
@@ -94,36 +74,13 @@ export async function runTaskGraphViaMachine(graph: TaskGraph, opts: RunTaskGrap
     });
     degraded.push(step.node_id + "→" + res.degraded_to);
   }
-  if (store) {
-    if (result.interrupted && suspension.current) {
-      await store.saveThreadCheckpoint({
-        thread_id: threadId,
-        trace_id: result.trace_id,
-        executed: [...result.executed],
-        interrupt_node_id: suspension.current.node_id,
-        state: suspension.current.state as Record<string, unknown>,
-        status: "suspended",
-        updated_at: new Date().toISOString(),
-      });
-    } else if (result.ok) {
-      await store.saveThreadCheckpoint({
-        thread_id: threadId,
-        trace_id: result.trace_id,
-        executed: [...result.executed],
-        interrupt_node_id: result.executed.at(-1) ?? "",
-        state: {},
-        status: "completed",
-        updated_at: new Date().toISOString(),
-      });
-    }
-  }
   return {
     ok: result.ok,
     executed: result.executed,
     degraded_nodes: degraded.length > 0 ? degraded : result.degraded_nodes,
     failed: result.failed,
     trace_id: result.trace_id,
-    backend: config.backend,
+    backend: "native",
     thread_id: threadId,
     interrupted: result.interrupted,
     interrupted_at: result.interrupted_at,

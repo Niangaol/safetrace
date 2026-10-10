@@ -18,6 +18,7 @@ import { MemoryIndex } from "../src/qa/src/q2-retrieval.js";
 import { classifyIntent } from "../src/qa/src/q1-intent.js";
 import { buildRetrievalRequest } from "../src/qa/src/cli.js";
 import { synthesizeAnswer } from "../src/qa/src/q4-answer.js";
+import { sourceVersionChunks, sourceVersionImpact, sourceScoreConflicts } from "../src/qa/src/live-structured-facts.js";
 import { nextId } from "@safetrace/shared";
 import { readIngestDiagnostics } from "./ingest-diagnostics.js";
 import { handleAssetsRequest } from "./assets-api.js";
@@ -39,7 +40,7 @@ export function createLiveIntelServer(options:{sqlitePath:string;assetsSqlitePat
   const activity=new ActivityStream(options.sqlitePath),settings=options.modelSettings;
   let cached: { key:string; view:LiveKnowledgeView } | undefined;
   let baselineCache: { key:string; index:BaselineIndex } | undefined;
-  const readBaseline=async():Promise<BaselineIndex>=>{const key=await knowledgeGeneration(options);if(baselineCache?.key===key)return baselineCache.index;const index=await loadBaselineIndex({sqlitePath:options.sqlitePath,payloadRoots:options.payloadRoots});baselineCache={key,index};return index;};
+  const readBaseline=async(view:LiveKnowledgeView):Promise<BaselineIndex>=>{const key=view.projection.fingerprint;if(baselineCache?.key===key)return baselineCache.index;const index=await loadBaselineIndex({sqlitePath:options.sqlitePath,payloadRoots:options.payloadRoots});baselineCache={key,index};return index;};
   let building: { key:string; promise:Promise<LiveKnowledgeView> } | undefined;
   const read=options.readView??(async()=>{
     const key=await knowledgeGeneration(options);
@@ -80,7 +81,7 @@ export function createLiveIntelServer(options:{sqlitePath:string;assetsSqlitePat
       if(itemRoute){
         const item=view.intel.find(i=>i.intel_id===decodeURIComponent(itemRoute[1]!));
         if(!item){json(res,404,{error:{message:"intelligence absent or latest DQ not released"},data_mode:"live"});return;}
-        if(!itemRoute[2]){const index=await readBaseline();const baseline=baselineForItem(index,item,view.verified.has(item.intel_id),view.states.filter(state=>state.intel_id===item.intel_id).map(state=>({dimension:state.dimension,status:state.status})));json(res,200,{...liveIntelItem(view,item),baseline:baseline.facts,gaps:baseline.gaps});return;}
+        if(!itemRoute[2]){const index=await readBaseline(view);const baseline=baselineForItem(index,item,view.verified.has(item.intel_id),view.states.filter(state=>state.intel_id===item.intel_id).map(state=>({dimension:state.dimension,status:state.status})));json(res,200,{...liveIntelItem(view,item),baseline:baseline.facts,gaps:baseline.gaps});return;}
         const base=liveEvidenceView(view,item),guidance=await readRemediationEvidence({...options,intelIds:[item.intel_id],limit:1});
         const extra=guidance.evidence.length?[{dimension:"remediation",value:{guidance:guidance.evidence.map(e=>e.artifact)},source:[...new Set(guidance.evidence.map(e=>e.artifact.source_id))],
           evidence:guidance.evidence.map(e=>({evidence_id:e.chunk.chunk_id,source:e.artifact.source_id,url:e.artifact.source_url,snippet:e.chunk.text,artifact_sha256:e.chunk.provenance.sha256,original_sha256:e.artifact.source_sha256,parent_lineage_ids:e.parent_lineage_ids,...(e.receipt_id?{receipt_id:e.receipt_id}:{})})),
@@ -97,14 +98,14 @@ export function createLiveIntelServer(options:{sqlitePath:string;assetsSqlitePat
         const plan=classifyIntent({text:q,session_id:nextId("sess"),turn_id:nextId("turn")});
         const selectedIds=plan.intents.includes("remediation")?view.intel.filter(item=>item.cve_ids.some(cve=>plan.slots.cve_ids.includes(cve))).slice(0,5).map(item=>item.intel_id):[];
         const guidance=selectedIds.length?await readRemediationEvidence({...options,intelIds:selectedIds,limit:5}):undefined;
-        await index.upsert([...(guidance?.chunks??[]),...view.projection.chunks]);
+        await index.upsert([...(guidance?.chunks??[]),...view.projection.chunks,...sourceVersionChunks(view.projection.evidence)]);
         event(res,{event:"stage",stage:"plan",intent:plan.intents[0]??null,data_mode:"live"});
         const retrievalRequest=buildRetrievalRequest(q,plan,trace);
         if(plan.intents.includes("paper_related"))retrievalRequest.doc_types=["paper"];
         const evidence=await index.search(retrievalRequest);event(res,{event:"stage",stage:"retrieve",hit:evidence.chunks.length});
         activity.publish({trace_id:trace,intel_id:null,stage:"knowledge",status:"success",at:new Date().toISOString(),label:"qa.retrieval",details:{artifact_count:evidence.chunks.length}});
         event(res,{event:"stage",stage:"generate",answer_mode:settings?.mode()??"template"});
-        const baselineIndex=await readBaseline().catch(()=>undefined);
+        const baselineIndex=await readBaseline(view).catch(()=>undefined);
         const provenCves=new Set(view.intel.filter(i=>view.verified.has(i.intel_id)).flatMap(i=>i.cve_ids));
         const gapLine=(()=>{
           if(!baselineIndex||!plan.slots.cve_ids.length)return null;
@@ -116,15 +117,17 @@ export function createLiveIntelServer(options:{sqlitePath:string;assetsSqlitePat
             return "维度缺口：" + missing.map(g=>{const label=({cvss_v31:"CVSS v3.1 官方评分",paper:"论文关联",epss:"EPSS 利用概率",remediation:"修复版本"} as Record<string,string>)[g.dimension]??g.dimension;return label+"（"+g.reason+"）";}).join("；") + "。以上缺口不代表无风险，也不按 0 分处理。";
           }catch{return null;}
         })();
-        const natural=naturalConclusion({cve_id:plan.slots.cve_ids[0]??null,chunks:evidence.chunks,remediation:(guidance?.evidence??[]).map(item=>item.artifact),askRemediation:plan.intents.includes("remediation")});
+        const versionImpact = plan.slots.cve_ids.length <= 1 && plan.slots.products.length === 1 && plan.slots.versions.length === 1 ? sourceVersionImpact(view.intel, view.projection.evidence, { product: plan.slots.products[0]!, version: plan.slots.versions[0]!, ...(plan.slots.cve_ids.length === 1 ? {cve_id: plan.slots.cve_ids[0]} : {}) }) : undefined;
+         const qaOptions = { ...(versionImpact ? {version_impact: versionImpact} : {}), source_conflicts: sourceScoreConflicts(view.projection.evidence, evidence.chunks) };
+         const natural=naturalConclusion({cve_id:plan.slots.cve_ids.length === 1 ? plan.slots.cve_ids[0] : null,chunks:evidence.chunks,remediation:(guidance?.evidence??[]).map(item=>item.artifact),askRemediation:plan.intents.includes("remediation")});
                 let finalReview:import("./final-answer-review.js").FinalReview={status:"skipped",reason:"模板模式、拒答或安全门禁回退未执行模型复核"};
         let modelUiPlan:import("./intelligent-ui.js").UiPlan|null=null;
         let answerMode="template",answerModel="q4-template-v1",modelFallback=false,modelAttempts=0;let answer;
         try{const selected=settings?await settings.synthesizer(()=>{modelAttempts++;},review=>{finalReview=review;},()=>event(res,{event:"stage",stage:"check"}),ui=>{modelUiPlan=ui;}):undefined;
           const modelEvidence=selected?.synth?settings!.modelEvidence(evidence,[...view.projection.chunks,...(guidance?.chunks??[])]):evidence;
-          answer=await synthesizeAnswer(q,plan,modelEvidence,selected?.synth?{synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id,model_version:"runtime-settings"}}:{});
+          answer=await synthesizeAnswer(q,plan,modelEvidence,{...qaOptions, ...(selected?.synth ? {synth:selected.synth,synthesizer:{provider:selected.provider,model_id:selected.model_id,model_version:"runtime-settings"}} : {})});
           if(selected?.synth && !answer.abstained && !answer.degraded_to){answerMode=selected.mode;answerModel=selected.model_id;if(gapLine)answer={...answer,text_md:answer.text_md+"\n\n"+gapLine};}else if(selected?.synth&&!answer.abstained){answerMode="template_fallback";modelFallback=true;}
-        }catch{answer=await synthesizeAnswer(q,plan,evidence);answerMode="template_fallback";modelFallback=true;}
+        }catch{answer=await synthesizeAnswer(q,plan,evidence,qaOptions);answerMode="template_fallback";modelFallback=true;}
         // 红线：拒答就是拒答。自然语言结论只能加成在“作答”的答案上；
         // abstained 时再叠加一段自信结论会自相矛盾（实测出现过），也让“证据不足”的提示失效。
         if(!answer.abstained && !answer.text_md.includes("## 结论（自然语言）")){

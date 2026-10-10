@@ -9,6 +9,7 @@
  * - unknown 不等于安全：无法判定时必须显式说明原因（厂商身份未经本地核实）。
  */
 import { normalizeName } from "@safetrace/enrich";
+import { canonicalProductName } from "./q1-intent.js";
 import { assessVersionImpact, nameVariants } from "@safetrace/assets";
 import type { VersionImpactVerdict } from "@safetrace/assets";
 import type { IntelItem } from "@safetrace/shared";
@@ -36,7 +37,7 @@ export interface VersionImpactAnswer extends Omit<VersionImpactVerdict, "intel_i
 /** 产品命中：归一化后的待判产品变体 ∩ 情报产品标识（与 matcher 同口径）。 */
 function productMatches(item: IntelItem, asked: ReadonlySet<string>): boolean {
   if (!item.entities.product) return false;
-  const advisory = normalizeName(item.entities.product);
+  const advisory = normalizeName(canonicalProductName(item.entities.product));
   return advisory !== "" && asked.has(advisory);
 }
 
@@ -46,7 +47,7 @@ function productMatches(item: IntelItem, asked: ReadonlySet<string>): boolean {
  * 全部 not_affected → 第一个 not_affected。无产品命中 → unknown 并说明原因。
  */
 export function answerVersionImpact(items: readonly IntelItem[], query: VersionImpactQuery): VersionImpactAnswer {
-  const product = query.product.trim();
+  const product = canonicalProductName(query.product);
   const version = query.version.trim();
   const cve = query.cve_id?.trim().toUpperCase() || null;
   const asked = new Set(nameVariants(product));
@@ -63,7 +64,7 @@ export function answerVersionImpact(items: readonly IntelItem[], query: VersionI
       vendor_unverified: true, version, cve_id: cve, candidates: 0,
     };
   }
-  const verdicts = candidates.map((item) => assessVersionImpact(item, { name: product, version }));
+  const verdicts = candidates.map((item) => assessVersionImpact({ ...item, entities: { ...item.entities, product: item.entities.product ? canonicalProductName(item.entities.product) : null } }, { name: product, version }));
   const chosen = verdicts.find((v) => v.status === "affected")
     ?? verdicts.find((v) => v.status === "unknown")
     ?? verdicts[0]!;

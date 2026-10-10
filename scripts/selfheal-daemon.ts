@@ -6,11 +6,13 @@
  *   SQLITE_PATH           事件/死信/lineage 库（缺省 ./var/safetrace.sqlite）
  *   SELFHEAL_INTERVAL_MS  拍间隔毫秒（缺省 60000，最小 1000）
  *
- * 行为：订阅 fallback.events（登记 + lineage + Trace 外发，兜底透明率 100%）；
+ * 边界：fallback 订阅仅接收本进程 EventBus 发布，不能监听其他进程写库；
+ * 本脚本未注入业务消费者，死信会保留，不代表恢复真实业务，也未实现持久 fallback tail。
+ * 行为：订阅本进程 fallback.events（登记 + lineage + Trace 外发）；
  * 每拍 dead_letter_drain（指数退避重投、成功销档）+ healthcheck 聚合；
  * 每拍一行 JSON 摘要到 stdout 并追加 var/selfheal-daemon.log；
  * SIGINT/SIGTERM 优雅停止（退订阅 + 末次 healthcheck + 关库）。
- * 零网络（未配 Trace 就不外发）、零 provider SDK、只监听本机 SQLite。
+ * 零网络（未配 Trace 就不外发）、零 provider SDK；读写本机 SQLite（非只读观察模式）。
  */
 import { appendFile, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -20,8 +22,8 @@ import { SelfHealDaemon } from "@safetrace/qa";
 async function main(): Promise<void> {
   const dbPath = resolve(process.env.SQLITE_PATH ?? "./var/safetrace.sqlite");
   const intervalMs = Number(process.env.SELFHEAL_INTERVAL_MS ?? "60000");
-  if (!Number.isFinite(intervalMs) || intervalMs < 1000) {
-    throw new Error("SELFHEAL_INTERVAL_MS 必须是 >= 1000 的毫秒数（当前：" + String(process.env.SELFHEAL_INTERVAL_MS) + "）");
+  if (!Number.isFinite(intervalMs) || intervalMs < 1000 || intervalMs > 2_147_483_647) {
+    throw new Error("SELFHEAL_INTERVAL_MS 必须是 >= 1000 且 <= 2147483647 的毫秒数（当前：" + String(process.env.SELFHEAL_INTERVAL_MS) + "）");
   }
   const logPath = resolve("var/selfheal-daemon.log");
   await mkdir(resolve("var"), { recursive: true });
@@ -37,6 +39,11 @@ async function main(): Promise<void> {
     store,
     intervalMs,
     backoff: { baseMs: 1000, maxMs: 300_000, maxAttempts: 8 },
+    onError: async (error) => {
+      const line = JSON.stringify({ event: "selfheal_tick_failed", at: nowIso(), error: error instanceof Error ? error.message : String(error) });
+      console.error(line);
+      await appendFile(logPath, line + "\n", "utf8");
+    },
     onTick: async (report) => {
       const line = JSON.stringify({
         event: "selfheal_tick",
@@ -53,6 +60,7 @@ async function main(): Promise<void> {
           dead_letters: report.health.dead_letters,
           retry_scheduled: report.health.retry_scheduled,
           fallback_events: report.health.fallback_events.total,
+          fallback_observation_scope: "in_process_bus_only",
           circuits_observed: report.health.circuits_observed,
           trace: report.health.trace,
         },
@@ -68,13 +76,19 @@ async function main(): Promise<void> {
     db_path: dbPath,
     interval_ms: intervalMs,
     log_path: logPath,
-    note: "订阅 fallback.events + 周期 drain/healthcheck；SIGINT/SIGTERM 优雅停止",
+    fallback_observation_scope: "in_process_bus_only",
+    business_consumers_registered: false,
+    note: "跨进程 fallback 写库不可由本地订阅观测；无业务消费者的死信不销档，不代表真实业务恢复；本模式会写 lineage",
   }));
 
+  let stopping = false;
   const shutdown = (signal: string): void => {
+    if (stopping) return;
+    stopping = true;
     console.log(JSON.stringify({ event: "selfheal_daemon_stopping", at: nowIso(), signal }));
     daemon.stop();
-    void daemon.agent.healthcheck()
+    void daemon.whenIdle()
+      .then(() => daemon.agent.healthcheck())
       .then((health) => {
         console.log(JSON.stringify({
           event: "selfheal_daemon_stopped",

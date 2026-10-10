@@ -32,6 +32,8 @@ export interface SelfHealDaemonOptions {
   now?: () => number;
   /** 每拍观察者（守护进程落盘/看板）。 */
   onTick?: (report: DaemonTickReport) => void | Promise<void>;
+  /** 周期拍失败观察者；自身失败也被捕获，不产生 unhandled rejection。 */
+  onError?: (error: unknown) => void | Promise<void>;
 }
 
 export class SelfHealDaemon {
@@ -40,9 +42,14 @@ export class SelfHealDaemon {
   private readonly opts: SelfHealDaemonOptions;
   private timer: ReturnType<typeof setInterval> | null = null;
   private unsubscribe: (() => void) | null = null;
-  private ticking = false;
-  /** 已执行拍数（运维观测）。 */
+  private inFlight: Promise<DaemonTickReport> | null = null;
+  private scheduled: Promise<void> | null = null;
+  /** 已生成健康报告拍数（onTick 失败时也计入；不代表业务恢复）。 */
   ticks = 0;
+  /** 周期拍失败次数及最近错误（禁静默吞错）。 */
+  failedTicks = 0;
+  lastError: unknown = null;
+  lastErrorObserverError: unknown = null;
 
   constructor(opts: SelfHealDaemonOptions) {
     this.opts = opts;
@@ -59,25 +66,54 @@ export class SelfHealDaemon {
   /** 常驻启动：订阅 fallback.events + 周期拍。重复 start 是幂等空操作。 */
   start(): void {
     if (this.timer) return;
-    this.unsubscribe = this.agent.subscribeFallbackEvents();
     const interval = this.opts.intervalMs ?? 60_000;
-    this.timer = setInterval(() => { void this.tick(); }, interval);
+    if (!Number.isFinite(interval) || interval <= 0 || interval > 2_147_483_647) {
+      throw new Error("intervalMs 必须是 > 0 且 <= 2147483647 的有限毫秒数");
+    }
+    this.unsubscribe = this.agent.subscribeFallbackEvents();
+    this.timer = setInterval(() => {
+      // Slow drain/onTick/error reporting skips timer slots; never queue a backlog.
+      if (this.inFlight || this.scheduled) return;
+      this.scheduled = this.scheduledTick().finally(() => { this.scheduled = null; });
+    }, interval);
   }
 
-  /** 单拍：drain 死信 + healthcheck + onTick。并发拍串行（ticking 闸门，禁并发 drain）。 */
-  async tick(): Promise<DaemonTickReport> {
-    if (this.ticking) throw new Error("上一拍尚未结束（自愈拍串行，禁并发 drain）");
-    this.ticking = true;
+  /** 单拍：重叠调用共享同一结果/错误，不并发 drain，也不排无限队列。 */
+  tick(): Promise<DaemonTickReport> {
+    if (this.inFlight) return this.inFlight;
+    this.inFlight = this.runTick().finally(() => { this.inFlight = null; });
+    return this.inFlight;
+  }
+
+  private async runTick(): Promise<DaemonTickReport> {
+    const drain = await this.agent.dead_letter_drain();
+    const health = await this.agent.healthcheck();
+    this.ticks += 1;
+    const report: DaemonTickReport = { at: new Date((this.opts.now ?? Date.now)()).toISOString(), drain, health };
+    await this.opts.onTick?.(report);
+    return report;
+  }
+
+  private async scheduledTick(): Promise<void> {
     try {
-      const drain = await this.agent.dead_letter_drain();
-      const health = await this.agent.healthcheck();
-      this.ticks += 1;
-      const report: DaemonTickReport = { at: new Date((this.opts.now ?? Date.now)()).toISOString(), drain, health };
-      await this.opts.onTick?.(report);
-      return report;
-    } finally {
-      this.ticking = false;
+      await this.tick();
+    } catch (error: unknown) {
+      this.failedTicks += 1;
+      this.lastError = error;
+      try {
+        if (this.opts.onError) await this.opts.onError(error);
+        else console.error("selfheal periodic tick failed:", error);
+      } catch (observerError: unknown) {
+        this.lastErrorObserverError = observerError;
+        console.error("selfheal error observer failed:", observerError);
+      }
     }
+  }
+
+  /** stop 后等待在途拍及错误报告结束，再关闭 store；失败已由调用方/周期错误路径接收。 */
+  async whenIdle(): Promise<void> {
+    await this.inFlight?.catch(() => undefined);
+    await this.scheduled;
   }
 
   /** 停止：退净订阅与定时器（幂等）。已在执行的拍会跑完。 */

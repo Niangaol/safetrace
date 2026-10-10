@@ -109,7 +109,7 @@ export interface DrillReport {
 }
 
 export class SelfHealAgent {
-  /** 登记到的全部降级事件（兜底透明率 100% 的证据） */
+  /** 本进程订阅登记的降级事件；不是其他进程持久fallback的全库统计。 */
   readonly registeredFallbackEvents: FallbackEvent[] = [];
   /** 总线 onDeadLetter 通知（与 store 死信表双视图） */
   readonly deadLetterNotifications: Array<{ event_id: string; reason: string; at: string }> = [];
@@ -132,7 +132,7 @@ export class SelfHealAgent {
   /** 订阅 fallback.events：登记 + lineage + Trace 外发（兜底透明率 100%）。 */
   subscribeFallbackEvents(): () => void {
     if (this.unsubscribe) return this.unsubscribe;
-    this.unsubscribe = this.opts.bus.subscribe("fallback.events", async (payload: FallbackEvent, env: Envelope<FallbackEvent>) => {
+    const detach = this.opts.bus.subscribe("fallback.events", async (payload: FallbackEvent, env: Envelope<FallbackEvent>) => {
       this.registeredFallbackEvents.push(payload);
       await this.opts.bus.recordLineage({
         trace_id: payload.trace_id,
@@ -146,7 +146,13 @@ export class SelfHealAgent {
       this.opts.traceSink?.recordEnvelope(env);
       this.opts.traceSink?.recordFallbackEvent(payload);
     });
-    return this.unsubscribe;
+    // A stale detach must not clear a newer subscription after stop/start.
+    const unsubscribe = (): void => {
+      detach();
+      if (this.unsubscribe === unsubscribe) this.unsubscribe = null;
+    };
+    this.unsubscribe = unsubscribe;
+    return unsubscribe;
   }
 
   /** 总线死信通知入口（由调用方在 BusOptions.onDeadLetter 接线）。 */
@@ -177,6 +183,7 @@ export class SelfHealAgent {
     const dead = await this.opts.store.deadLetters();
     const report: DrainReport = { examined: 0, retried: 0, recovered: 0, deferred: 0, still_failed: 0, details: [] };
     const limit = this.opts.drainLimit ?? 50;
+    const maxAttempts = this.opts.backoff?.maxAttempts ?? 8;
     for (const entry of dead.slice(0, limit)) {
       report.examined += 1;
       const rec: DeadLetterRetryRecord = this.retries.get(entry.event_id) ?? {
@@ -185,6 +192,12 @@ export class SelfHealAgent {
         attempt: 0,
         next_attempt_at: 0,
       };
+      // Exhaustion is terminal for this agent: advancing the clock cannot re-enable delivery.
+      if (rec.attempt >= maxAttempts) {
+        report.still_failed += 1;
+        report.details.push({ event_id: entry.event_id, topic: rec.topic, attempt: rec.attempt, outcome: "still_failed" });
+        continue;
+      }
       if (rec.next_attempt_at > now) {
         report.deferred += 1;
         report.details.push({ event_id: entry.event_id, topic: rec.topic, attempt: rec.attempt, outcome: "deferred" });
@@ -200,7 +213,6 @@ export class SelfHealAgent {
       } else {
         rec.last_error = entry.reason;
         rec.next_attempt_at = now + this.backoffMs(rec.attempt);
-        const maxAttempts = this.opts.backoff?.maxAttempts ?? 8;
         const exhausted = rec.attempt >= maxAttempts;
         if (exhausted) {
           report.still_failed += 1;
@@ -240,7 +252,7 @@ export class SelfHealAgent {
     }
     const circuits = this.opts.circuits ? this.opts.circuits() : [];
     const traceStats = this.opts.traceSink?.stats();
-    const notes: string[] = [];
+    const notes: string[] = ["fallback_events 仅统计本进程总线订阅登记；其他进程写库事件未由此订阅观测"];
     if (dead.length > 0) notes.push("存在 " + dead.length + " 条死信待重投或人工处理");
     if (this.retries.size > 0) notes.push(this.retries.size + " 条死信处于指数退避等待");
     if (!this.opts.circuits) notes.push("未注入熔断探针：L4 熔断状态本轮不可观测（显式注明，不冒充健康）");
