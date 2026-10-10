@@ -17,7 +17,7 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { MemoryEventStore, MemoryEventStore as Store, EventBus, degrade, sha256, sha256Json } from "@safetrace/shared";
+import { MemoryEventStore, MemoryEventStore as Store, EventBus, degrade, nowIso, sha256, sha256Json } from "@safetrace/shared";
 import type { Answer, DecisionReply, DecisionRequest, FallbackEvent, IntelItem, QueryTurn } from "@safetrace/shared";
 import type { MachineSpec } from "@safetrace/qa";
 import { runIngestOnce } from "@safetrace/ingest";
@@ -26,6 +26,7 @@ import {
   AGENT_ROLES,
   MemoryIndex,
   SelfHealAgent,
+  SelfHealDaemon,
   answerVersionImpact,
   claimHumanTicket,
   classifyIntent,
@@ -543,6 +544,76 @@ async function main(): Promise<number> {
     } catch { hqDoubleResolve = true; }
     check(hqDoubleResolve, "重复决单显式抛错（fail-closed）");
     ticketStore.close();
+  }
+
+  // ---------- 15) A-06 常驻自愈（服务进程订阅 + 周期 drain/healthcheck） ----------
+  console.log("\n[15] A-06 常驻自愈（SelfHealDaemon：订阅 + 周期拍）");
+  {
+    const daemonStore = new Store();
+    let daemonBroken = true;
+    let daemon: SelfHealDaemon | undefined;
+    const daemonBus = new EventBus({
+      store: daemonStore,
+      maxRetries: 1,
+      onDeadLetter: (eventId, reason) => daemon?.agent.noteDeadLetter(eventId, reason),
+    });
+    daemonBus.subscribe("decision.replies", async () => {
+      if (daemonBroken) throw new Error("smoke: daemon consumer broken");
+    });
+    const tickReports: unknown[] = [];
+    let daemonNow = 1_800_000_000_000; // 注入时钟：冒烟里可推进退避窗（确定性）
+    daemon = new SelfHealDaemon({
+      bus: daemonBus, store: daemonStore,
+      now: () => daemonNow,
+      backoff: { baseMs: 1000, maxMs: 60_000, maxAttempts: 8 },
+      onTick: (report) => { tickReports.push(report); },
+    });
+    // ① 常驻订阅：fallback.events 登记（兜底透明率 100%）
+    daemon.start();
+    await degrade({
+      layer: "L3",
+      trigger: "smoke selfheal daemon spot-check",
+      degradedOf: "smoke:selfheal-daemon",
+      traceId: "tr_smoke_daemon",
+      label: "冒烟常驻自愈抽检（显式降级）",
+      emit: async (event) => { await daemonBus.publish("fallback.events", event, { trace_id: event.trace_id }); },
+    });
+    check(daemon.agent.registeredFallbackEvents.length === 1, "常驻进程订阅并登记降级事件（兜底透明率 100%）");
+    // ② 造 3 条死信后首拍：重投失败排退避（消费者仍坏）
+    for (let i = 0; i < 3; i += 1) {
+      const reply: DecisionReply = {
+        decision_id: "dec_smoke_daemon_" + i,
+        kind: "q1_route",
+        decision: { choice: "impact_range" },
+        calibrated_prob: 0.9,
+        decided_by: "rule_fallback",
+        schema_version: "1.0",
+      };
+      await daemonBus.publish("decision.replies", reply, { trace_id: "tr_smoke_daemon_dl" });
+    }
+    const daemonTick1 = await daemon.tick();
+    check(daemonTick1.drain.retried === 3 && daemonTick1.drain.recovered === 0,
+      "首拍重投 3 条全部失败（消费者仍坏，retried=" + daemonTick1.drain.retried + "）");
+    check(daemonTick1.health.dead_letters === 3 && daemonTick1.health.retry_scheduled === 3,
+      "healthcheck 聚合：3 条死信 + 3 条退避排队（显式可见）");
+    check(tickReports.length === 1, "每拍报告显式交出（禁静默自愈）");
+    // ③ 修复消费者 + 推进时钟越过退避窗，第二拍全部恢复、死信清零
+    daemonBroken = false;
+    daemonNow += 1500;
+    const daemonTick2 = await daemon.tick();
+    check(daemonTick2.drain.recovered === 3, "修复后到拍重投 3 条全部恢复（recovered=" + daemonTick2.drain.recovered + "）");
+    check(daemonTick2.health.dead_letters === 0 && daemonTick2.health.retry_scheduled === 0,
+      "恢复后死信与退避队列清零");
+    check(daemon.agent.deadLetterNotifications.length >= 3, "总线死信通知到达自愈 Agent（" + daemon.agent.deadLetterNotifications.length + " 条）");
+    // ④ stop 退净订阅
+    daemon.stop();
+    await daemonBus.publish("fallback.events", {
+      event_id: "fb_after_stop", layer: "L3", trigger: "after stop", action_taken: "none",
+      degraded_of: "smoke:after-stop", user_visible: true,
+      degraded_state: { label: "停止后", since: nowIso(), detail_ref: "tr:x" }, trace_id: "tr_smoke_daemon_after",
+    }, { trace_id: "tr_smoke_daemon_after" });
+    check(daemon.agent.registeredFallbackEvents.length === 1, "stop 后不再登记（订阅已退净）");
+    daemonStore.close();
   }
 
   console.log("\n== 冒烟结束 ==");
