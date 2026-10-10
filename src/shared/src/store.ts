@@ -83,6 +83,24 @@ export interface QuarantineRecord {
   quarantined_at: string;
 }
 
+/**
+ * A-01：编排线程检查点（statemachine 挂起/恢复的持久化形态）。
+ * spec 含函数不可序列化，故只持久化「进度 + 状态快照」；resume 时由调用方提供同一 spec。
+ * 恢复值不落库——它由 resume 调用方当场给出（resume(threadId, value) 的 value）。
+ */
+export interface ThreadCheckpoint {
+  thread_id: string;
+  trace_id: string;
+  /** 已执行节点 id（resume 时跳过，不重跑）。 */
+  executed: string[];
+  /** 挂起节点 id（resume 后第一个执行的节点）；completed 时为完成时的最后节点。 */
+  interrupt_node_id: string;
+  /** 可序列化状态快照（挂起点或完成点的 machine state）。 */
+  state: Record<string, unknown>;
+  status: "suspended" | "completed";
+  updated_at: string;
+}
+
 export interface LineageDraft {
   trace_id: string;
   stage: string;
@@ -125,6 +143,12 @@ export interface EventStore {
   markQuarantine(record: QuarantineRecord): Promise<void>;
   /** 隔离区内容（可查可导出；A1/S1 看板与运维脚本消费）。 */
   quarantineEntries(): Promise<QuarantineRecord[]>;
+  /** A-01：保存编排线程检查点（挂起/完成；幂等按 thread_id）。 */
+  saveThreadCheckpoint(checkpoint: ThreadCheckpoint): Promise<void>;
+  /** A-01：读取编排线程检查点；不存在返回 undefined。 */
+  loadThreadCheckpoint(threadId: string): Promise<ThreadCheckpoint | undefined>;
+  /** A-01：全部线程检查点（运维查看挂起/已完成线程）。 */
+  threadCheckpoints(): Promise<ThreadCheckpoint[]>;
   appendLineage(record: LineageRecord): Promise<boolean>;
   readLineage(traceId: string, offset?: number, limit?: number): Promise<LineageRecord[]>;
   getLastGoodPageSnapshot(sourceUrl: string): Promise<StoredPageSnapshot | undefined>;
@@ -217,6 +241,15 @@ CREATE TABLE IF NOT EXISTS quarantine (
   reason         TEXT NOT NULL,
   verdict        TEXT NOT NULL,
   quarantined_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS machine_threads (
+  thread_id        TEXT PRIMARY KEY,
+  trace_id         TEXT NOT NULL,
+  executed         TEXT NOT NULL,
+  interrupt_node_id TEXT NOT NULL,
+  state            TEXT NOT NULL,
+  status           TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
 );
 `;
 
@@ -462,6 +495,39 @@ export class SqliteEventStore implements EventStore {
     }));
   }
 
+  async saveThreadCheckpoint(checkpoint: ThreadCheckpoint): Promise<void> {
+    this.db
+      .prepare("INSERT OR REPLACE INTO machine_threads (thread_id, trace_id, executed, interrupt_node_id, state, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(checkpoint.thread_id, checkpoint.trace_id, JSON.stringify(checkpoint.executed), checkpoint.interrupt_node_id, JSON.stringify(checkpoint.state), checkpoint.status, checkpoint.updated_at);
+  }
+
+  async loadThreadCheckpoint(threadId: string): Promise<ThreadCheckpoint | undefined> {
+    const row = this.db.prepare("SELECT * FROM machine_threads WHERE thread_id = ?").get(threadId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return {
+      thread_id: row.thread_id as string,
+      trace_id: row.trace_id as string,
+      executed: JSON.parse(row.executed as string) as string[],
+      interrupt_node_id: row.interrupt_node_id as string,
+      state: JSON.parse(row.state as string) as Record<string, unknown>,
+      status: row.status as ThreadCheckpoint["status"],
+      updated_at: row.updated_at as string,
+    };
+  }
+
+  async threadCheckpoints(): Promise<ThreadCheckpoint[]> {
+    const rows = this.db.prepare("SELECT * FROM machine_threads ORDER BY updated_at").all() as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      thread_id: r.thread_id as string,
+      trace_id: r.trace_id as string,
+      executed: JSON.parse(r.executed as string) as string[],
+      interrupt_node_id: r.interrupt_node_id as string,
+      state: JSON.parse(r.state as string) as Record<string, unknown>,
+      status: r.status as ThreadCheckpoint["status"],
+      updated_at: r.updated_at as string,
+    }));
+  }
+
   close(): void {
     this.db.close();
   }
@@ -595,6 +661,25 @@ export class MemoryEventStore implements EventStore {
 
   async quarantineEntries(): Promise<QuarantineRecord[]> {
     return [...this.quarantined];
+  }
+
+  private threads = new Map<string, ThreadCheckpoint>();
+
+  async saveThreadCheckpoint(checkpoint: ThreadCheckpoint): Promise<void> {
+    this.threads.set(checkpoint.thread_id, {
+      ...checkpoint,
+      executed: [...checkpoint.executed],
+      state: structuredClone(checkpoint.state),
+    });
+  }
+
+  async loadThreadCheckpoint(threadId: string): Promise<ThreadCheckpoint | undefined> {
+    const row = this.threads.get(threadId);
+    return row ? { ...row, executed: [...row.executed], state: structuredClone(row.state) } : undefined;
+  }
+
+  async threadCheckpoints(): Promise<ThreadCheckpoint[]> {
+    return [...this.threads.values()].map((row) => ({ ...row, executed: [...row.executed], state: structuredClone(row.state) }));
   }
 
   close(): void { /* 内存实现无资源可释放 */ }

@@ -11,6 +11,7 @@ export * from "./orchestrator/roles.js";
 export * from "./orchestrator/selfheal.js";
 export * from "./orchestrator/taskgraph.js";
 export * from "./orchestrator/statemachine.js";
+export * from "./orchestrator/runtime.js";
 export * from "./orchestrator/compile.js";
 export * from "./orchestrator/taskgraph-machine.js";
 export * from "./ladder/decision-ladder.js";

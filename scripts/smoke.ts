@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { MemoryEventStore, MemoryEventStore as Store, EventBus, degrade, sha256, sha256Json } from "@safetrace/shared";
 import type { Answer, DecisionReply, DecisionRequest, FallbackEvent, IntelItem, QueryTurn } from "@safetrace/shared";
+import type { MachineSpec } from "@safetrace/qa";
 import { runIngestOnce } from "@safetrace/ingest";
 import { runEnrichment } from "@safetrace/enrich";
 import {
@@ -27,6 +28,8 @@ import {
   SelfHealAgent,
   answerVersionImpact,
   classifyIntent,
+  resumeMachine,
+  runMachine,
   indexChunks,
   readFixtureChunks,
   runDecisionLadder,
@@ -448,6 +451,43 @@ async function main(): Promise<number> {
       "判定段与结论进答案正文");
     check(p03Answer.reasoning_chain.some((s) => s.includes("P-03 版本影响判定") && s.includes("非相似度/模型生成")),
       "推理链记录判定来自确定性规则");
+  }
+
+  // ---------- 13) A-01 编排挂起/恢复（threadId 持久化 + invoke/resume） ----------
+  console.log("\n[13] A-01 编排挂起/恢复（threadId 持久化 + invoke/resume）");
+  {
+    const threadStore = new Store();
+    const seen: string[] = [];
+    const a01Spec: MachineSpec = {
+      nodes: [
+        { id: "monitor", role: "monitor", writes: ["log"], run: (state) => { seen.push("monitor"); state.log = "monitor-done"; } },
+        { id: "enricher", role: "enricher", deps: ["monitor"], writes: ["log"], run: (state) => { seen.push("enricher"); state.enriched = state["__resume_value"] !== undefined; } },
+        { id: "qa", role: "qa", deps: ["enricher"], run: (state) => { seen.push("qa"); state.answered = true; } },
+      ],
+      reducers: {},
+    };
+    const a01Config = { backend: "native", interrupts: { enabled: true, node_id: "enricher" } } as const;
+    // ① invoke：执行到 enricher 挂起，检查点落库（suspended + 状态快照）
+    const a01First = await runMachine(a01Spec, { store: threadStore, config: a01Config });
+    check(a01First.interrupted && a01First.interrupted_at === "enricher",
+      "invoke 到挂起点停下（interrupted_at=enricher）");
+    check(JSON.stringify(a01First.executed) === JSON.stringify(["monitor"]), "挂起点前的节点已执行");
+    const a01Cp = await threadStore.loadThreadCheckpoint(a01First.thread_id);
+    check(a01Cp?.status === "suspended" && a01Cp.state.log === "monitor-done",
+      "检查点落库：suspended + 挂起点状态快照（threadId 持久化）");
+    // ② resume：跳过已执行、恢复值到达挂起节点、续跑完成、检查点转 completed
+    const a01Resumed = await resumeMachine(a01First.thread_id, a01Spec, { store: threadStore, config: a01Config, resumeValue: { approved: true } });
+    check(a01Resumed.ok && !a01Resumed.interrupted, "resume 后跑完剩余节点");
+    check(JSON.stringify(seen) === JSON.stringify(["monitor", "enricher", "qa"]),
+      "已执行节点不重跑（monitor 只出现一次）");
+    check((await threadStore.loadThreadCheckpoint(a01First.thread_id))?.status === "completed",
+      "完成后检查点转 completed");
+    // ③ fail-closed：completed 线程禁止重复 invoke / resume
+    let a01Rejected = 0;
+    try { await runMachine(a01Spec, { store: threadStore, threadId: a01First.thread_id, config: a01Config }); } catch { a01Rejected += 1; }
+    try { await resumeMachine(a01First.thread_id, a01Spec, { store: threadStore, config: a01Config, resumeValue: 1 }); } catch { a01Rejected += 1; }
+    check(a01Rejected === 2, "completed 线程重复 invoke/resume 均显式抛错（fail-closed）");
+    threadStore.close();
   }
 
   console.log("\n== 冒烟结束 ==");

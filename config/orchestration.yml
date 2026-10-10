@@ -2,6 +2,14 @@
 # native = 自研顺序执行器（零外部依赖，保 main 可演示）
 # 历史：曾有 langgraph 可选后端，2026-09-30 移除——该依赖从未进 package.json，
 # 对应用例永久 skip，属死代码；移除后 backend 只接受 native，写别的值直接抛错。
+#
+# A-01（2026-10-10）挂起/恢复已接通：
+# - interrupts.enabled=true 时，执行到 node_id 指定节点即挂起：
+#   已执行进度 + 状态快照落 machine_threads 检查点（shared store），返回 interrupted=true；
+# - resume：调用方以同一 threadId 提供恢复值续跑——跳过已执行节点、恢复状态，
+#   恢复值注入 state["__resume_value"]（statemachine.ts 的 RESUME_VALUE_KEY）；
+# - 默认关闭：演示/冒烟路径（smoke [7] 三节点图）不挂起，行为与本变更前一致；
+#   挂起演示走冒烟 [13] 段（MemoryEventStore 内存检查点）。
 version: 1
 backend: native
 interrupts:

@@ -7,11 +7,13 @@
 import { degrade, nextId } from "@safetrace/shared";
 import type { EventBus, FallbackEvent } from "@safetrace/shared";
 import type { AgentRoleName } from "./roles.js";
+import type { MachineState } from "./statemachine.js";
 
 export interface TaskNode {
   id: string;
   role: AgentRoleName;
-  run: () => void | Promise<void>;
+  /** A-01：可选接收编排状态（旧节点忽略该参数即可，签名兼容）。 */
+  run: (state?: MachineState) => void | Promise<void>;
   /** 失败策略，缺省 = "abort"（显式失败，不静默） */
   on_fail?: "degrade" | "abort";
   /** 依赖节点 id；拓扑排序用（声明顺序作为同层顺序） */
@@ -36,6 +38,16 @@ export interface TaskGraphResult {
   /** abort 停止时的失败节点；ok=true 时为 null */
   failed: TaskFailure | null;
   trace_id: string;
+}
+
+/** A-01：经状态机适配层执行的结果（额外带线程与挂起信息）。 */
+export interface TaskGraphMachineResult extends TaskGraphResult {
+  /** 编排线程 id（挂起后据此 resume）。 */
+  thread_id: string;
+  /** 是否因 interrupt 挂起（等待外部 resume）。 */
+  interrupted: boolean;
+  /** 挂起点节点 id；未挂起为 null。 */
+  interrupted_at: string | null;
 }
 
 export interface RunTaskGraphOptions {

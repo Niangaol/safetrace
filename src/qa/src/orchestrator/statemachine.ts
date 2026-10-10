@@ -6,12 +6,16 @@
  * - 迁移期 taskgraph.ts 保持原语义不动，由 compile() 把旧图编译成状态机描述。
  */
 import { nextId } from "@safetrace/shared";
+import type { ThreadCheckpoint } from "@safetrace/shared";
 
 export type MachineFailurePolicy = "abort" | "degrade";
 
-/** 跨节点共享状态：reducers 决定同名字段如何合并。 */
+/**
+ * 跨节点共享状态：reducers 决定同名字段如何合并。
+ * A-01：索引签名可变——节点通过入参 state 写字段是既定用法（只读签名会让写入全部非法）。
+ */
 export interface MachineState {
-  readonly [key: string]: unknown;
+  [key: string]: unknown;
 }
 
 export type MachineReducer = (current: unknown, incoming: unknown) => unknown;
@@ -51,16 +55,36 @@ export interface MachineResult {
   failed: { node_id: string; error: string } | null;
   /** 是否因 interrupt 挂起（等待外部 resume）。 */
   interrupted: boolean;
+  /** 挂起点节点 id；未挂起为 null（resume 时据此续跑）。 */
+  interrupted_at: string | null;
   /** 每个节点的执行明细（顺序同 executed）。 */
   steps: MachineStepRecord[];
   trace_id: string;
 }
 
+/**
+ * A-01：恢复值在状态里的保留键。resume 时后端把外部恢复值写入 state[RESUME_VALUE_KEY]，
+ * 挂起节点据此继续执行；业务节点不得使用该键写业务字段（保留键冲突直接抛错）。
+ */
+export const RESUME_VALUE_KEY = "__resume_value";
+
+/** A-01：线程检查点存储（shared EventStore 的结构性子集，测试可用内存实现）。 */
+export interface ThreadStore {
+  saveThreadCheckpoint(checkpoint: ThreadCheckpoint): Promise<void>;
+  loadThreadCheckpoint(threadId: string): Promise<ThreadCheckpoint | undefined>;
+}
+
 export interface BackendContext<S extends MachineState = MachineState> {
   traceId: string;
   spec: MachineSpec<S>;
-  /** interrupt 挂起回调：命中时置 interrupted=true 并停下。 */
-  onInterrupt?: (nodeId: string, value: unknown) => void | Promise<void>;
+  /** 初始状态（resume 时传检查点快照）；缺省空对象。 */
+  initialState?: S;
+  /** resume 时已执行过的节点 id（跳过不重跑）。 */
+  executed?: string[];
+  /** 是否为 resume 续跑（决定挂起点是再次挂起还是带恢复值执行）。 */
+  isResume?: boolean;
+  /** interrupt 挂起回调：命中时置 interrupted=true 并停下；state 为挂起点快照。 */
+  onInterrupt?: (nodeId: string, value: unknown, state: S) => void | Promise<void>;
   /** 外部恢复值（resume(threadId, value) 写入）。 */
   resumeValue?: unknown;
 }
