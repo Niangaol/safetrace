@@ -138,6 +138,8 @@ npm run qa:serve            # 检索服务 :8318（/healthz /v1/retrieve）
 所有降级路径经 `degrade()` 统一登记 `fallback.events` 并在响应带 `degraded_to`——冒烟第 8 项断言零静默兜底，第 9 项跑 A-06 自愈演练（死信退避重投 + 健康看板），第 15 项跑 A-06 常驻自愈（SelfHealDaemon 订阅 + 周期拍 + 修复恢复）。
 **2026-10-10 实测门禁（九项缺口修复收尾轮）**：`tsc -p tsconfig.json` 0 错误；**全量单测 759/759 通过、0 失败 0 跳过**（真实 `node --test`）；`node scripts/validate-contracts.mjs` 全绿（8 schema / 12 fixture）；`npm run check:web` 通过（`npm ci --prefix web` + 构建 + 前端 smoke）；`npm run smoke` 15 段全 PASS（含 20 条黄金问答、零静默兜底、A-06 自愈、A-05 时效、P-05 冲突、P-03 版本影响、A-01 挂起/恢复、A-02 人工工单、A-06 常驻自愈）；`npm run selfheal:drill` 全链路 PASS。本轮新增验收：A-05 时效 6 条、P-05 冲突 7 条、P-03 版本影响 13 条、A-01 挂起/恢复 7 条、A-02 人工工单 7 条、A-06 常驻自愈 5 条、E-04 隔离区 4 条。
 
+**2026-10-10 晚间接线续修**：实际决策服务已接持久人工工单，修复无消费者重投误销档；新增 7 项回归，全量 **766/766**，四门禁通过。此前九项修复是代码切片与测试进展，**不是生产全链路全部验收**：并发人工决单、已决回执复用、自愈跨进程消费者、live 问答冲突回放、72h 证据等仍待闭环。详见 [接线验收边界与待办](docs/INTEGRATION-CLOSURE-2026-10-10.md)。
+
 | 模块 | 状态 | 测试 | 说明 |
 |---|---|---|---|
 | contracts/ | **v1.1 已冻结（2026-10-03 形式化冻结），C-01~C-06 代码侧全部完成，三线 sign-off 收尾中** | 校验器当前全绿 | 8 schemas + events.md + openapi.yaml；C-01~C-06 各留测试反向验证；D6 后只追加字段或标 deprecated 并经另两人同意 |

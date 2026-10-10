@@ -31,6 +31,8 @@ async function main(): Promise<void> {
     apiKeyConfigured: Boolean(process.env.STEP_PLAN_API_KEY),
     client: gateway,
     bus,
+    // 未决请求与 decision.replies 共用同一 SQLite 库，供 human:queue 查询/接单/决单。
+    ticketStore: store,
     ...(jevModelId ? { openjev: { modelId: jevModelId, ...(jevProvenance ? { expectedProvenance: jevProvenance } : {}) } } : {}),
   });
   const port = Number(process.env.DECISION_PORT ?? 8317);

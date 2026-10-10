@@ -119,6 +119,10 @@ export class EventBus {
    * 全部处理器成功 → 清除死信标记；仍然失败 → 保留死信并累计失败次数（可再次退避重投）。
    */
   async redeliver<T>(env: Envelope<T>): Promise<boolean> {
+    // publish 可以仅持久化而无订阅者；死信重投则必须有实际消费者，
+    // 不能把空投递视为恢复成功并销档（独立守护进程/退订后尤其如此）。
+    const consumers = this.handlers.get(env.topic);
+    if (!consumers || consumers.size === 0) return false;
     const ok = await this.deliver(env);
     if (ok) await this.opts.store.clearDeadLetter(env.event_id);
     return ok;

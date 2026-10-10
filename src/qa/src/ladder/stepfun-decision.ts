@@ -249,7 +249,7 @@ export function createStepPlanDecisionHandler(options: StepPlanDecisionHandlerOp
   const llm = chainLlmResolvers(cloud, options.openjev ? createOpenJevDecisionResolver(options.openjev) : undefined);
   return async (raw) => {
     const request = parseDecisionRequest(raw);
-    const ladder: LadderOptions = { bus: options.bus, tool: options.tool, rule: options.rule ?? createCalibratedRuleResolver(), human: options.human, onFallback: options.onFallback, ...(llm ? { llm } : {}) };
+    const ladder: LadderOptions = { bus: options.bus, ticketStore: options.ticketStore, tool: options.tool, rule: options.rule ?? createCalibratedRuleResolver(), human: options.human, onFallback: options.onFallback, ...(llm ? { llm } : {}) };
     return (await runDecisionLadder(request, ladder)).reply;
   };
 }
