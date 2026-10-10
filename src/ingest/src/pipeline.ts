@@ -20,7 +20,7 @@ import { fetchUsn } from "./sources/usn.js";
 import { parseUsn } from "./adapters/usn.js";
 import { dedupeAll } from "./dedupe.js";
 import { releasedIntelPayload } from "./intel-payload.js";
-import { assessQualityVerdict } from "./dq1.js";
+import { assessQualityVerdict, recordQuarantine } from "./dq1.js";
 import { sha256PayloadRef } from "./common.js";
 import type { FetchOpts, ParseResult } from "./common.js";
 
@@ -317,6 +317,9 @@ export async function runIngestOnce(opts: RunIngestOnceOpts): Promise<IngestRunR
     } else {
       dqEnv = await bus.publish("dq.verdicts", verdict, { trace_id: traceId, causation_id: rawEventId });
       causationByIntelId[item.intel_id] = dqEnv.event_id;
+      // E-04：隔离区落库——quarantine 不再只有 dq.verdicts 事件一种形态，
+      // 落表后可查可导出（照 dead_letters 模式，verdict 原样留存可复算）。
+      await recordQuarantine(opts.store, item, verdict, nowIso());
     }
     const dqStatus = verdict.verdict === "pass" ? "success" : verdict.verdict === "degrade" ? "degraded" : verdict.verdict === "review" ? "review" : "rejected";
     const dqLineage = await bus.recordLineage({

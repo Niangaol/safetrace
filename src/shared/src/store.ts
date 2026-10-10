@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { Envelope, Topic } from "./envelope.js";
+import type { QualityVerdict } from "./types.js";
 
 export type LineageStatus = "success" | "degraded" | "rejected" | "review" | "failed";
 export interface LineageArtifactRef { kind: string; id: string; sha256?: string; url?: string }
@@ -67,6 +68,20 @@ export interface ReviewCaseDecision {
   lineage_id: string;
   recorded_at: string;
 }
+/**
+ * E-04：DQ1 隔离区记录。verdict=quarantine 的判定此前只有 dq.verdicts 事件一种形态，
+ * 无表无目录、不可查不可导出；本记录照 dead_letters 模式落库， verdict 原样留存可复算。
+ */
+export interface QuarantineRecord {
+  /** dq1 产出的 quarantine_ref（dq_quarantine:<intel_id>），幂等键。 */
+  quarantine_ref: string;
+  intel_id: string;
+  /** 人类可读的隔离原因（红线标记或质量分不足）。 */
+  reason: string;
+  /** 完整判定（原样 JSON，含 dimension_scores/flags/gate_version，可复算）。 */
+  verdict: QualityVerdict;
+  quarantined_at: string;
+}
 
 export interface LineageDraft {
   trace_id: string;
@@ -106,6 +121,10 @@ export interface EventStore {
   deadLetters(): Promise<Array<{ event_id: string; reason: string; envelope: Envelope }>>;
   /** 死信重投成功后的销档（A-06 selfheal dead_letter_drain 消费）。 */
   clearDeadLetter(eventId: string): Promise<void>;
+  /** E-04：隔离区落库（DQ1 verdict=quarantine 的审计留存；照 dead_letters 模式）。 */
+  markQuarantine(record: QuarantineRecord): Promise<void>;
+  /** 隔离区内容（可查可导出；A1/S1 看板与运维脚本消费）。 */
+  quarantineEntries(): Promise<QuarantineRecord[]>;
   appendLineage(record: LineageRecord): Promise<boolean>;
   readLineage(traceId: string, offset?: number, limit?: number): Promise<LineageRecord[]>;
   getLastGoodPageSnapshot(sourceUrl: string): Promise<StoredPageSnapshot | undefined>;
@@ -191,6 +210,13 @@ CREATE TABLE IF NOT EXISTS dead_letters (
   reason    TEXT NOT NULL,
   envelope  TEXT NOT NULL,
   failed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS quarantine (
+  quarantine_ref TEXT PRIMARY KEY,
+  intel_id       TEXT NOT NULL,
+  reason         TEXT NOT NULL,
+  verdict        TEXT NOT NULL,
+  quarantined_at TEXT NOT NULL
 );
 `;
 
@@ -419,6 +445,23 @@ export class SqliteEventStore implements EventStore {
     this.db.prepare("DELETE FROM dead_letters WHERE event_id = ?").run(eventId);
   }
 
+  async markQuarantine(record: QuarantineRecord): Promise<void> {
+    this.db
+      .prepare("INSERT OR REPLACE INTO quarantine (quarantine_ref, intel_id, reason, verdict, quarantined_at) VALUES (?, ?, ?, ?, ?)")
+      .run(record.quarantine_ref, record.intel_id, record.reason, JSON.stringify(record.verdict), record.quarantined_at);
+  }
+
+  async quarantineEntries(): Promise<QuarantineRecord[]> {
+    const rows = this.db.prepare("SELECT * FROM quarantine ORDER BY quarantined_at").all() as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      quarantine_ref: r.quarantine_ref as string,
+      intel_id: r.intel_id as string,
+      reason: r.reason as string,
+      verdict: JSON.parse(r.verdict as string) as QualityVerdict,
+      quarantined_at: r.quarantined_at as string,
+    }));
+  }
+
   close(): void {
     this.db.close();
   }
@@ -540,6 +583,18 @@ export class MemoryEventStore implements EventStore {
 
   async clearDeadLetter(eventId: string): Promise<void> {
     this.dead = this.dead.filter((d) => d.event_id !== eventId);
+  }
+
+  private quarantined: QuarantineRecord[] = [];
+
+  async markQuarantine(record: QuarantineRecord): Promise<void> {
+    const existing = this.quarantined.findIndex((q) => q.quarantine_ref === record.quarantine_ref);
+    if (existing >= 0) this.quarantined[existing] = record;
+    else this.quarantined.push(record);
+  }
+
+  async quarantineEntries(): Promise<QuarantineRecord[]> {
+    return [...this.quarantined];
   }
 
   close(): void { /* 内存实现无资源可释放 */ }

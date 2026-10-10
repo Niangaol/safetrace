@@ -13,7 +13,7 @@
  * - 筛查无法运行（输入为空/超限/形状非法）→ 不填注入字段（如实标注未筛查）且 verdict 至少 review（fail-closed）。
  */
 import { parseLoose, screenPromptInjection } from "@safetrace/shared";
-import type { DqFlag, DqVerdict, IntelItem, QualityVerdict } from "@safetrace/shared";
+import type { DqFlag, DqVerdict, EventStore, IntelItem, QualityVerdict } from "@safetrace/shared";
 import { hasTzSuffix, isRedlineCveStatus, str } from "./common.js";
 
 export const GATE_VERSION = "1.1.0";
@@ -313,4 +313,34 @@ export function assessQualityVerdict(item: IntelItem, opts: AssessOpts = {}): Qu
     result.reviewed_at = now.toISOString();
   }
   return result;
+}
+
+/**
+ * E-04：隔离原因的人类可读摘要（隔离区落库与导出用）。
+ * 硬红线命中优先于质量分：红线与分数无关，分低只是另一种隔离路径。
+ */
+export function quarantineReason(verdict: QualityVerdict): string {
+  if (verdict.flags.length > 0) return "DQ1 标记：" + verdict.flags.join("、");
+  return "质量分 " + verdict.quality_score.toFixed(2) + " 低于 0.50 下限（无硬红线标记）";
+}
+
+/**
+ * E-04：verdict=quarantine 时把判定落进隔离区表（幂等，quarantine_ref 为键）。
+ * 非 quarantine 判定不落表（review 仍走人工复核队列，不混入隔离区）；
+ * verdict 原样留存，复算不依赖事件总线。
+ */
+export async function recordQuarantine(
+  store: EventStore,
+  item: IntelItem,
+  verdict: QualityVerdict,
+  quarantinedAt: string,
+): Promise<void> {
+  if (verdict.verdict !== "quarantine" || !verdict.quarantine_ref) return;
+  await store.markQuarantine({
+    quarantine_ref: verdict.quarantine_ref,
+    intel_id: item.intel_id,
+    reason: quarantineReason(verdict),
+    verdict,
+    quarantined_at: quarantinedAt,
+  });
 }

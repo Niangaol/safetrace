@@ -46,6 +46,7 @@
     "assets:scan": "node --import tsx scripts/assets-scan.ts",
     "enrich:pending": "node --env-file-if-exists=.env.local --import tsx scripts/enrich-pending.ts",
     "review:queue": "tsx scripts/review-queue.ts",
+    "quarantine:list": "node --import tsx scripts/quarantine-list.ts",
     "page:demo": "tsx scripts/demo-page-ingest.ts",
     "pilot:doctor": "tsx scripts/pilot-doctor.ts",
     "embedding:verify": "node --env-file=.env.local --import tsx scripts/verify-live-embedding.ts",
