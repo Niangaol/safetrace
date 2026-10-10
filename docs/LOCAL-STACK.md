@@ -148,7 +148,8 @@ embedder 角色当前指向 `local_embed`。要切回云端 Tokendance，
 以上两项是分开验的，别拿 doctor 的绿当成向量链路已验收：
 
 - 真实 embedding 推理：单独验过 HTTP 200，返回 **1024 维、全部有限、非零**向量，计量 25 tokens
-- Qdrant 真实写入与召回：`npm run vector:verify` 已验收（写入 + 语义召回 + 跑完自动清场）
+- Qdrant 真实写入与召回：`npm run vector:verify` 已验收（写入 + 语义召回 + 跑完自动清场；
+  2026-10-10 复验：bge-m3 1024 维推理 + 集合 5237 点真实情报 + 召回排序正确）
 
 ## 模块运转现状（2026-09-30 实测）
 
@@ -163,7 +164,7 @@ embedder 角色当前指向 `local_embed`。要切回云端 Tokendance，
 | `src/enrich` | ✅ 离线可用 | 59 测试全过；`assets:demo` 20 个资产按「受影响/不受影响/待核实」三档正确分级 |
 | `src/qa` | ✅ **真实检索** | smoke 8 段全 PASS；**Q2 已切真实情报库**：查 "Log4Shell RCE" 命中 KEV 真实条目(0.76) → 姊妹 CVE-2021-45046(0.69) → 同类 Oracle WebLogic RCE(0.67)，URL 可点开核对，`degraded_to: null` |
 | 编排层 | ✅ 单后端 | 2026-09-30 删掉 langgraph 只留 native（依赖从未安装、用例永久 skip，属死代码）；4 条核心断言一条未少 |
-| 真实向量链路 | ✅ 已验收 | `vector:verify`：bge-m3 真实推理 + Qdrant 写入 + 语义召回排序正确，跑完清理剩 0 点 |
+| 真实向量链路 | ✅ 已验收（2026-10-10 复验） | `vector:verify`：bge-m3 真实推理（1024 维）+ Qdrant 写入 + 语义召回排序正确（chk_verify-1 0.81 > intel_kev_cve_2021_44228 0.66 > intel_kev_cve_2021_45046 0.61），清理验证点后集合剩 5237 点（10-03 灌入的真实情报）；`pilot:doctor` 四项全绿（默认读 `.env.local` 后无需手跑 `--env-file`） |
 | 本地推理服务 | ✅ 真实可用 | llama-server 8081/8080 由 `up.ps1` 拉起；模型缺了自动从国内源下载并校验 sha256 |
 | 云端降级 | ⚠️ 有人工关卡 | 默认 `never` 一律拒绝；`ask` 需 TTY 人工点头；`always` 才会真的出网（会花钱） |
 | 真实网页抓取 | ❌ 未验收 | `page:demo` 输出 `mock: true`、0 网络请求，只验证规则→DQ1→SQLite→证据块→BM25 协议 |
@@ -234,9 +235,11 @@ SAFETRACE_INDEX_QDRANT=true SAFETRACE_INGEST_OFFLINE=false npm run ingest:once
 3. **doctor 曾经对 llama-server 误报 missing**：它要求模型 id 精确相等，而 llama.cpp 的 id 是
    GGUF 文件名（`bge-m3-Q8_0.gguf`）、配置里写短名（`bge-m3`）。已改为允许前缀匹配，
    只放宽命名形式，没放宽服务语义。
-4. **`pilot:doctor` 这个 npm script 没带 `--env-file`**，所以它读的是默认 `config/models.yml`
-   （占位 cache 配置），不是你的真实配置。要验真实环境必须手跑：
-   `node --env-file=.env.local --import tsx scripts/pilot-doctor.ts`
+4. ~~**`pilot:doctor` 这个 npm script 没带 `--env-file`**~~ **已修（2026-10-10）**：
+   `pilot:doctor` 现改为 `node --env-file-if-exists=.env.local --import tsx scripts/pilot-doctor.ts`，
+   默认就读 `.env.local` 里的真实配置（`MODELS_CONFIG_PATH`/`QDRANT_URL`/`QDRANT_COLLECTION`）；
+   没有 `.env.local` 时诚实回落到默认 `config/models.yml`（占位 cache），doctor 会报
+   `embedder_config: missing`、`prerequisites_ready: false`——不假装可用。
 5. **web 构建的 esbuild 会删系统 Temp 报 Access is denied**：跑 `check:web` / pre-push 前把
    `TEMP`/`TMP` 指到仓库内的 `.tmp/web-build`。
 

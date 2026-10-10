@@ -50,7 +50,7 @@
     "quarantine:list": "node --import tsx scripts/quarantine-list.ts",
     "human:queue": "node --import tsx scripts/human-queue.ts",
     "page:demo": "tsx scripts/demo-page-ingest.ts",
-    "pilot:doctor": "tsx scripts/pilot-doctor.ts",
+    "pilot:doctor": "node --env-file-if-exists=.env.local --import tsx scripts/pilot-doctor.ts",
     "embedding:verify": "node --env-file=.env.local --import tsx scripts/verify-live-embedding.ts",
     "vector:verify": "node --env-file=.env.local --import tsx scripts/verify-vector-pipeline.ts",
     "local:up": "pwsh -NoProfile -File scripts/local/up.ps1",
