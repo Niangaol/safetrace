@@ -1,6 +1,6 @@
 # contracts/schemas CHANGELOG
 
-> 纪律（docs/GITHUB-FLOW.md 第五节）：只允许「新字段追加 + 旧字段标 deprecated」；
+> 纪律（docs/TUTORIAL.md §8）：只允许「新字段追加 + 旧字段标 deprecated」；
 > 禁止改语义、改枚举值含义、删字段。每次契约改动必须在此登记，并在 PR 中三线 sign-off。
 
 ## v1.2.2（2026-10-10，D6 冻结后增量；P-05）

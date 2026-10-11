@@ -42,7 +42,7 @@ function readAudit(sqlitePath: string, target: number) {
         B_required_dimensions_live: { dimensions: [...REQUIRED_LIVE_DIMENSIONS], covered: audit.coveredRequired, ratio: pct(audit.coverageRequired), definition: "覆盖必备维度 live（target 达标线按此判定；2026-10-09 用户决策 paper 降为可选）" },
         optional_dimensions_live: { dimensions: [...OPTIONAL_LIVE_DIMENSIONS], live: Object.fromEntries(OPTIONAL_LIVE_DIMENSIONS.map(d => [d, audit.dimensionLiveItems[d]])), ratio: Object.fromEntries(OPTIONAL_LIVE_DIMENSIONS.map(d => [d, pct(audit.dimensionLiveRatio[d])])), definition: "可选增强维度：命中算赚到，缺失不影响达标判定" },
         C_per_dimension_live: Object.fromEntries(DIMENSIONS.map(d => [d, { live: audit.dimensionLiveItems[d], ratio: pct(audit.dimensionLiveRatio[d]) }])),
-        D_qa_projection_verified: { computed_here: false, definition: "paper/cvss artifact 与原始 NVD/CNA 报文逐字匹配且血缘完整（仪表盘/QA 引用口径，readLiveKnowledgeView 投影验证）；需读取原始 payload，本纯函数审计不计算", see: "docs/CLOUD-ENRICH-QA-2026-10-06.md 口径对照节" },
+        D_qa_projection_verified: { computed_here: false, definition: "paper/cvss artifact 与原始 NVD/CNA 报文逐字匹配且血缘完整（仪表盘/QA 引用口径，readLiveKnowledgeView 投影验证）；需读取原始 payload，本纯函数审计不计算", see: "docs/TUTORIAL.md §7 富化覆盖率口径" },
       },
       progress_possible: audit.progressPossible, dimension_live_items: audit.dimensionLiveItems,
       by_dimension: audit.byDimension, uncovered_by_reason: audit.uncoveredByReason,

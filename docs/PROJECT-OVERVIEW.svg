@@ -1,0 +1,328 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="1256" viewBox="0 0 1760 1256" font-family="-apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif">
+  <defs>
+    <linearGradient id="hdr" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0b3d91"/><stop offset="1" stop-color="#1565c0"/>
+    </linearGradient>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0b3d91" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8fb4dc"/>
+    </marker>
+  </defs>
+
+  <rect width="1760" height="1256" fill="#eef4fb"/>
+
+  <!-- ============ 头部 ============ -->
+  <rect x="0" y="0" width="1760" height="98" fill="url(#hdr)"/>
+  <text x="36" y="46" font-size="31" font-weight="700" fill="#ffffff">SafeTrace 项目全景图</text>
+  <text x="36" y="76" font-size="15" fill="#bcd6f7">智能体驱动的 AI 安全知识情报系统 · 中国电子杯 赛题九 ｜ 状态截至 2026-10-09</text>
+  <text x="1724" y="42" text-anchor="end" font-size="15" fill="#dbe9fb">杭州电子科技大学 · 2026 级 智能科学与技术</text>
+  <text x="1724" y="70" text-anchor="end" font-size="15" fill="#dbe9fb">3 人团队 · 116 次提交 · 源码 1.78 万行</text>
+
+  <!-- ============ A. 痛点 ============ -->
+  <rect x="24" y="116" width="1712" height="104" rx="14" fill="#ffffff" stroke="#cfe0f4"/>
+  <rect x="44" y="136" width="120" height="26" rx="13" fill="#0b3d91"/>
+  <text x="104" y="154" text-anchor="middle" font-size="13" fill="#ffffff">要解决的痛点</text>
+  <text x="44" y="180" font-size="17" fill="#12335c">凌晨三点，老板在群里问：「Ollama 最近那个未授权访问漏洞，影响我们哪些在跑的服务？今晚该先修哪个？」</text>
+  <text x="44" y="206" font-size="14" fill="#4a6a92">人工要 6 小时：刷 CVE 库 → 扒厂商公告 → 搜 PoC → 对自家资产 → 核 CVSS → 写报告。AI 安全漏洞每天新增 4 万多条，分散在七八个渠道，根本看不完。</text>
+  <rect x="1288" y="140" width="426" height="62" rx="10" fill="#e8f2ff" stroke="#9dc4ee"/>
+  <text x="1308" y="165" font-size="14" font-weight="700" fill="#0b3d91">SafeTrace 的答案</text>
+  <text x="1308" y="189" font-size="13" fill="#2c5a8f">一句话提问 → 几十秒给出带出处、带推理链、带修复优先级的答案</text>
+
+  <!-- ============ B. 流水线 ============ -->
+  <text x="24" y="252" font-size="19" font-weight="700" fill="#0b3d91">数据流水线：一条漏洞情报的旅程</text>
+  <text x="1736" y="252" text-anchor="end" font-size="13">
+    <tspan fill="#1a7f5a">●</tspan><tspan fill="#3c5c80"> 真跑通   </tspan>
+    <tspan fill="#c98a12">●</tspan><tspan fill="#3c5c80"> 部分完成   </tspan>
+    <tspan fill="#2b7de0">●</tspan><tspan fill="#3c5c80"> Mock / 规划</tspan>
+  </text>
+
+  <!-- 卡片 1：情报源 -->
+  <g>
+    <rect x="24" y="268" width="224" height="400" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <path d="M24,280 a12,12 0 0 1 12,-12 h200 a12,12 0 0 1 12,12 v34 h-224 z" fill="#1e6fd9"/>
+    <circle cx="48" cy="291" r="13" fill="#ffffff" opacity="0.25"/>
+    <text x="48" y="296" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">1</text>
+    <text x="70" y="296" font-size="15" font-weight="700" fill="#ffffff">情报源</text>
+    <text x="40" y="330" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">src/ingest/registry.ts</text>
+    <line x1="40" y1="340" x2="232" y2="340" stroke="#e3ecf7"/>
+    <g font-size="12.5" fill="#2b4a6f">
+      <circle cx="46" cy="358" r="3" fill="#1e6fd9"/><text x="56" y="362">CISA KEV 在野利用</text>
+      <circle cx="46" cy="388" r="3" fill="#1e6fd9"/><text x="56" y="392">NVD CVE 官方库</text>
+      <circle cx="46" cy="418" r="3" fill="#1e6fd9"/><text x="56" y="422">OSV 开源生态</text>
+      <circle cx="46" cy="448" r="3" fill="#1e6fd9"/><text x="56" y="452">cve.org MITRE</text>
+      <circle cx="46" cy="478" r="3" fill="#1e6fd9"/><text x="56" y="482">Ubuntu USN 公告</text>
+      <circle cx="46" cy="508" r="3" fill="#9dc4ee"/><text x="56" y="512">GitHub GHSA 规划</text>
+      <circle cx="46" cy="538" r="3" fill="#9dc4ee"/><text x="56" y="542">arXiv 论文源</text>
+    </g>
+    <path d="M24,630 h224 v26 a12,12 0 0 1 -12,12 h-200 a12,12 0 0 1 -12,-12 z" fill="#f2f8ff"/>
+    <circle cx="42" cy="649" r="4" fill="#1a7f5a"/>
+    <text x="56" y="653" font-size="12" fill="#3c5c80">5 active / 2 planned</text>
+  </g>
+  <line x1="250" y1="468" x2="270" y2="468" stroke="#8fb4dc" stroke-width="2.5" marker-end="url(#arw)"/>
+
+  <!-- 卡片 2：Y 监测线 -->
+  <g>
+    <rect x="272" y="268" width="224" height="400" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <path d="M272,280 a12,12 0 0 1 12,-12 h200 a12,12 0 0 1 12,12 v34 h-224 z" fill="#0e9f8a"/>
+    <circle cx="296" cy="291" r="13" fill="#ffffff" opacity="0.25"/>
+    <text x="296" y="296" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">2</text>
+    <text x="318" y="296" font-size="15" font-weight="700" fill="#ffffff">Y 监测线</text>
+    <text x="288" y="330" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">src/ingest · 30 文件</text>
+    <line x1="288" y1="340" x2="480" y2="340" stroke="#e3ecf7"/>
+    <g font-size="12.5" fill="#2b4a6f">
+      <circle cx="294" cy="358" r="3" fill="#0e9f8a"/><text x="304" y="362">Y1 多源采集</text>
+      <circle cx="294" cy="388" r="3" fill="#0e9f8a"/><text x="304" y="392">Y2 源适配</text>
+      <circle cx="294" cy="418" r="3" fill="#0e9f8a"/><text x="304" y="422">Y3 去重归并</text>
+      <circle cx="294" cy="448" r="3" fill="#0e9f8a"/><text x="304" y="452">Y4 漏报补偿</text>
+      <circle cx="294" cy="478" r="3" fill="#0e9f8a"/><text x="304" y="482">Y5 分级派发</text>
+      <circle cx="294" cy="508" r="3" fill="#c98a12"/><text x="304" y="512">DQ1 质量闸门 ★</text>
+      <circle cx="294" cy="538" r="3" fill="#0e9f8a"/><text x="304" y="542">脏数据 → 隔离区</text>
+    </g>
+    <path d="M272,630 h224 v26 a12,12 0 0 1 -12,12 h-200 a12,12 0 0 1 -12,-12 z" fill="#f0faf7"/>
+    <circle cx="290" cy="649" r="4" fill="#1a7f5a"/>
+    <text x="304" y="653" font-size="12" fill="#3c5c80">真跑通 · 74h 留痕</text>
+  </g>
+  <line x1="498" y1="468" x2="518" y2="468" stroke="#8fb4dc" stroke-width="2.5" marker-end="url(#arw)"/>
+
+  <!-- 卡片 3：情报对象 -->
+  <g>
+    <rect x="520" y="268" width="224" height="400" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <path d="M520,280 a12,12 0 0 1 12,-12 h200 a12,12 0 0 1 12,12 v34 h-224 z" fill="#6b4fd8"/>
+    <circle cx="544" cy="291" r="13" fill="#ffffff" opacity="0.25"/>
+    <text x="544" y="296" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">3</text>
+    <text x="566" y="296" font-size="15" font-weight="700" fill="#ffffff">情报对象</text>
+    <text x="536" y="330" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">IntelItem.json</text>
+    <line x1="536" y1="340" x2="728" y2="340" stroke="#e3ecf7"/>
+    <g font-size="12.5" fill="#2b4a6f">
+      <circle cx="542" cy="358" r="3" fill="#6b4fd8"/><text x="552" y="362">不可变主数据</text>
+      <circle cx="542" cy="388" r="3" fill="#6b4fd8"/><text x="552" y="392" font-family="Consolas, monospace" font-size="11.5">first_seen_at</text>
+      <circle cx="542" cy="418" r="3" fill="#6b4fd8"/><text x="552" y="422" font-family="Consolas, monospace" font-size="11.5">published_at</text>
+      <circle cx="542" cy="448" r="3" fill="#6b4fd8"/><text x="552" y="452" font-family="Consolas, monospace" font-size="11.5">aliases / cve_ids</text>
+      <circle cx="542" cy="478" r="3" fill="#6b4fd8"/><text x="552" y="482">source + sha256</text>
+      <circle cx="542" cy="508" r="3" fill="#6b4fd8"/><text x="552" y="512">血缘可追溯</text>
+    </g>
+    <path d="M520,630 h224 v26 a12,12 0 0 1 -12,12 h-200 a12,12 0 0 1 -12,-12 z" fill="#f5f2ff"/>
+    <circle cx="538" cy="649" r="4" fill="#1a7f5a"/>
+    <text x="552" y="653" font-size="12" fill="#3c5c80">契约 v1.1 已冻结</text>
+  </g>
+  <line x1="746" y1="468" x2="766" y2="468" stroke="#8fb4dc" stroke-width="2.5" marker-end="url(#arw)"/>
+
+  <!-- 卡片 4：F 富化线 -->
+  <g>
+    <rect x="768" y="268" width="224" height="400" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <path d="M768,280 a12,12 0 0 1 12,-12 h200 a12,12 0 0 1 12,12 v34 h-224 z" fill="#d98324"/>
+    <circle cx="792" cy="291" r="13" fill="#ffffff" opacity="0.25"/>
+    <text x="792" y="296" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">4</text>
+    <text x="814" y="296" font-size="15" font-weight="700" fill="#ffffff">F 富化线</text>
+    <text x="784" y="330" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">src/enrich · 20 文件</text>
+    <line x1="784" y1="340" x2="976" y2="340" stroke="#e3ecf7"/>
+    <g font-size="12.5" fill="#2b4a6f">
+      <circle cx="790" cy="358" r="3" fill="#d98324"/><text x="800" y="362">F1 论文关联</text>
+      <circle cx="790" cy="388" r="3" fill="#9dc4ee"/><text x="800" y="392">F2 资产定位</text>
+      <circle cx="790" cy="418" r="3" fill="#d98324"/><text x="800" y="422">F3 PoC 候选</text>
+      <circle cx="790" cy="448" r="3" fill="#d98324"/><text x="800" y="452">F4 CVSS + EPSS</text>
+      <circle cx="790" cy="478" r="3" fill="#d98324"/><text x="800" y="482">F5 修复建议</text>
+      <circle cx="790" cy="508" r="3" fill="#d98324"/><text x="800" y="512">F6 冲突仲裁</text>
+      <circle cx="790" cy="538" r="3" fill="#d98324"/><text x="800" y="542">每维带 source</text>
+    </g>
+    <path d="M768,630 h224 v26 a12,12 0 0 1 -12,12 h-200 a12,12 0 0 1 -12,-12 z" fill="#fdf6ee"/>
+    <circle cx="786" cy="649" r="4" fill="#c98a12"/>
+    <text x="800" y="653" font-size="12" fill="#3c5c80">部分维度真跑通</text>
+  </g>
+  <line x1="994" y1="468" x2="1014" y2="468" stroke="#8fb4dc" stroke-width="2.5" marker-end="url(#arw)"/>
+
+  <!-- 卡片 5：S 知识底座 -->
+  <g>
+    <rect x="1016" y="268" width="224" height="400" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <path d="M1016,280 a12,12 0 0 1 12,-12 h200 a12,12 0 0 1 12,12 v34 h-224 z" fill="#1a7f5a"/>
+    <circle cx="1040" cy="291" r="13" fill="#ffffff" opacity="0.25"/>
+    <text x="1040" y="296" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">5</text>
+    <text x="1062" y="296" font-size="15" font-weight="700" fill="#ffffff">S 知识底座</text>
+    <text x="1032" y="330" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">Qdrant + BGE-M3</text>
+    <line x1="1032" y1="340" x2="1224" y2="340" stroke="#e3ecf7"/>
+    <g font-size="12.5" fill="#2b4a6f">
+      <circle cx="1038" cy="358" r="3" fill="#1a7f5a"/><text x="1048" y="362">解析 → 分块</text>
+      <circle cx="1038" cy="388" r="3" fill="#1a7f5a"/><text x="1048" y="392">BGE-M3 向量化</text>
+      <circle cx="1038" cy="418" r="3" fill="#1a7f5a"/><text x="1048" y="422">Qdrant 稠密检索</text>
+      <circle cx="1038" cy="448" r="3" fill="#1a7f5a"/><text x="1048" y="452">BM25 稀疏检索</text>
+      <circle cx="1038" cy="478" r="3" fill="#1a7f5a"/><text x="1048" y="482">RRF 融合排序</text>
+      <circle cx="1038" cy="508" r="3" fill="#1a7f5a"/><text x="1048" y="512">5237 个向量点</text>
+    </g>
+    <path d="M1016,630 h224 v26 a12,12 0 0 1 -12,12 h-200 a12,12 0 0 1 -12,-12 z" fill="#f0f8f4"/>
+    <circle cx="1034" cy="649" r="4" fill="#c98a12"/>
+    <text x="1048" y="653" font-size="12" fill="#3c5c80">默认走 BM25 检索</text>
+  </g>
+  <line x1="1242" y1="468" x2="1262" y2="468" stroke="#8fb4dc" stroke-width="2.5" marker-end="url(#arw)"/>
+
+  <!-- 卡片 6：Q 问答线 -->
+  <g>
+    <rect x="1264" y="268" width="224" height="400" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <path d="M1264,280 a12,12 0 0 1 12,-12 h200 a12,12 0 0 1 12,12 v34 h-224 z" fill="#b3336b"/>
+    <circle cx="1288" cy="291" r="13" fill="#ffffff" opacity="0.25"/>
+    <text x="1288" y="296" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">6</text>
+    <text x="1310" y="296" font-size="15" font-weight="700" fill="#ffffff">Q 问答线</text>
+    <text x="1280" y="330" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">src/qa · 31 文件</text>
+    <line x1="1280" y1="340" x2="1472" y2="340" stroke="#e3ecf7"/>
+    <g font-size="12.5" fill="#2b4a6f">
+      <circle cx="1286" cy="358" r="3" fill="#b3336b"/><text x="1296" y="362">Q1 意图理解</text>
+      <circle cx="1286" cy="388" r="3" fill="#b3336b"/><text x="1296" y="392">Q2 混合检索</text>
+      <circle cx="1286" cy="418" r="3" fill="#9dc4ee"/><text x="1296" y="422">Q3 攻击链推理</text>
+      <circle cx="1286" cy="448" r="3" fill="#b3336b"/><text x="1296" y="452">Q4 四段式答案</text>
+      <circle cx="1286" cy="478" r="3" fill="#b3336b"/><text x="1296" y="482">无证据则拒答</text>
+      <circle cx="1286" cy="508" r="3" fill="#b3336b"/><text x="1296" y="512">引用 + 推理链</text>
+      <circle cx="1286" cy="538" r="3" fill="#b3336b"/><text x="1296" y="542">20 条黄金问答</text>
+    </g>
+    <path d="M1264,630 h224 v26 a12,12 0 0 1 -12,12 h-200 a12,12 0 0 1 -12,-12 z" fill="#fdf2f7"/>
+    <circle cx="1282" cy="649" r="4" fill="#1a7f5a"/>
+    <text x="1296" y="653" font-size="12" fill="#3c5c80">20 问全过</text>
+  </g>
+  <line x1="1490" y1="468" x2="1510" y2="468" stroke="#8fb4dc" stroke-width="2.5" marker-end="url(#arw)"/>
+
+  <!-- 卡片 7：Web 前端 -->
+  <g>
+    <rect x="1512" y="268" width="224" height="400" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <path d="M1512,280 a12,12 0 0 1 12,-12 h200 a12,12 0 0 1 12,12 v34 h-224 z" fill="#2b7de0"/>
+    <circle cx="1536" cy="291" r="13" fill="#ffffff" opacity="0.25"/>
+    <text x="1536" y="296" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">7</text>
+    <text x="1558" y="296" font-size="15" font-weight="700" fill="#ffffff">Web 前端</text>
+    <text x="1528" y="330" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">web/ · 37 文件 · Vue</text>
+    <line x1="1528" y1="340" x2="1720" y2="340" stroke="#e3ecf7"/>
+    <g font-size="12.5" fill="#2b4a6f">
+      <circle cx="1534" cy="358" r="3" fill="#2b7de0"/><text x="1544" y="362">态势大屏</text>
+      <circle cx="1534" cy="388" r="3" fill="#2b7de0"/><text x="1544" y="392">情报列表 / 详情</text>
+      <circle cx="1534" cy="418" r="3" fill="#2b7de0"/><text x="1544" y="422">问答页（SSE）</text>
+      <circle cx="1534" cy="448" r="3" fill="#2b7de0"/><text x="1544" y="452">资产监控 A 线</text>
+      <circle cx="1534" cy="478" r="3" fill="#2b7de0"/><text x="1544" y="482">采集诊断页</text>
+      <circle cx="1534" cy="508" r="3" fill="#2b7de0"/><text x="1544" y="512">模型设置页</text>
+      <circle cx="1534" cy="538" r="3" fill="#2b7de0"/><text x="1544" y="542">只请求真实后端</text>
+    </g>
+    <path d="M1512,630 h224 v26 a12,12 0 0 1 -12,12 h-200 a12,12 0 0 1 -12,-12 z" fill="#f0f6ff"/>
+    <circle cx="1530" cy="649" r="4" fill="#1a7f5a"/>
+    <text x="1544" y="653" font-size="12" fill="#3c5c80">已接真实后端</text>
+  </g>
+
+  <!-- ============ C. 横切支撑层 ============ -->
+  <text x="24" y="700" font-size="19" font-weight="700" fill="#0b3d91">横切支撑层：不属于某一条线，但每条线都靠它</text>
+
+  <g>
+    <rect x="24" y="718" width="408" height="148" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <rect x="24" y="732" width="4" height="120" rx="2" fill="#0b3d91"/>
+    <text x="46" y="748" font-size="16" font-weight="700" fill="#12335c">MG1 模型网关</text>
+    <text x="46" y="768" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">src/gateway · 红线模块</text>
+    <g font-size="12.5" fill="#3c5c80">
+      <circle cx="50" cy="786" r="2.5" fill="#0b3d91"/><text x="60" y="790">所有模型调用的唯一出口，禁止 import SDK</text>
+      <circle cx="50" cy="808" r="2.5" fill="#0b3d91"/><text x="60" y="812">限流 / 熔断 / 降级 / token 计量</text>
+      <circle cx="50" cy="830" r="2.5" fill="#0b3d91"/><text x="60" y="834">data_domain × trust_boundary 隔离闸门</text>
+      <circle cx="50" cy="852" r="2.5" fill="#0b3d91"/><text x="60" y="856">private + cloud 直接硬拒，不静默改投</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="456" y="718" width="408" height="148" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <rect x="456" y="732" width="4" height="120" rx="2" fill="#6b4fd8"/>
+    <text x="478" y="748" font-size="16" font-weight="700" fill="#12335c">编排层 · 自研 TaskGraph</text>
+    <text x="478" y="768" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">src/qa/orchestrator</text>
+    <g font-size="12.5" fill="#3c5c80">
+      <circle cx="482" cy="786" r="2.5" fill="#6b4fd8"/><text x="492" y="790">监测 / 富化 / 问答 / 自愈 四个 Agent</text>
+      <circle cx="482" cy="808" r="2.5" fill="#6b4fd8"/><text x="492" y="812">statemachine 适配层 + native 后端</text>
+      <circle cx="482" cy="830" r="2.5" fill="#6b4fd8"/><text x="492" y="834">LangGraph 后端已删除（零依赖死代码）</text>
+      <circle cx="482" cy="852" r="2.5" fill="#6b4fd8"/><text x="492" y="856">支持中断挂起与恢复（interrupt / resume）</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="888" y="718" width="408" height="148" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <rect x="888" y="732" width="4" height="120" rx="2" fill="#b3336b"/>
+    <text x="910" y="748" font-size="16" font-weight="700" fill="#12335c">兜底阶梯（禁止静默兜底）</text>
+    <text x="910" y="768" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">src/qa/ladder · A-02</text>
+    <g font-size="12.5" fill="#3c5c80">
+      <circle cx="914" cy="786" r="2.5" fill="#b3336b"/><text x="924" y="790">工具 → 规则 → 本地 Jev → 云 LLM → 人工</text>
+      <circle cx="914" cy="808" r="2.5" fill="#b3336b"/><text x="924" y="812">每一层弃权都显式登记 degraded_to</text>
+      <circle cx="914" cy="830" r="2.5" fill="#b3336b"/><text x="924" y="834">决策模型只做选择题，不生成文字</text>
+      <circle cx="914" cy="852" r="2.5" fill="#b3336b"/><text x="924" y="856">全链未决则转人工，不伪造一个答案</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="1320" y="718" width="408" height="148" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <rect x="1320" y="732" width="4" height="120" rx="2" fill="#0e9f8a"/>
+    <text x="1342" y="748" font-size="16" font-weight="700" fill="#12335c">Lineage 溯源账</text>
+    <text x="1342" y="768" font-size="11" fill="#7a90ad" font-family="Consolas, monospace">src/shared · SQLite 追加式</text>
+    <g font-size="12.5" fill="#3c5c80">
+      <circle cx="1346" cy="786" r="2.5" fill="#0e9f8a"/><text x="1356" y="790">trace_id 从采集贯穿到答案</text>
+      <circle cx="1346" cy="808" r="2.5" fill="#0e9f8a"/><text x="1356" y="812">每步记录输入输出 SHA-256</text>
+      <circle cx="1346" cy="830" r="2.5" fill="#0e9f8a"/><text x="1356" y="834">多父血缘，可查处理 DAG</text>
+      <circle cx="1346" cy="852" r="2.5" fill="#0e9f8a"/><text x="1356" y="856">只记元数据，不复制原文和提问</text>
+    </g>
+  </g>
+
+  <!-- ============ D. 体检 + 状态 ============ -->
+  <g>
+    <rect x="24" y="890" width="830" height="232" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <text x="48" y="920" font-size="17" font-weight="700" fill="#0b3d91">工程体检（这些数字都能复跑）</text>
+    <g>
+      <text x="48" y="962" font-size="26" font-weight="700" fill="#1565c0">116</text>
+      <text x="48" y="982" font-size="12" fill="#5b7898">次 git 提交（单线制直推 main）</text>
+      <text x="440" y="962" font-size="26" font-weight="700" fill="#1565c0">17,758</text>
+      <text x="440" y="982" font-size="12" fill="#5b7898">行 TypeScript 源码（src/ 123 个文件）</text>
+    </g>
+    <g>
+      <text x="48" y="1024" font-size="26" font-weight="700" fill="#1565c0">592</text>
+      <text x="48" y="1044" font-size="12" fill="#5b7898">个测试用例（98 个测试文件）</text>
+      <text x="440" y="1024" font-size="26" font-weight="700" fill="#1565c0">5,237</text>
+      <text x="440" y="1044" font-size="12" fill="#5b7898">个向量点已写入 Qdrant</text>
+    </g>
+    <g>
+      <text x="48" y="1086" font-size="26" font-weight="700" fill="#1565c0">74.08 h</text>
+      <text x="48" y="1106" font-size="12" fill="#5b7898">连续监测无缺口（时效 P95 = 4.99 h）</text>
+      <text x="440" y="1086" font-size="26" font-weight="700" fill="#1565c0">91.2%</text>
+      <text x="440" y="1106" font-size="12" fill="#5b7898">情报归并率（71,712 条 → 6,314 条）</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="878" y="890" width="850" height="232" rx="12" fill="#ffffff" stroke="#cfe0f4" filter="url(#sh)"/>
+    <text x="902" y="920" font-size="17" font-weight="700" fill="#0b3d91">现在到哪一步了（诚实口径，不冒充）</text>
+
+    <rect x="902" y="944" width="118" height="24" rx="12" fill="#e4f5ec"/>
+    <text x="961" y="961" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1a7f5a">真跑通 A 级</text>
+    <text x="1034" y="961" font-size="13" fill="#3c5c80">采集 → 去重 → DQ1 → 富化 → 入库 → 带引用问答，全链离线可复现</text>
+
+    <rect x="902" y="996" width="118" height="24" rx="12" fill="#fdf3e0"/>
+    <text x="961" y="1013" text-anchor="middle" font-size="12.5" font-weight="700" fill="#a9741a">部分完成 B 级</text>
+    <text x="1034" y="1013" font-size="13" fill="#3c5c80">语义检索默认走 BM25；富化覆盖率历史观测 29.5%</text>
+
+    <rect x="902" y="1048" width="118" height="24" rx="12" fill="#e7f1fd"/>
+    <text x="961" y="1065" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1e5fb4">Mock / 规划 C 级</text>
+    <text x="1034" y="1065" font-size="13" fill="#3c5c80">F2 资产定位用 20 条合成资产；Q3 攻击链自动化未做</text>
+
+    <text x="902" y="1100" font-size="12" fill="#8aa2bd">8 个契约 schema 已冻结 ｜ 四道门禁（typecheck + 单测 + 契约校验 + 前端构建）通过</text>
+  </g>
+
+  <!-- ============ E. 三条红线 ============ -->
+  <text x="24" y="1150" font-size="17" font-weight="700" fill="#0b3d91">三条工程红线（贯穿全程，禁砍）</text>
+
+  <g>
+    <rect x="24" y="1168" width="552" height="64" rx="10" fill="#fffaf0" stroke="#f0d9b5"/>
+    <circle cx="56" cy="1194" r="13" fill="#d98324"/>
+    <text x="56" y="1199" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">1</text>
+    <text x="82" y="1192" font-size="14" font-weight="700" fill="#12335c">模型接入必须走 MG1 网关</text>
+    <text x="82" y="1214" font-size="12.5" fill="#7a6430">换本地 / 云端模型只改配置，不改一行代码</text>
+  </g>
+  <g>
+    <rect x="600" y="1168" width="552" height="64" rx="10" fill="#fffaf0" stroke="#f0d9b5"/>
+    <circle cx="632" cy="1194" r="13" fill="#d98324"/>
+    <text x="632" y="1199" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">2</text>
+    <text x="658" y="1192" font-size="14" font-weight="700" fill="#12335c">脏数据不进知识底座</text>
+    <text x="658" y="1214" font-size="12.5" fill="#7a6430">DQ1 打分，不合格进隔离区——宁可少一条，不可错一条</text>
+  </g>
+  <g>
+    <rect x="1176" y="1168" width="552" height="64" rx="10" fill="#fffaf0" stroke="#f0d9b5"/>
+    <circle cx="1208" cy="1194" r="13" fill="#d98324"/>
+    <text x="1208" y="1199" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">3</text>
+    <text x="1234" y="1192" font-size="14" font-weight="700" fill="#12335c">兜底必须显式可见</text>
+    <text x="1234" y="1214" font-size="12.5" fill="#7a6430">降级响应带 degraded_to 标记，禁止静默兜底</text>
+  </g>
+</svg>

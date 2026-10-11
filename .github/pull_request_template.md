@@ -1,6 +1,6 @@
 # PR 检查单（GitHub Flow）
 
-> main 永远可演示；所有改动经本 PR 合入。契约改动另见 docs/GITHUB-FLOW.md 第五节。
+> main 永远可演示；所有改动经本 PR 合入。契约改动另见 docs/TUTORIAL.md §8。
 
 ## 基本信息
 - 类型：<!-- feat / fix / contract / exp / chore / docs / test / refactor / ops -->

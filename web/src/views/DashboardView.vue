@@ -232,7 +232,7 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
           <h3 class="fx-underline">逐维覆盖与启发式置信分</h3>
           <span class="badge-count">{{ metrics?.enrich.dimensions ?? 0 }} 维度</span>
         </div>
-        <p class="muted chart-note">本页为投影验证口径：只统计与原始报文逐字匹配且血缘完整的 paper/cvss 结果（EPSS 不计入），与 coverage-agent 审计口径（sidecar 任一维度 live）是两把尺，数值不可直接比较，对照见 docs/CLOUD-ENRICH-QA-2026-10-06.md。覆盖率只表示存在结果；置信分与质量分不是人工评测准确率。空维度没有可展示数据。</p>
+        <p class="muted chart-note">本页为投影验证口径：只统计与原始报文逐字匹配且血缘完整的 paper/cvss 结果（EPSS 不计入），与 coverage-agent 审计口径（sidecar 任一维度 live）是两把尺，数值不可直接比较，对照见 docs/TUTORIAL.md §7。覆盖率只表示存在结果；置信分与质量分不是人工评测准确率。空维度没有可展示数据。</p>
         <div ref="sevChart" class="chart-box" style="height: 260px"></div>
       </div>
       <div class="panel fade-in fx-beam" style="--fx-delay: 400ms">

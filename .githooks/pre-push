@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 推送前门禁：与 CI 同口径（docs/GITHUB-FLOW.md 第七节）
+# 推送前门禁：与 CI 同口径（docs/TUTORIAL.md §9.1）
 # 失败即阻断 push；紧急绕过：git push --no-verify（事后补 PR + CI 复核）
 set -uo pipefail
 ROOT=$(git rev-parse --show-toplevel)

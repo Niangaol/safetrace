@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Conventional Commits 校验（docs/GITHUB-FLOW.md 第三节）
+# Conventional Commits 校验（docs/TUTORIAL.md §9.1）
 # 拒不合规提交；紧急绕过：git commit --no-verify（事后需在周会说明）
 set -uo pipefail
 MSG_FILE="$1"

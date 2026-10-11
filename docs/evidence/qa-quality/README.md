@@ -1,6 +1,9 @@
 # 问答质量评测交接（合成契约探针，不是比赛准确率）
 
 > **最终安全代码的当前成绩：同 caller 21/24；多 CVE natural 接线版 22/24。** 先前23/24、24/24仅为已弃用的自由文本版本兜底中间结果，不再代表当前代码。冻结期望未修改；未为分数放宽门禁。
+>
+> 目录说明（2026-10-11 整理）：`before` / `after-func` / `after-safe-func` / `after-safe-wired` / `real-http` 为有效版本；`real-http.pre-optimization` 仅作优化前对照；`after-func-final` / `after-wired` 为已弃用的自由文本兜底中间结果，已移入 `archive/`。
+> 项目文档已合并为三份：根 [`README.md`](../../../README.md)、[`PROJECT-ANALYSIS.md`](../../PROJECT-ANALYSIS.md)（配 [`PROJECT-OVERVIEW.svg`](../../PROJECT-OVERVIEW.svg)）、[`TUTORIAL.md`](../../TUTORIAL.md)。
 
 ## 固定基准与口径
 
@@ -40,10 +43,10 @@ q08/q09/q21 已按严格拒答契约关闭；但 q03/q04 原文有明确版本�
 | --- | ---: | ---: | ---: | ---: | ---: |
 | [修复前](<before.json>) legacy-first-cve | 18/24 | 0.9003 | 16/17 | 0 / 4 | 0.1905 / 2.6235 |
 | [中间直接链](<after-func.json>) legacy-first-cve | 19/24 | 0.9003 | 14/17 | 2 / 1 | 0.1620 / 1.6481 |
-| [中间直接链（已弃用）](<after-func-final.json>) legacy-first-cve | 23/24 | 0.9896 | 16/17 | 0 / 0 | 0.2424 / 1.8900 |
-| [中间 caller 接线（已弃用）](<after-wired.json>) live-multi-cve | 24/24 | 1.0000 | 17/17 | 0 / 0 | 0.2349 / 1.7802 |
+| [中间直接链（已弃用）](<archive/after-func-final.json>) legacy-first-cve | 23/24 | 0.9896 | 16/17 | 0 / 0 | 0.2424 / 1.8900 |
+| [中间 caller 接线（已弃用）](<archive/after-wired.json>) live-multi-cve | 24/24 | 1.0000 | 17/17 | 0 / 0 | 0.2349 / 1.7802 |
 
-每行均使用同一冻结期望 SHA。完整历史答案/检查见 [中间直接链 Markdown](<after-func-final.md>) / [中间接线版 Markdown](<after-wired.md>)。历史文件保留不覆盖；不安全的自由文本版本兜底已删除，因此该阶段的高分不能作为当前安全实现成绩。
+每行均使用同一冻结期望 SHA。完整历史答案/检查见 [中间直接链 Markdown](<archive/after-func-final.md>) / [中间接线版 Markdown](<archive/after-wired.md>)。两份已弃用中间结果（含 json）已于 2026-10-11 移入 `archive/`，正文只留成绩记录、不再与权威结果同目录陈列，避免误引为当前水平；不安全的自由文本版本兜底逻辑已从生产代码移除，因此该阶段的高分不能作为当前安全实现成绩。
 
 上述中间直接链当时仅 q24 第二个 CVE 的自然评分事实缺失；本集错配禁用断言均通过，但这不表示穷尽了所有排序/跨 CVE 组合。当时的自由文本逐版本状态兜底降低了过拒，独立 review 后证明它能被非结构化/不可信文字误导，Lead 已彻底移除。exact/all-CVE、显式冲突提示、具体修复版本否定句门禁保留；版本判定现在只接受绑定的结构化 version_impact。
 

@@ -15,7 +15,7 @@
  * 另有一个更严的 D 口径不在本纯函数能力范围内：仪表盘/QA 引用要求 paper/cvss 的
  * artifact 与原始 NVD/CNA 报文逐字匹配且血缘完整（readLiveKnowledgeView 投影验证），
  * 需要读取原始 payload（IO）。D 与 B/C 的差集即“sidecar 说 live 但投影不认”的条目，
- * 实测差集根因见 docs/CLOUD-ENRICH-QA-2026-10-06.md 口径对照节。
+ * 实测差集根因与覆盖率口径见 docs/TUTORIAL.md §7。
  */
 import type { EnrichmentDimension, EnrichmentDimensionState, IntelItem } from "@safetrace/shared";
 
@@ -129,7 +129,7 @@ export function auditCoverage(input: { items: readonly IntelItem[]; states: read
   if (uncoveredByReason["paper-failed"] > 0) nextActions.push(uncoveredByReason["paper-failed"] + " 条论文检索失败：检查 arXiv 连通后重试")
   // headline 口径 A 会被单一维度抬高：必备维度 live 为 0 时必须显式提示，禁止只报口径 A
   const zeroLiveRequired = REQUIRED_LIVE_DIMENSIONS.filter(d => dimensionLiveItems[d] === 0)
-  if (zeroLiveRequired.length > 0) nextActions.push("必备维度 " + zeroLiveRequired.join("/") + " live 为 0：headline（口径 A）被其他维度抬高，真实深度看口径 B/C；与仪表盘投影验证口径的差异见 docs/CLOUD-ENRICH-QA-2026-10-06.md 口径对照节")
+  if (zeroLiveRequired.length > 0) nextActions.push("必备维度 " + zeroLiveRequired.join("/") + " live 为 0：headline（口径 A）被其他维度抬高，真实深度看口径 B/C；与仪表盘投影验证口径的差异见 docs/TUTORIAL.md §7 富化覆盖率口径")
   if (!progressPossible) nextActions.push("剩余条目均为结构性缺口（本地无 NVD 评分源 / 上游暂无数据），继续跑也不会提升覆盖率")
   // target 达标线按口径 B（必备维度）判定：口径 A 达标但必备维度未达标时，继续跑仍有意义
   const targetMet = coverageRequired >= target

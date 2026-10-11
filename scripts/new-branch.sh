@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 从最新 main 切出规范分支（docs/GITHUB-FLOW.md 第二节）
+# 从最新 main 切出规范分支（docs/TUTORIAL.md §9.1）
 # 用法：scripts/new-branch.sh <type> <line> <slug>
 #   scripts/new-branch.sh feat ingest kev-connector   -> feat/ingest-kev-connector
 #   scripts/new-branch.sh contract schemas-v1         -> contract/schemas-v1（line 可省略）
@@ -27,6 +27,6 @@ fi
 
 if [ "$TYPE" = "contract" ]; then
   echo "" >&2
-  echo "[契约分支] 必须走 docs/GITHUB-FLOW.md 第五节：只追加不删改、三线 sign-off。" >&2
+  echo "[契约分支] 必须走 docs/TUTORIAL.md §8：只追加不删改、三线 sign-off。" >&2
 fi
 echo "当前分支：$(git branch --show-current)"

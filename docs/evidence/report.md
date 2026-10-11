@@ -3,7 +3,7 @@
 > 证据 JSON：[`freshness-72h.json`](freshness-72h.json)（本文件同目录，机器可读）
 > 生成时刻：2026-10-04T04:56:24.990Z（北京时间 12:56）
 > 数据来源：`var/safetrace.sqlite`（258 MB，事件总线 S2）+ `tmp/ingest-runs.jsonl`（1441 行，`bad_lines=0`）
-> 责任人：XueXuhang（监测线 Y，`src/ingest`）｜口径文档：`docs/MONITORING-METRICS.md`
+> 责任人：XueXuhang（监测线 Y，`src/ingest`）｜口径文档：`docs/TUTORIAL.md` §7
 
 ---
 
