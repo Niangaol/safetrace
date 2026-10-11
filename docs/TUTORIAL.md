@@ -16,7 +16,7 @@
 
 | 项 | 要求 | 说明 |
 |---|---|---|
-| Node | **>= 24** | `node -v` 确认；`npm ci` 一次即可 |
+| Node | **>= 24** | `node -v` 确认；`npm ci` 一次即可。**在 Node 26 上已验证通过**（2026-10-12：门禁 909/909）；若升级大版本，先复核安全类测试是否被客户端"好心"拒绝（见 1.2 最后一行） |
  | Git hooks | `git config core.hooksPath .githooks` | **每次 clone 后都要执行一次**，否则提交信息/推送门禁不生效 |
  | 磁盘 | 本地推理栈另需约 5 GB | 模型目录默认 `../safetrace-models`，Qdrant 二进制在 `D:\AgentPrograms\qdrant\` |
  | NVD API key | 可选但建议 | 免费，邮箱激活链接 7 天有效；无 key 限流 5 req/30s |
@@ -30,6 +30,7 @@
  | 测试报 `EXDEV: cross-device link not permitted` | 临时目录与工作盘不在同一卷（如 `C:\Users\...\Temp` vs `D:\AgentPrograms\safetrace`） | 把 `TMPDIR` 指到工作区所在卷，或在该测试里改用同卷临时目录 |
  | `bash: couldn't create signal pipe` | Windows 上 Git Bash 的信号管道被环境限制 | 用 `pwsh`/`cmd` 或直接在 Node 里 `spawnSync` |
  | 前端请求 5xx / 白屏 | 后端没起，或用了静态演示模式 | 前端**默认只请求真实后端，拿不到就报错，不静默回退假数据**；要静态演示必须显式 `VITE_DEMO_MODE=true` |
+ | **安全测试假绿**：断言"服务端拒绝恶意请求"的用例突然全绿/全红但行为没变 | Node 26 起 `http.request` 的 `options.headers` 里写 `Host` 会被**客户端**强校验（`ERR_INVALID_ARG_VALUE`），请求根本没发到服务端，断言退化成了"客户端自己报错" | 测 Host 头/源站校验这类**服务端**安全断言，必须用 `net.connect` 裸 socket 手写请求行，让请求真正到达服务端；每次 Node 大版本升级后复核这类用例（2026-10-12 实测踩中并修复） |
 
 ---
 
@@ -351,7 +352,7 @@ npm run intel:agents:live -- --sqlite var/safetrace.sqlite --cycles 0 --sources 
 | E-03 | F1 recall@5 | 乙 | 20 条标注集出数并纳入冒烟门槛 |
 | E-07 | 72h 挂机 | XueXuhang | 可用率截图 ≥72h，降级与 FallbackEvent 对齐 |
 | D-05/09/10 | 文档与配置口径 | 李念 | README 的 Langfuse/A1 自愈口径；`models.yml` 补注 rerank 无标准端点会报错 |
-| D-07 | asktrace9 四篇报告 | 李念 | 源目录已不存在，需重建或从合订本导出（阻塞升级，S-03 依赖） |
+|| D-07 | asktrace9 四篇报告 | 李念 | 源目录已不存在（2026-10-12 再次实测确认），需重建或从合订本导出（阻塞升级，S-03 依赖；**D20=10/17 前必须有**） |
 | P-01 | F2 资产闭环 | 乙+李念 | 补产品别名/版本语义/资产导入，20 条带可核验规则证据且持续标「演示数据」 |
 | P-02 | AI 安全分类 | 乙 | 带版本规则 + 产品标签 + 来源证据 + 人工复核态，抽样可解释 |
 | P-04 | 证据六字段 | 李念 | document_id/source_url/fetched_at/content_hash/chunk_id/索引版本 |
@@ -360,7 +361,8 @@ npm run intel:agents:live -- --sqlite var/safetrace.sqlite --cycles 0 --sources 
 | P-08 | 指标口径 | 全员 | 每指标样本规模/时间窗/统计方法；无实测不得写「已达成」 |
 | P-09 | R1–R8 决策 | 全员 | 负责人逐项定案并留决策记录（禁砍） |
 | P-10 | 受控抓取 | 李念+Xue+KKK | 72h 索引保鲜、真实语义质量人工标注、SourceRegistry 正式调度 |
-| S-01~S-04 | 交件四件套 | 全员 | 台账清零 + 三绿；报告+视频+PPT+Mock 清单逐条对得上（禁砍） |
+|| S-01~S-04 | 交件四件套 | 全员 | 台账清零 + 三绿；报告+视频+PPT+Mock 清单逐条对得上（禁砍） |
+|| D-14 | Node 大版本升级后复核安全类测试 | 李念 | 已完成 Node 26 复核（2026-10-12：修复 1 个 Host 头假绿用例）；下次升级 Node 时重跑本项 |
 
 **C 类 · 阻塞（要人）**：E-05 Docker 未装（降级为补验项）；E-06 NVD API key 未申请（限流 5req/30s）；
 云端模型 key（已定暂不接，只留 MG1 接线位）；Ollama/vLLM 未装（已定 cache provider 占位）。
