@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FallbackEvent, RawDoc } from "@safetrace/shared";
-import { fetchNvd } from "../src/sources/nvd.js";
+import { fetchNvd, splitNvdWindow } from "../src/sources/nvd.js";
 import { parseNvd } from "../src/adapters/nvd.js";
 import { readJsonFile } from "../src/common.js";
 
@@ -190,4 +190,91 @@ test("NVD：离线路径不变（回放样本 + external_id 以 _fixture 结尾�
   const { items, warnings } = await parseNvd(raw);
   assert.equal(items.length, 1);
   assert.ok(warnings.every((w) => w.length > 0));
+});
+
+test("NVD: downtime windows split at official 120-day limit for BOTH modified and published dates", async () => {
+  await withKey(async () => {
+    const start = "2025-01-01T00:00:00Z", end = "2025-09-08T00:00:00Z";
+    const { raw, urls } = await withFetch(() => ({ status: 200, body: page(1, ["CVE-2025-12345"]) }),
+      () => fetchNvd({ window: { start, end }, pubWindow: { start, end } }));
+    assert.ok(raw);
+    assert.equal(urls.length, 6);
+    const windows = windowsOf(await payloadOf(raw));
+    for (const kind of ["lastMod", "pubDate"]) {
+      const selected = windows.filter(w => w.kind === kind);
+      assert.equal(selected[0]?.start, start);
+      assert.equal(selected.at(-1)?.end, end);
+      for (let i = 0; i < selected.length; i++) {
+        const window = selected[i]!;
+        assert.ok(Date.parse(String(window.end)) - Date.parse(String(window.start)) <= 120 * 86400_000);
+        if (i) assert.equal(selected[i-1]?.end, window.start, "no downtime coverage gap");
+      }
+    }
+    assert.equal((await payloadOf(raw)).coverage_complete, true);
+  });
+});
+
+test("NVD: official empty dual windows remain live no_data with positive complete-coverage proof", async () => {
+  await withKey(async () => {
+    const events: FallbackEvent[] = [];
+    const { raw } = await withFetch(() => ({ status: 404, body: { message: "No results found" } }),
+      () => fetchNvd({ emit: e => { events.push(e); } }));
+    assert.ok(raw); assert.ok(!raw.external_id.endsWith("_fixture"));
+    assert.equal((await payloadOf(raw)).coverage_complete, true);
+    assert.equal((await parseNvd(raw)).items.length, 0);
+    assert.deepEqual(events, []);
+  });
+});
+
+test("NVD: malformed successful response never masquerades as complete/no-results", async () => {
+  await withKey(async () => {
+    const { raw } = await withFetch(() => ({ status: 200, body: { totalResults: 0 } }), () => fetchNvd({ skipPubWindow: true }));
+    assert.ok(raw);
+    const payload = await payloadOf(raw);
+    assert.equal(payload.partial, true);
+    assert.equal(payload.coverage_complete, false);
+    assert.ok(!raw.external_id.endsWith("_fixture"));
+  });
+});
+
+test("NVD: empty/404 second page before reported total is explicit truncation", async () => {
+  await withKey(async () => {
+    const { raw } = await withFetch(url => Number(new URL(url).searchParams.get("startIndex")) === 0
+      ? { status: 200, body: page(3000, ["CVE-2026-12345"]) } : { status: 404, body: {} }, () => fetchNvd({ skipPubWindow: true }));
+    assert.ok(raw);
+    const payload = await payloadOf(raw);
+    assert.equal(payload.truncated, true);
+    assert.equal(payload.coverage_complete, false);
+  });
+});
+
+test("NVD: invalid/reversed second window is rejected before any network request", async () => {
+  let calls = 0;
+  await withKey(async () => {
+    await assert.rejects(withFetch(() => { calls++; return { status: 200, body: page(0, []) }; }, () => fetchNvd({
+      window: { start: "2026-01-01T00:00:00Z", end: "2026-01-02T00:00:00Z" },
+      pubWindow: { start: "2026-02-01T00:00:00Z", end: "2026-01-01T00:00:00Z" },
+    })), /Invalid NVD window/);
+    assert.equal(calls, 0);
+    assert.throws(() => splitNvdWindow("invalid", "2026-01-01T00:00:00Z"), /Invalid/);
+  });
+});
+
+test("NVD: bounded multi-year catch-up explicitly records unqueried tail", async () => {
+  // Advance the mocked clock between HTTP responses, not the production rate limiter.
+  const realNow = Date.now;
+  let clock = realNow() + 60_000;
+  Date.now = () => clock;
+  try {
+    await withKey(async () => {
+      const { raw, urls } = await withFetch(() => { clock += 31_000; return { status: 200, body: page(1, ["CVE-2020-12345"]) }; },
+        () => fetchNvd({ skipPubWindow: true, window: { start: "2000-01-01T00:00:00Z", end: "2026-01-01T00:00:00Z" } }));
+      assert.ok(raw);
+      const payload = await payloadOf(raw);
+      assert.equal(urls.length, 16);
+      assert.equal(payload.unqueried_tail, true);
+      assert.equal(payload.truncated, true);
+      assert.equal(payload.coverage_complete, false);
+    });
+  } finally { Date.now = realNow; }
 });

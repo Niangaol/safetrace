@@ -12,11 +12,12 @@
  * （`MAX_PAGES_PER_WINDOW`）为止；触顶就在 payload 写 `truncated` + 原因，由适配器转成 parse_warning 进总线，
  * 不静默截断（宁缺勿猜的另一种形态：截断必须说出口）。
  *
- * 礼貌与限流：无 `NVD_API_KEY` 时沿用 5 req/30s 令牌桶（每一页都过桶）；有 key 直发。
+ * 礼貌与限流：无 `NVD_API_KEY` 时沿用 5 req/30s 令牌桶（每一页都过桶）；有 key 同样遵守 50 req/30s。每次 HTTP 重试也计入速率。
  * 只使用 NVD 官方参数，不塞自定义 query（自定义参数可能被判 400，且会污染复现命令）。
  *
  * 降级红线：
- *  - 两窗口都彻底取不到数据 ⇒ `degradeToFixture`，`external_id` 以 `_fixture` 结尾（时效看板据此剔除该行）；
+ *  - 显式离线回放 ⇒ `degradeToFixture`，`external_id` 以 `_fixture` 结尾（时效看板据此剔除该行）；
+ *  - 两窗口官方空结果 ⇒ live no_data + 完整覆盖证明；全部失败 ⇒ partial，不拿 fixture 假装成功；
  *  - 只有部分页/窗口失败 ⇒ 记 `degraded_of="partial"` 的 FallbackEvent，**保留已取到的真实数据**，
  *    绝不拿 fixtures 顶替缺口；
  *  - NVD 的 `404`（No results found）是"该窗口无结果"的官方语义 ⇒ 算空不算错，也不回放样本。
@@ -47,20 +48,26 @@ const MAX_PAGES_PER_WINDOW = 10;
 const LASTMOD_LOOKBACK_H = 24;
 /** pubDate 窗口长度（小时），可用 SAFETRACE_NVD_PUB_LOOKBACK_HOURS 覆盖。 */
 const DEFAULT_PUB_LOOKBACK_H = 48;
+/** Official NVD query range limit. Bound catch-up work and report any unqueried tail. */
+const MAX_WINDOW_MS = 120 * 24 * 3600_000;
+const MAX_SEGMENTS_PER_KIND = 16;
 
-/** 进程内令牌桶时间戳（仅无 key 慢速模式；离线/测试路径不触发）。 */
+/** 进程内速率窗口：无 key 5/30s，有 key 50/30s；离线不触发。 */
 const requestTimes: number[] = [];
+const keyedRequestTimes: number[] = [];
 
-async function acquireNoKeyToken(): Promise<void> {
+async function acquireToken(apiKey: string): Promise<void> {
+  const times = apiKey === "" ? requestTimes : keyedRequestTimes;
+  const capacity = apiKey === "" ? NO_KEY_CAPACITY : 50;
   const now = Date.now();
-  while (requestTimes.length > 0 && (requestTimes[0] ?? 0) <= now - NO_KEY_WINDOW_MS) requestTimes.shift();
-  if (requestTimes.length >= NO_KEY_CAPACITY) {
-    const oldest = requestTimes[0] ?? now;
+  while (times.length > 0 && (times[0] ?? 0) <= now - NO_KEY_WINDOW_MS) times.shift();
+  if (times.length >= capacity) {
+    const oldest = times[0] ?? now;
     await sleep(Math.max(0, oldest + NO_KEY_WINDOW_MS - now));
-    await acquireNoKeyToken();
+    await acquireToken(apiKey);
     return;
   }
-  requestTimes.push(now);
+  times.push(now);
 }
 
 /** NVD 只接受秒级精度 + 时区的 ISO 串（带毫秒会被 400 拒绝）。 */
@@ -131,6 +138,8 @@ async function fetchWindow(
   const endKey = kind === "lastMod" ? "lastModEndDate" : "pubEndDate";
   const start = nvdTs(startIso);
   const end = nvdTs(endIso);
+  const duration = Date.parse(end) - Date.parse(start);
+  if (!Number.isFinite(duration) || duration <= 0 || duration > MAX_WINDOW_MS) throw new Error("Invalid NVD query window (must be >0 and <=120 days)");
 
   for (let pageIndex = 0; pageIndex < MAX_PAGES_PER_WINDOW; pageIndex += 1) {
     const startIndex = pageIndex * RESULTS_PER_PAGE;
@@ -140,12 +149,19 @@ async function fetchWindow(
       "&" + endKey + "=" + encodeURIComponent(end) +
       "&resultsPerPage=" + RESULTS_PER_PAGE +
       "&startIndex=" + startIndex;
-    if (apiKey === "") await acquireNoKeyToken();
-    const attempt = await fetchJsonWithRetry(url, { headers: apiKey === "" ? {} : { apiKey } });
+    // Every HTTP attempt, including retries, consumes an official rate token.
+    let attempt: Awaited<ReturnType<typeof fetchJsonWithRetry>> = { ok: false, reason: "not attempted" };
+    for (let retry = 0; retry < 3; retry++) {
+      await acquireToken(apiKey);
+      attempt = await fetchJsonWithRetry(url, { headers: apiKey === "" ? {} : { apiKey } }, 1);
+      if (attempt.ok || /HTTP 4(?!29)/.test(attempt.reason)) break;
+      if (retry < 2) await sleep(attempt.reason.includes("HTTP 429") ? NO_KEY_WINDOW_MS : 500 * 2 ** retry);
+    }
 
     if (!attempt.ok) {
       if (attempt.reason.includes("HTTP 404")) {
-        empty = true; // NVD 官方语义：该窗口没有结果
+        empty = items.length === 0; // A later empty page is not proof of complete coverage.
+        if (items.length > 0 && items.length < totalResults) truncated = true;
         break;
       }
       failedPages += 1;
@@ -161,14 +177,20 @@ async function fetchWindow(
       break;
     }
 
-    const data = attempt.data as Record<string, unknown>;
-    const pageItems = Array.isArray(data.vulnerabilities) ? data.vulnerabilities : [];
+    const data = attempt.data as Record<string, unknown> | null;
+    if (!data || !Array.isArray(data.vulnerabilities) || !Number.isSafeInteger(data.totalResults) || Number(data.totalResults) < 0) {
+      failedPages += 1;
+      await degrade({ layer: "L1", trigger: "NVD malformed page", degradedOf: "partial", traceId, label: "NVD 响应结构不完整，拒绝推进覆盖游标", recoveryHint: "重试原窗口", emit });
+      break;
+    }
+    const pageItems = data.vulnerabilities;
     items.push(...pageItems);
     pages += 1;
     const total = Number(data.totalResults);
     if (Number.isFinite(total)) totalResults = total;
     if (pageItems.length === 0) {
-      empty = true;
+      empty = items.length === 0;
+      if (items.length < totalResults) truncated = true;
       break;
     }
     if (items.length >= totalResults) break;
@@ -195,9 +217,20 @@ function mergeVulnerabilities(windows: WindowResult[]): { list: unknown[]; uniqu
   return { list: [...byId.values()], unique: byId.size, dropped };
 }
 
+/** Inclusive adjacent endpoints deliberately overlap; mergeVulnerabilities deduplicates them. */
+export function splitNvdWindow(start: string, end: string): Array<{ start: string; end: string }> {
+  const from = Date.parse(start), to = Date.parse(end);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new Error("Invalid NVD window: start must precede end");
+  const result: Array<{ start: string; end: string }> = [];
+  for (let cursor = from; cursor < to && result.length < MAX_SEGMENTS_PER_KIND; cursor += MAX_WINDOW_MS) {
+    result.push({ start: new Date(cursor).toISOString(), end: new Date(Math.min(to, cursor + MAX_WINDOW_MS)).toISOString() });
+  }
+  return result;
+}
+
 function pubLookbackHours(): number {
   const raw = Number(process.env.SAFETRACE_NVD_PUB_LOOKBACK_HOURS ?? "");
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PUB_LOOKBACK_H;
+  return Number.isFinite(raw) && raw > 0 && raw <= 120 * 24 ? raw : DEFAULT_PUB_LOOKBACK_H;
 }
 
 /**
@@ -222,26 +255,27 @@ export async function fetchNvd(opts: FetchNvdOpts = {}): Promise<RawDoc | null> 
   const pubStart = opts.pubWindow?.start ?? new Date(Date.parse(pubEnd) - pubLookbackHours() * 3600_000).toISOString();
   const apiKey = process.env.NVD_API_KEY?.trim() ?? "";
 
-  const windows: WindowResult[] = opts.skipLastModWindow === true ? [] : [
-    await fetchWindow(entry.url, apiKey, "lastMod", start, end, traceId, opts.emit),
-  ];
-  if (opts.skipPubWindow !== true) {
-    windows.push(await fetchWindow(entry.url, apiKey, "pubDate", pubStart, pubEnd, traceId, opts.emit));
+  const requests: Array<{ kind: WindowKind; start: string; end: string }> = [];
+  if (opts.skipLastModWindow !== true) requests.push({ kind: "lastMod", start, end });
+  if (opts.skipPubWindow !== true) requests.push({ kind: "pubDate", start: pubStart, end: pubEnd });
+  if (!requests.length) throw new Error("NVD must query at least one window");
+  // Validate EVERY requested range before making the first request.
+  const segments = requests.map(w => ({ ...w, segments: splitNvdWindow(w.start, w.end) }));
+  const windows: WindowResult[] = [];
+  let unqueriedTail = false;
+  for (const request of segments) {
+    for (const segment of request.segments) windows.push(await fetchWindow(entry.url, apiKey, request.kind, segment.start, segment.end, traceId, opts.emit));
+    const last = request.segments.at(-1)!;
+    if (Date.parse(last.end) < Date.parse(request.end)) unqueriedTail = true;
   }
-
   const merged = mergeVulnerabilities(windows);
-  const anyFailed = windows.some((w) => w.failedPages > 0);
-
-  if (merged.list.length === 0 && !anyFailed) {
-    // 两窗口都空是异常态（NVD 不可能 48h 没有任何新发布），显式降级而不是静默
-    await degradeToFixture("NVD lastMod 与 pubDate 窗口同时无结果", traceId, opts.emit);
-    const payload = (await readJsonFile(FIXTURE)) as Record<string, unknown>;
-    return buildRawDoc(payload, fetchedAt, FIXTURE, SOURCE_ID + "_fixture");
-  }
-
-  const truncated = windows.some((w) => w.truncated);
+  const anyFailed = windows.some(w => w.failedPages > 0);
+  // A genuine empty window is no_data, NOT a fixture replay and NOT a live success watermark.
+  if (!merged.list.length && !anyFailed) opts.onNoData?.("NVD requested windows contain no records");
+  const truncated = unqueriedTail || windows.some(w => w.truncated);
   const payload: Record<string, unknown> = {
     dataType: "NVD_CVE_MULTIWINDOW",
+    coverage_complete: !anyFailed && !truncated,
     timestamp: fetchedAt,
     resultsPerPage: RESULTS_PER_PAGE,
     totalResults: merged.unique,
@@ -258,10 +292,11 @@ export async function fetchNvd(opts: FetchNvdOpts = {}): Promise<RawDoc | null> 
       empty: w.empty,
     })),
     duplicate_entries_dropped: merged.dropped,
+    ...(unqueriedTail ? { unqueried_tail: true, segment_limit: MAX_SEGMENTS_PER_KIND } : {}),
     ...(truncated
       ? {
           truncated: true,
-          truncated_note: `单窗口翻页触顶 ${MAX_PAGES_PER_WINDOW} 页（${MAX_PAGES_PER_WINDOW * RESULTS_PER_PAGE} 条），本轮未取尽；下一轮窗口重叠会补`,
+          truncated_note: `单窗口翻页触顶 ${MAX_PAGES_PER_WINDOW} 页（${MAX_PAGES_PER_WINDOW * RESULTS_PER_PAGE} 条），本轮未取尽；不得推进成功游标，须重试或显式缩小补采窗口`,
         }
       : {}),
     ...(anyFailed ? { partial: true, partial_note: "有页抓取失败：仅保留成功部分，未用预置样本顶替" } : {}),

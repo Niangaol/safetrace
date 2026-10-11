@@ -9,10 +9,10 @@ export function nextArxivFailureStreak(previous: number, events: readonly Pick<F
 /** Events are append-only: last verdict wins; historical passes do not authorize later quarantines. */
 export function planPendingEnrichment(
   intelEvents: readonly IntelItem[], verdictEvents: readonly QualityVerdict[], enrichEvents: readonly EnrichmentResult[],
-  options: { states?: readonly EnrichmentDimensionState[]; now?: Date; publishedEnrichments?: readonly { event_id: string; payload: EnrichmentResult }[]; currentIntelEventIds?: ReadonlyMap<string, string>; dimensions?: readonly EnrichmentDimension[] } = {},
+  options: { states?: readonly EnrichmentDimensionState[]; now?: Date; publishedEnrichments?: readonly { event_id: string; payload: EnrichmentResult }[]; currentIntelEventIds?: ReadonlyMap<string, string>; dimensions?: readonly EnrichmentDimension[]; cvssDependencyHashes?: ReadonlyMap<string, string> } = {},
 ) {
   const latestIntel = new Map(intelEvents.map(item => [item.intel_id, item]));
-  const latestVerdicts = new Map(verdictEvents.map(item => [item.item_id, item]));
+  const latestVerdicts = new Map(verdictEvents.filter(item => item.item_kind === "intel").map(item => [item.item_id, item]));
   const latestEnriched = new Map(enrichEvents.map(item => [item.intel_id, item]));
   const accepted = [...latestIntel.values()].filter(item => {
     const verdict = latestVerdicts.get(item.intel_id)?.verdict;
@@ -38,10 +38,13 @@ export function planPendingEnrichment(
       const state = stateMap.get(item.intel_id + ":" + dimension);
       const currentIntel = options.currentIntelEventIds?.get(item.intel_id);
       const latestReceipt = published.get(item.intel_id);
-      const receiptRepair = Boolean(state && (!state.enrich_event_id
-        || (options.publishedEnrichments !== undefined && (!latestReceipt || latestReceipt.event_id !== state.enrich_event_id))
+      // Missing/mismatched success receipts need repair, but failed/empty/degraded
+      // attempts may intentionally have no receipt and must retain their source backoff.
+      const receiptRepair = Boolean(state && ((state.status === "live" && (!state.enrich_event_id
+        || (options.publishedEnrichments !== undefined && (!latestReceipt || latestReceipt.event_id !== state.enrich_event_id))))
         || (currentIntel && state.intel_event_id !== currentIntel)));
-      return receiptRepair || enrichmentRetryDue(state, hash, options.now);
+      const dependency = dimension === "cvss" ? options.cvssDependencyHashes?.get(item.intel_id) : undefined;
+      return receiptRepair || Boolean(dependency && state?.dependency_hash !== dependency) || enrichmentRetryDue(state, hash, options.now);
     }));
   }
   return {
@@ -55,6 +58,17 @@ export function planPendingEnrichment(
     accepted_items: accepted,
     already_enriched: accepted.filter(item => latestEnriched.has(item.intel_id)).length,
     recorded_with_failed_dimensions: accepted.filter(item => (latestEnriched.get(item.intel_id)?.dimensions_failed.length ?? 0) > 0).length,
-    pending: accepted.filter(item => pending_dimensions.get(item.intel_id)!.length > 0),
+    // New facts and new source event bindings outrank routine historical retries.
+    pending: accepted.filter(item => pending_dimensions.get(item.intel_id)!.length > 0).sort((a, b) => {
+      const priority = (item: IntelItem) => {
+        const hash = enrichmentInputHash(item), event = options.currentIntelEventIds?.get(item.intel_id);
+        return (["paper", "cvss", "epss"] as const).filter(scoped).some(d => {
+          const state = stateMap.get(item.intel_id + ":" + d);
+          const dependency = d === "cvss" ? options.cvssDependencyHashes?.get(item.intel_id) : undefined;
+          return !state || state.input_hash !== hash || Boolean(event && state.intel_event_id !== event) || Boolean(dependency && state.dependency_hash !== dependency);
+        }) ? 1 : 0;
+      };
+      return priority(b) - priority(a);
+    }),
   };
 }

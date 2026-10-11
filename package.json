@@ -24,6 +24,8 @@
     "check": "npm run typecheck && npm run test && npm run validate:contracts && npm run check:web",
     "check:web": "npm ci --prefix web && npm run build --prefix web",
     "smoke": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/smoke.ts",
+    "intel:agents": "node --import ./scripts/test-network-guard.mjs --import tsx scripts/intelligence-agents.ts",
+    "intel:agents:live": "node --env-file-if-exists=.env.local --import tsx scripts/intelligence-agents.ts --live --apply",
     "assets:demo": "node --import tsx scripts/demo-assets.ts",
     "gateway:serve": "tsx src/gateway/src/server.ts",
     "qa:serve": "tsx src/qa/src/server.ts",

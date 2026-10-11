@@ -41,7 +41,25 @@ export * from "./f6-verify.js";
 
 import type { ExtensionDimension, ExtensionRunSummary } from "./extension-receipts.js";
 
+export interface EnrichmentCommitCheck {
+  item: IntelItem;
+  input_hash: string;
+  intel_event_id: string | null;
+  phase: "start" | "papers" | "publish" | "states";
+}
+
+export class EnrichmentCommitRejected extends Error {
+  constructor(readonly intelId: string, readonly phase: EnrichmentCommitCheck["phase"]) {
+    super("Enrichment version/commit guard rejected " + intelId + " at " + phase);
+    this.name = "EnrichmentCommitRejected";
+  }
+}
+
 export interface EnrichContext {
+  /** Internal fencing port: require literal true; false, missing return, or rejection fails closed.
+   * Check current Intel event/facts, active DQ, and queue lease/version. Cross-database
+   * checks are NOT an exactly-once transaction; consumers must still bind projections to versions. */
+  beforeCommit?: (check: EnrichmentCommitCheck) => boolean | Promise<boolean>;
   stateStore?: EnrichmentStateStore;
   now?: Date;
   offline?: boolean;
@@ -83,8 +101,14 @@ export interface EnrichContext {
 export async function runEnrichment(items: IntelItem[], ctx: EnrichContext = {}): Promise<EnrichmentOutcome[]> {
   const extensions = ctx.extensionDimensions ?? [];
   if (extensions.some(d=>!["remediation","asset","poc"].includes(d)) || new Set(extensions).size!==extensions.length || (extensions.length && !ctx.extensionRunner)) throw new Error("Unsupported/missing explicit extension runner");
+  // Freeze source inputs and event bindings as well as the item facts across awaits.
+  ctx = { ...ctx, ...(ctx.scoreSources ? { scoreSources: structuredClone(ctx.scoreSources) } : {}),
+    ...(ctx.kevSet ? { kevSet: [...ctx.kevSet] } : {}),
+    ...(ctx.dimensions ? { dimensions: [...ctx.dimensions] } : {}),
+    ...(ctx.causation_by_intel_id ? { causation_by_intel_id: { ...ctx.causation_by_intel_id } } : {}) };
   const results: EnrichmentOutcome[] = [];
-  for (const item of items) {
+  // Pin the entire batch before any model/network await; caller mutation cannot change its facts.
+  for (const item of structuredClone(items)) {
     // extensions-only runs do not fetch papers/scores or rewrite historical enrich.items receipts.
     const outcome = ctx.dimensions?.length === 0 ? summarizeEnrichment(item,{}) : await enrichOne(item, ctx);
     for (const dimension of extensions) {
@@ -115,10 +139,30 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   const traceId = ctx.traceId ?? nextId("tr");
   const inputHash = enrichmentInputHash(item);
   const now = ctx.now ?? new Date();
-  const prior = (dimension: EnrichmentDimension) => ctx.stateStore?.get(item.intel_id, dimension);
+  const causation = ctx.causation_by_intel_id?.[item.intel_id] ?? null;
+  let pinnedCvssDependency: string | undefined;
+  const guard = async (phase: EnrichmentCommitCheck["phase"]) => {
+    if (pinnedCvssDependency && (phase === "publish" || phase === "states")) {
+      // raw_refs are mutable files: a source revision during model work invalidates this artifact.
+      const currentDependency = await scoreSourceDependencyHash(item, { sources: ctx.scoreSources, kevSet: ctx.kevSet });
+      if (currentDependency !== pinnedCvssDependency) throw new EnrichmentCommitRejected(item.intel_id, phase);
+    }
+    if (ctx.beforeCommit) {
+      let accepted = false;
+      try { accepted = await ctx.beforeCommit({ item: structuredClone(item), input_hash: inputHash, intel_event_id: causation, phase }) === true; }
+      catch { /* A failed read/lease check never authorizes a write. */ }
+      if (!accepted) throw new EnrichmentCommitRejected(item.intel_id, phase);
+    }
+  };
+  await guard("start");
+  // Pin retained artifacts too: a concurrent new task must not get mixed into this result.
+  const previous = new Map((["paper", "cvss", "epss"] as const).map(d => [d, ctx.stateStore?.get(item.intel_id, d)]));
+  const prior = (dimension: EnrichmentDimension) => {
+    const state = previous.get(dimension);
+    return state?.input_hash === inputHash ? structuredClone(state) : undefined;
+  };
   const inScope = (dimension: EnrichmentDimension) => ctx.dimensions === undefined || ctx.dimensions.includes(dimension);
   const due = (dimension: EnrichmentDimension) => inScope(dimension) && (!ctx.stateStore || enrichmentRetryDue(prior(dimension), inputHash, now));
-  const causation = ctx.causation_by_intel_id?.[item.intel_id] ?? null;
   let needsReceipt = Boolean(ctx.bus && ctx.stateStore && (["paper", "cvss", "epss"] as const).some(dimension => { if (!inScope(dimension)) return false; const s = prior(dimension); return s && (!s.enrich_event_id || (causation && s.intel_event_id !== causation)); }));
   if (ctx.bus && ctx.stateStore && (["paper", "cvss", "epss"] as const).some(d => prior(d))) {
     let latest: Awaited<ReturnType<EventBus["readEvents"]>>[number] | undefined;
@@ -127,7 +171,10 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   }
   const runPaper = due("paper");
   const scoreDependency = await scoreSourceDependencyHash(item, { sources: ctx.scoreSources, kevSet: ctx.kevSet });
-  const runCvss = due("cvss") || prior("cvss")?.dependency_hash !== scoreDependency;
+  // An out-of-scope score whose source changed remains last-good history, not a current artifact.
+  if (!inScope("cvss") && prior("cvss")?.dependency_hash !== scoreDependency) previous.delete("cvss");
+  const runCvss = inScope("cvss") && (due("cvss") || prior("cvss")?.dependency_hash !== scoreDependency);
+  if (runCvss) pinnedCvssDependency = scoreDependency;
   const runEpss = due("epss");
   if (!runPaper && !runCvss && !runEpss && !needsReceipt) return summarizeEnrichment(item, { papers: (prior("paper")?.artifact ?? []) as PaperLink[], scoreAssessment: (prior("cvss")?.artifact ?? null) as ScoreAssessment | null });
   const states: Array<{ dimension: EnrichmentDimension; status: EnrichmentStatus; reason: string; artifact: unknown; judgement?: string }> = [];
@@ -170,10 +217,12 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
       stage: "enrich.f1", operation_version: "f1-papers.v1", status: "failed", started_at: f1Started,
       input_refs: [itemRef], error: "paper enrichment failed",
     });
+    await guard("states");
     save("paper", "failed", "paper enrichment failed", null, null);
     throw new Error("F1 富化失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
   }
   const paperPayload = papersPayload(item.intel_id, papersRes.papers);
+  if (runPaper) await guard("papers");
   const papersEnv = runPaper ? await ctx.bus?.publish("enrich.papers", paperPayload, { trace_id: traceId, causation_id: causation }) : undefined;
   const paperRefs: LineageArtifactRef[] = papersRes.papers.map((paper) => ({ kind: "PaperLink", id: paper.paper_id, sha256: sha256Json(paper) }));
   if (papersEnv) paperRefs.push({ kind: "EventEnvelope", id: papersEnv.event_id, sha256: sha256Json(paperPayload) });
@@ -299,6 +348,7 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
       stage: "enrich.f4", operation_version: "f4-cvss.v1", status: "failed", started_at: f4Started,
       input_refs: [itemRef], error: "score assessment failed",
     });
+    await guard("states");
     for (const state of states) save(state.dimension, state.status, state.reason, state.artifact, null);
     save(runCvss ? "cvss" : "epss", "failed", "score assessment failed", null, null);
     throw new Error("F4 富化失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
@@ -324,10 +374,12 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
     outcome = summarizeEnrichment(item, { papers: papersRes.papers, scoreAssessment: score, otherScores: sources });
     for (const conflict of outcome.conflicts) await ctx.onConflict?.(conflict, item.intel_id);
     contractPayload = toContractPayload(outcome);
+    await guard("publish");
     enrichEnv = await ctx.bus?.publish("enrich.items", contractPayload, {
       trace_id: traceId, causation_id: causation,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof EnrichmentCommitRejected) throw error;
     await ctx.bus?.recordLineage({
       trace_id: traceId,
       parent_lineage_ids: [f1Lineage?.lineage_id, f4Lineage?.lineage_id].filter((id): id is string => Boolean(id)),
@@ -336,6 +388,7 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
       input_refs: [itemRef, { kind: "PaperSet", id: item.intel_id, sha256: sha256Json(papersRes.papers) }, ...(score ? [{ kind: "ScoreAssessment", id: item.intel_id, sha256: sha256Json(score) }] : [])],
       error: "F6 consolidation or enrich.items publish failed",
     });
+    await guard("states");
     for (const state of states) save(state.dimension, "failed", "enrichment publication failed; not committed as success", state.artifact, null);
     throw new Error("F6 富化收口失败；lineage 已记录 trace_id=" + traceId + " intel_id=" + item.intel_id);
   }
@@ -358,9 +411,11 @@ async function enrichOne(item: IntelItem, ctx: EnrichContext): Promise<Enrichmen
   if (!runCvss && runEpss && prior("cvss") && score) ctx.stateStore?.put({ ...prior("cvss")!, artifact: score, result_hash: sha256Json(score), enrich_event_id: enrichEnv?.event_id ?? null, intel_event_id: causation });
   for (const dimension of ["paper", "cvss", "epss"] as const) {
     const retained = prior(dimension);
-    if (!states.some(state => state.dimension === dimension) && retained) ctx.stateStore?.put({ ...retained, enrich_event_id: enrichEnv?.event_id ?? null, intel_event_id: causation });
+    if (!(dimension === "cvss" && !runCvss && runEpss && score) && !states.some(state => state.dimension === dimension) && retained) ctx.stateStore?.put({ ...retained, enrich_event_id: enrichEnv?.event_id ?? null, intel_event_id: causation });
   }
   };
+  // No await between this final fence and the synchronous sidecar transaction.
+  await guard("states");
   if (ctx.stateStore?.atomic) ctx.stateStore.atomic(commitStates); else commitStates();
   return outcome;
 }

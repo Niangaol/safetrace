@@ -190,9 +190,9 @@ npm run review:queue -- decide <review_id> accept <reviewer> "已核对来源"
 ---
 ## 7. 时效与指标口径（评分类指标唯一口径）
 
-`BT`bash
+```bash
 node --import tsx src/ingest/src/cli/report.ts      # 时效/可用率报告
-`BT`
+```
 
 - **监测延迟 lag** = `first_seen_at − published_at`，按 CVE 去重；SLA 口径 21600s（6h）。
 - **双口径必须都看**：只截图一个数字会误导。`data_basis` 三态：`live` / `fixture` / `fixture_only`；
@@ -201,6 +201,46 @@ node --import tsx src/ingest/src/cli/report.ts      # 时效/可用率报告
 - 已知不可达：本机到 `cisa.gov` 不通，KEV 走 fixture——所有 KEV 相关数字都要带这个前提。
 - 连续运行与可用率（E-07）：72h 挂机证据仍未补跑，**不许把代码合入说成已验收**。
 - 第 7 源 `ubuntu_usn` 的选型依据与线路可达性实测矩阵见 git 历史中的 MONITORING-METRICS 版本（已合并至本节）。
+
+### 内部 Agent 及时交接（2026-10-11 增量）
+
+目标是情报尽快可检索，不是增加大模型 Agent 数量。入口 [intelligence-agents.ts](<../scripts/intelligence-agents.ts>) 将监测、快速富化、索引准备接成实际工作链：
+
+~~~text
+源完成 → 原始来源验证/先可问答 → SQLite 版本任务队列
+                                     ↓
+                           CVSS/EPSS 快速维度 → 验证投影/索引准备
+                                     ↑
+                       失败退避、重启续接、旧版本 token fence
+~~~
+
+- **监测**：持久保存每源尝试/成功覆盖游标/下次到期。NVD 新发布与修改双窗口使用上次完整成功＋重叠窗口补停机缺口，长停机分段（每段≤120天，超过段/页上限明确 truncated，不静默跳过）。partial、fixture 不前进成功游标；有明确双窗完整证明的空结果可以前进。
+- **更快轮询**：新入口缺省 timely 档 NVD 1800s、KEV 900s，旧 registry 的7200s/3600s保持不变；用 `--poll-profile registry` 还原经典档。官方 NVD每次请求（含retry）仍按无key5/30s、有key50/30s限流。已有持久 next_due 仍尊重，换档不会绕过预约/退避。
+- **即时交接**：每源落库后立即入持久队列并唤醒worker，不等下轮poll；缺省2个监测slot及2个处理worker，同源不重叠。新事件序号优先，priority只是同序号tie-break，不冒称全面风险优先。新来源有证明后可通过现有live问答读取；默认主链只处理due的cvss/epss，paper仍走单独富化流程，未做自动低优先论文队列。
+- **版本安全**：任务只存事件引用、哈希、序号、时间，不存完整私有正文。新版本替换旧任务token；富化start/papers/publish/states检查当前源事件/事实/DQ/lease，原文字节或KEV依赖变动重新规划。失败当前版本尊重retry_after，不因缺回执每5秒重跑；新源版本仍能立即处理。保留last-good但不把旧版本artifact混入新回执。
+- **持久续接**：enrich→index阶段原子转移，已完成富化不因重启全部重跑；租约可回收，但任意业务副作用仍非exactly-once。跨数据库guard有TOCTOU，历史papers/F6事件可能已追加；只有当前版本＋原文/hash＋DQ＋receipt验证通过的投影才放给问答。
+- **运行安全**：每业务库一个监测leader（共享工作区canonical lease）；队列本身支持并行token claim。停止不再派发pending新源，只等在途事务。拒绝超INT32定时器间隔；source记录、协作事件、错误内存分别限1000/2000/100条，完整历史在JSONL。启动前校验真实目录/链接/伴随文件，拒绝悬空链接和hardlink，日志不能写入DB/WAL/SHM/journal；不声称可对抗运行时恶意目录替换。
+
+**如何运行**（本轮未启动正式采集、未写正式库、未调用付费模型）：
+
+~~~bash
+npm run intel:agents -- --cycles 1
+# 缺省 .tmp/agent-updates 隔离演示、网络guard开启。
+# fixture 若无原文成功回执会返回 update_status=partial，不伪造真实索引ready。
+
+# 正式模式先为同一个业务库生成并核验备份，设置 SAFETRACE_VERIFIED_BACKUP_DIR。
+# 然后操作方明确启动；cycles 0 才是持续运行。
+npm run intel:agents:live -- --sqlite var/safetrace.sqlite --cycles 0 --sources cisa_kev,nvd_cve,ubuntu_usn,osv,cve_org
+~~~
+
+正式命令包含 --live --apply，并读取本机.env.local；须通过同库verified backup和leader lease，不能用离线参数把正式路径当演示库。未通过门禁则启动失败。正式模式外部源失败仍可能显式fixture降级；这不推进真实覆盖游标，也不算真实成绩。
+
+**验收与指标，不混尺子**：
+
+- 全量909/909、四门禁与冒烟通过；[实际接线测试](<../src/qa/test/intelligence-agents-cli.test.ts>) 用临时SQLite、已验证临时备份与mock公网响应，证明EPSS等待时新来源已能HTTP问答，最后任务done；无真实外部采集。
+- [协作测试](<../src/qa/test/intel-update-agents.test.ts>) 注入时钟得到检测→索引准备125ms，用于证明不等下一轮poll；**不是生产耗时或6h成绩**。还覆盖版本抢占、DQ隔离、重开续接、失败退避、空来源不ready、stop/定时器；[真实链接负例](<../src/qa/test/agent-path-safety.test.ts>) 使用同卷临时junction/hardlink，不碰正式数据。
+- JSON中的 detected_to_index_ready_ms（P50/P95）、oldest_pending_ms只衡量内部交接；完成样本0时输出null，不编0ms。index_ready表示已验证BM25投影准备，不是Qdrant写入或浏览器收到答案。
+- publication→first_seen监测lag/6h仍用真实源数据。NVD自身发布延迟、网络与限流不能靠单测变成达标；真实72h运行、全源覆盖/实测P95、新源跨轮去重及自动论文低优先队列仍待实证。
 
 ### 富化覆盖率口径（最容易被问住的地方）
 
@@ -332,13 +372,13 @@ node --import tsx src/ingest/src/cli/report.ts      # 时效/可用率报告
 
 ### 12.4 验收命令
 
-`BT`bash
+```bash
 npm run check && npm run smoke        # 主线门禁
 npm run validate:contracts            # 契约
 npm run selfheal:drill                # 自愈全链路
 npm run pilot:doctor -- --strict      # 向量链就绪（可选门禁）
 npm run qa:quality                    # 问答契约探针（24 题）
-`BT`
+```
 
 ---
 

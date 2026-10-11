@@ -111,7 +111,7 @@ test("pending selects missing result receipts and changed IntelItem event bindin
   const states=new SqliteEnrichmentStateStore(":memory:");try{
     const xml=atom("OpenSSL CVE study","OpenSSL remote code execution "+item.cve_ids[0]);
     await runEnrichment([item],{stateStore:states,now,scoreSources:sources,fetchImpl:async url=>({ok:true,status:200,text:async()=>xml,json:async()=>({data:[{cve:item.cve_ids[0],epss:"0.3",percentile:"0.9",date:"2026-10-04"}]})})});
-    const verdict={item_id:item.intel_id,verdict:"pass"} as any;
+    const verdict={item_id:item.intel_id,item_kind:"intel",verdict:"pass"} as any;
     const unbound=planPendingEnrichment([item],[verdict],[],{states:states.list(),now,publishedEnrichments:[]});assert.deepEqual(unbound.pending.map(x=>x.intel_id),[item.intel_id]);
     const bus=new EventBus({store:new MemoryEventStore()});await runEnrichment([item],{stateStore:states,bus,now,scoreSources:sources,causation_by_intel_id:{[item.intel_id]:"ev_old"}});
     const receipts=await bus.readEvents<any>("enrich.items");

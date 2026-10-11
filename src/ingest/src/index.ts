@@ -27,4 +27,5 @@ export * from "./controlled-page.js";
 export * from "./discovery.js";
 export * from "./freshness.js";
 export * from "./scheduler.js";
+export * from "./schedule-state.js";
 export * from "./uptime.js";

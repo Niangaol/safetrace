@@ -79,6 +79,8 @@ npm run dev --prefix web   # 窗口 B：前端 :5173
 | 本地推理栈起停 | `npm run local:up` / `npm run local:down` |
 | 向量链就绪检查 / 实测 | `npm run pilot:doctor` / `npm run vector:verify` |
 | 采集一次（离线） | `npm run ingest:once` |
+| 内部 Agent 情报交接（隔离离线） | `npm run intel:agents`（fixture 无来源证明时明确 partial） |
+| 内部 Agent 正式持续更新 | `npm run intel:agents:live -- --cycles 0 --sqlite <已备份库>`（单 leader、备份门禁；不会自动启用 LLM） |
 | 资产扫描（本地仓库快照） | `npm run assets:scan`（`--list-groups` / `--group <id>` / `--json`） |
 | 隔离区 / 人工工单 / 页面复核 | `npm run quarantine:list` / `npm run human:queue -- list` / `npm run review:queue -- list` |
 | 自愈演练 / 常驻自愈 | `npm run selfheal:drill` / `npm run selfheal:daemon` |
@@ -121,8 +123,8 @@ safetrace/
 - 20 条黄金问答全过；无证据时**显式拒答**，不编答案
 - 本地资产扫描（A 线）：分组监控 + 确定性版本匹配；问答可结合仓库快照给出**三个方向的解决方案**
 - 本地推理栈 D4 已验收：Qdrant :6333 + bge-m3 :8081，集合 5,237 点、1024 维
-- 全量单测：2026-10-11 闭环轮 **827/827**；同日并入 Q5 后全量 **908 例、907 通过**
-  （唯一失败为他人未跟踪测试 `src/qa/test/agent-path-safety.test.ts` 的跨卷硬链接环境问题 `EXDEV`，非代码缺陷，见 TUTORIAL §11）
+- 全量单测：2026-10-11 闭环轮 **827/827**；同日 Q5 与内部 Agent 时效改进整合后 **909/909 通过、0 失败/0 跳过**，四门禁及离线冒烟通过；跨卷硬链接测试已改为同卷临时目标
+- 内部 Agent 时效：新增持久交接、重启续接、失败退避和当前版本提交闸门；新原始来源先可问答，不等慢 EPSS/论文。新入口 timely 档 NVD **30分钟**、KEV **15分钟**（旧 registry 2小时/1小时保持兼容），官方请求限流仍生效；这是配置与受控测试，不是实源6h SLA，见 [教程§7](docs/TUTORIAL.md#7-时效与指标口径评分类指标唯一口径)
 
 ### 🟡 只做了一部分的（别对外说"完成"）
 
