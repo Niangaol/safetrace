@@ -7,6 +7,7 @@ export * from "./q2-retrieval.js";
 export * from "./source-index.js";
 export * from "./q4-answer.js";
 export * from "./version-impact.js";
+export * from "./solution-plan.js";
 export * from "./orchestrator/roles.js";
 export * from "./orchestrator/selfheal.js";
 export * from "./orchestrator/selfheal-daemon.js";

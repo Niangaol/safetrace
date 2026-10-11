@@ -5,21 +5,26 @@ import { LocalModelRuntime } from "../src/gateway/src/local-model-runtime.js";
 import { ActivityStream } from "./activity-stream.js";
 import { resolve, dirname } from "node:path";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { readLiveKnowledgeView, liveIntelItem, liveEvidenceView } from "../src/qa/src/live-knowledge-view.js";
 import { readRemediationEvidence } from "../src/qa/src/remediation-reader.js";
 import { readAssetImpactReceipt } from "../src/enrich/src/asset-extension.js";
 import { defaultAssetsDbPath } from "../src/assets/src/config.js";
+import { AssetsStore } from "../src/assets/src/store.js";
 import { loadBaselineIndex, baselineForItem, baselineNarrative, type BaselineIndex } from "../src/qa/src/baseline-reader.js";
 import { naturalConclusion } from "./natural-answer.js";
 import { knowledgeGeneration } from "../src/qa/src/knowledge-generation.js";
 import type { LiveKnowledgeView } from "../src/qa/src/live-knowledge-view.js";
 import { MemoryIndex } from "../src/qa/src/q2-retrieval.js";
 import { classifyIntent } from "../src/qa/src/q1-intent.js";
+import type { QueryPlan } from "../src/qa/src/q1-intent.js";
+import { buildSolutionPlan, renderSolutionPlanMarkdown, solutionPlanHasContent, type SolutionPlan } from "../src/qa/src/solution-plan.js";
+import type { RemediationArtifact } from "../src/enrich/src/f5-remediation.js";
 import { buildRetrievalRequest } from "../src/qa/src/cli.js";
 import { synthesizeAnswer } from "../src/qa/src/q4-answer.js";
 import { sourceVersionChunks, sourceVersionImpact, sourceScoreConflicts } from "../src/qa/src/live-structured-facts.js";
-import { nextId } from "@safetrace/shared";
+import { nextId, sha256Json } from "@safetrace/shared";
 import { readIngestDiagnostics } from "./ingest-diagnostics.js";
 import { handleAssetsRequest } from "./assets-api.js";
 
@@ -34,6 +39,35 @@ function localOrigin(req:IncomingMessage):boolean {
   if(!allowedLocalHost(req))return false;
   const origin=req.headers.origin;if(!origin)return req.headers["sec-fetch-site"]!=="cross-site";
   try{return ["127.0.0.1","localhost","[::1]"].includes(new URL(origin).hostname);}catch{return false;}
+}
+/**
+ * Q5：本地仓库快照 → 三个方向的解决方案（升级修复 / 临时缓解 / 替换或移除）。
+ * 只读 var/assets.sqlite（与情报事件库物理隔离）；库缺失、读取失败或尚未扫描时
+ * 返回原因而不是猜一份方案。仓库路径只以指纹进入答案，绝对路径不出本模块。
+ */
+function readSolutionPlan(options:{assetsSqlitePath?:string},view:LiveKnowledgeView,plan:QueryPlan,advisories:readonly RemediationArtifact[]):{plan:SolutionPlan|null;reason:string|null}{
+  const assetsPath=options.assetsSqlitePath??defaultAssetsDbPath();
+  if(!existsSync(assetsPath))return {plan:null,reason:"本地资产快照库还不存在，请先在资产页执行一次扫描"};
+  let store:AssetsStore;
+  try{store=new AssetsStore(assetsPath,{readOnly:true});}
+  catch{return {plan:null,reason:"本地资产快照库无法打开（可能正在扫描或文件损坏），请稍后重问"};}
+  try{
+    const built=store.readSnapshot(()=>{
+      const groups=store.listGroups(),enabled=new Set(groups.filter(g=>g.enabled).map(g=>g.group_id));
+      const runs=store.latestRunPerGroup().filter(r=>r.group_id==="adhoc"||enabled.has(r.group_id));
+      const runByGroup=new Map(runs.map(r=>[r.group_id,r]));
+      const components=store.latestComponents().flatMap(c=>{const run=runByGroup.get(c.group_id);if(!run)return [];
+        return [{ecosystem:c.ecosystem,name:c.name,version:c.version,constraint_raw:c.constraint_raw,version_is_range_floor:c.version_is_range_floor,
+          source_file:c.source_file,repo_fingerprint:sha256Json({repo_path:c.repo_path}).slice(0,16),group_id:c.group_id,run_id:run.run_id,
+          run_status:run.status as "ok"|"partial",run_degraded_to:run.degraded_to}];});
+      return buildSolutionPlan({cve_ids:plan.slots.cve_ids,products:plan.slots.products,intel:view.intel,components,
+        advisories:advisories.map(a=>({cve_id:a.cve_id,source_id:a.source_id,source_url:a.source_url,validation_level:a.validation_level,published_at:a.published_at,fixed_packages:a.fixed_packages,actions:a.actions})),
+        snapshot:{run_count:runs.length,component_count:components.length,latest_finished_at:runs.map(r=>r.finished_at).sort().at(-1)??null,
+          degraded_runs:runs.filter(r=>r.degraded_to).map(r=>({group_id:r.group_id,degraded_to:r.degraded_to!}))}});
+    });
+    return {plan:built,reason:null};
+  }catch{return {plan:null,reason:"本地资产快照读取失败，本轮不给组件级方案"};}
+  finally{store.close();}
 }
 export function createLiveIntelServer(options:{sqlitePath:string;assetsSqlitePath?:string;payloadRoots?:readonly string[];readView?:()=>Promise<LiveKnowledgeView>;modelSettings?:ModelSettingsController}):Server{
   let qaCount=0;
@@ -135,6 +169,16 @@ export function createLiveIntelServer(options:{sqlitePath:string;assetsSqlitePat
           let lead=[natural,natural&&extra&&!/修复版本/.test(natural)?extra:null].filter(Boolean).join("\n\n")||(extra&&!/修复版本/.test(extra)?extra:null);
           if(gapLine)lead=[lead,gapLine].filter(Boolean).join("\n\n");
           if(lead)answer={...answer,text_md:"## 结论（自然语言）\n\n"+lead+"\n\n"+answer.text_md};
+        }
+        // Q5：结合本地仓库快照给出三个方向的解决方案（服务端确定性拼接，模型不得改写）。
+        // 只在问题能对齐到 CVE/产品时追加；拒答答案一律不追加（红线：拒答就是拒答）。
+        if(!answer.abstained && (plan.slots.cve_ids.length>0||plan.slots.products.length>0)){
+          const solution=readSolutionPlan(options,view,plan,(guidance?.evidence??[]).map(item=>item.artifact));
+          const hasPlan=!!solution.plan&&solutionPlanHasContent(solution.plan);
+          const blocker=solution.plan?solution.plan.options[0]!.blockers[0]??"缺少可绑定的本地组件证据。":solution.reason??"本地资产快照不可用。";
+          const notes=solution.plan&&solution.plan.notes.length?"\n\n"+solution.plan.notes.map(n=>"- "+n).join("\n"):"";
+          answer={...answer,text_md:answer.text_md+"\n\n"+(hasPlan?renderSolutionPlanMarkdown(solution.plan!):"## 解决方案（基于本地仓库快照）\n\n本轮无法给出组件级方案："+blocker+notes+"\n\n这不代表不受影响：未覆盖的目录、未扫描的分组、无法解析的版本都按 unknown 处理。")};
+          activity.publish({trace_id:trace,intel_id:null,stage:"assets",status:hasPlan?"success":"degraded",at:new Date().toISOString(),label:"qa.solution_plan",details:{artifact_count:solution.plan?.components.length??0,...(hasPlan?{}:{reason:blocker})}});
         }
         activity.publish({trace_id:trace,intel_id:null,stage:modelFallback?"fallback":"answer",status:modelFallback?"degraded":answer.abstained?"rejected":"success",at:new Date().toISOString(),label:"qa.answer_completed",details:{artifact_count:answer.citations.length,reason:modelFallback?"已回退规则模板；无其它云端自动降级":answer.abstained?"证据不足或保护门禁拒答":"引用已绑定检索证据"}});
         if(res.destroyed)return;
