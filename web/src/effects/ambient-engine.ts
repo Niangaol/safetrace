@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 纯装饰性环境层：缓慢漂移粒子 + 近距离连线 + 冷色斜向光束 + 间隔雷达涟漪。
  * 不承载任何信息语义；aria-hidden 由挂载组件负责。
  * 全部依赖可注入（canvas / rAF / 随机数 / 可见性 / 时钟），因此可在 node 中被确定性回归。
@@ -138,7 +138,7 @@ export class AmbientEngine {
    ctx.fillStyle = p.tint > 0.72 ? "rgba(129,140,248," + p.a.toFixed(3) + ")" : p.tint > 0.4 ? "rgba(56,189,248," + p.a.toFixed(3) + ")" : "rgba(148,197,255," + (p.a * 0.8).toFixed(3) + ")";
    ctx.fill();
   }
-  if (this.intensity !== "low") {
+  if (this.intensity === "full") {
    const limit = this.connectionDistance;
    for (let i = 0; i < this.points.length; i++) {
     let drawn = 0; const a = this.points[i]!;
@@ -150,7 +150,7 @@ export class AmbientEngine {
     }
    }
   }
- }
+}
  private frame = (time: number): void => {
   if (!this.running || this.disposed) return;
   const previous = this.lastTime || time; this.lastTime = time;
@@ -177,3 +177,4 @@ export class AmbientEngine {
  syncVisibility(): void { if (this.disposed) return; if (!this.visible()) { this.stop(); return; } if (this.intensity !== "off" && !this.reduced) this.start(); else this.renderStatic(); }
  dispose(): void { this.stop(); this.disposed = true; this.points = []; this.beams = []; this.pings = []; this.canvas = null; this.ctx = null; }
 }
+
