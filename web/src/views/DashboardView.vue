@@ -12,6 +12,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 import { getJson, BACKEND_DATA_MODE } from '../api'
+import HomeHero from '../components/HomeHero.vue'
 import StatCards from '../components/StatCards.vue'
 import ActivityBoard from '../components/ActivityBoard.vue'
 import CompetitionFocus from '../components/CompetitionFocus.vue'
@@ -198,6 +199,7 @@ onUnmounted(() => { window.removeEventListener('resize', resizeCharts); sevChart
 </script>
 
 <template>
+  <HomeHero />
   <ActivityBoard />
   <CompetitionFocus />
   <div v-if="loading" class="muted" style="padding: 40px; text-align: center">
