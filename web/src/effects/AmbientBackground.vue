@@ -8,7 +8,6 @@ const canvas = ref<HTMLCanvasElement | null>(null)
 let engine: AmbientEngine | null = null
 let resizeTimer: ReturnType<typeof setTimeout> | undefined
 let unbindMotion: (() => void) | undefined
-let scrollHandler: (() => void) | undefined
 let scrollRaf: number | undefined
 
 function measure() {
@@ -70,7 +69,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (resizeTimer !== undefined) globalThis.clearTimeout(resizeTimer)
   globalThis.removeEventListener('resize', onResize)
-  globalThis.removeEventListener('visibilitychange', onVisibility)
+  globalThis.document.removeEventListener('visibilitychange', onVisibility)
   globalThis.removeEventListener('scroll', scheduleScroll)
   unbindMotion?.()
   if (scrollRaf !== undefined) { cancelAnimationFrame(scrollRaf); scrollRaf = undefined }

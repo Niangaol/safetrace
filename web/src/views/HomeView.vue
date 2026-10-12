@@ -183,8 +183,10 @@ const toolsByTier = computed(() => {
       </div>
     </section>
 
-    <!-- stats -->
-    <section class="stats-bar">
+    <!-- workbench：首页 Hero 下方的可滚动工作台 -->
+    <div class="workbench">
+      <!-- stats -->
+      <section class="stats-bar">
       <div
         v-for="s in stats"
         :key="s.label"
@@ -316,6 +318,7 @@ const toolsByTier = computed(() => {
         </table>
       </details>
     </section>
+    </div>
   </div>
 </template>
 
@@ -324,6 +327,37 @@ const toolsByTier = computed(() => {
   max-width: 1280px;
   margin: 0 auto;
   padding: 0 0 48px;
+}
+
+/* workbench：Hero 下方的工作台主区 */
+.workbench {
+  position: relative;
+  margin-top: 14px;
+  padding-top: 30px;
+  border-top: 1px solid rgba(56, 189, 248, 0.12);
+}
+.workbench::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(680px, 72%);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.55), transparent);
+}
+.workbench::after {
+  content: "WORKBENCH";
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 12px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.32em;
+  color: rgba(125, 211, 252, 0.65);
+  background: var(--bg-deep, #070b14);
 }
 
 /* hero */
