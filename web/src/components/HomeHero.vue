@@ -30,6 +30,7 @@ import ThreatGlobe from './ThreatGlobe.vue'
 <style scoped>
 .hero {
   position: relative;
+  container-type: size;
   text-align: center;
   padding: 88px 24px 96px;
   min-height: 420px;
@@ -83,8 +84,8 @@ import ThreatGlobe from './ThreatGlobe.vue'
   position: absolute;
   top: 50%;
   left: 50%;
-  width: min(42vw, 46vh, 460px);
-  height: min(42vw, 46vh, 460px);
+  width: min(100cqw, calc(100cqh + 136px));
+  aspect-ratio: 1 / 1;
   transform: translate(-50%, -50%);
   z-index: 0;
   pointer-events: none;
