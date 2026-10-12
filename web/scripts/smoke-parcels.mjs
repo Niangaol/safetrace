@@ -26,4 +26,58 @@ assert.ok(text.includes('历史记录回放 · 非实时处理'))
 assert.ok(text.includes('cancelAnimationFrame(frame)'))
 assert.ok(text.includes("motion.value==='off'||reduced.value"))
 assert.ok(text.includes('if(!props.paused&&(queue.value.length||moving.value||parcels.value.some'))
-console.log('Parcel flow: identity, branches, orthogonal paths, interpolation, SFC, replay labels and teardown passed')
+assert.equal(flow.transportProgress(0),0)
+assert.equal(flow.transportProgress(1),1)
+assert.equal(flow.transportProgress(.5),.5)
+assert.ok(flow.transportProgress(.1)<.1,'entry accelerates gently')
+assert.ok(flow.transportProgress(.9)>.9,'arrival decelerates gently')
+assert.equal(flow.stationStroke(0),0)
+assert.equal(flow.stationStroke(500),1)
+assert.ok(flow.stationStroke(1000)<1e-12,'single stroke returns to rest')
+const hooks={watch:[],unmount:[]}
+globalThis.__parcelSmoke=hooks
+const runtime=url(`const r=v=>({value:v});export {r as ref};export const computed=f=>({get value(){return f()}});export const defineComponent=v=>v;export const watch=(f,cb,o)=>{globalThis.__parcelSmoke.watch.push([f,cb]);if(o?.immediate)cb(f())};export const onBeforeUnmount=f=>globalThis.__parcelSmoke.unmount.push(f)`)
+const prefs=url('export const getMotionIntensity=()=>"full";export const onMotionIntensityChange=()=>()=>{}')
+let script=compileScript(descriptor,{id:'parcel-runtime'}).content
+script=script.replaceAll("from 'vue'",'from '+JSON.stringify(runtime))
+script=script.replaceAll("from '../parcel-flow'",'from '+JSON.stringify(url(compile(readFileSync(new URL('../src/parcel-flow.ts',import.meta.url),'utf8')))))
+script=script.replaceAll("from '../effects/motion-prefs'",'from '+JSON.stringify(prefs))
+const previousRaf=globalThis.requestAnimationFrame,previousCancel=globalThis.cancelAnimationFrame
+let scheduled=0,cancelled=0
+globalThis.requestAnimationFrame=()=>++scheduled
+globalThis.cancelAnimationFrame=()=>cancelled++
+try{
+ const component=(await import(url(compile(script)))).default
+ const props={events:[],paused:false}
+ const state=component.setup(props,{expose(){}})
+ assert.equal(state.parcels.value.length,0,'no fabricated parcels without events')
+ assert.ok(state.launch({...event,origin:'live',stage:'collect'},false))
+ for(let time=100;time<=1400;time+=50)state.tick(time)
+ assert.equal(state.parcels.value[0].moving,false)
+ assert.equal(state.feedback('collect').sequence,1,'arrival feedback binds real sequence')
+ assert.equal(state.launch({...event,origin:'live',stage:'normalize',sequence:2},false),false,'next event waits for current arrival stroke')
+ state.parcels.value[0].settledFor=500;state.motion.value='low'
+ assert.ok(Math.abs(state.stroke('collect')-.45)<1e-9,'low intensity scales mechanical travel')
+ state.motion.value='full'
+ const frozen={x:state.parcels.value[0].x,elapsed:state.parcels.value[0].settledFor,belt:state.beltTime.value,stroke:state.stroke('collect')}
+ props.paused=true;state.tick(1450);state.tick(1500)
+ assert.deepEqual({x:state.parcels.value[0].x,elapsed:state.parcels.value[0].settledFor,belt:state.beltTime.value,stroke:state.stroke('collect')},frozen,'pause freezes mechanics and belt at current frame')
+ props.paused=false
+ state.selected.value=state.parcels.value[0].key
+ const beforeSchedule=scheduled;state.tick(1550)
+ assert.ok(scheduled>beforeSchedule,'selected parcel still completes its arrival mechanism')
+ state.selected.value=null
+ state.parcels.value=[]
+ state.launch({...event,stage:'collect'},true)
+ for(let time=1600;time<=3000;time+=50)state.tick(time)
+ assert.equal(state.feedback('collect'),undefined,'historical replay never activates live machinery')
+ state.parcels.value=[];state.motion.value='off'
+ state.launch({...event,origin:'live',stage:'quality',status:'rejected',sequence:2},false)
+ state.tick(3050)
+ assert.equal(state.parcels.value[0].stage,'review')
+ assert.equal(state.parcels.value[0].moving,false,'motion off places parcel directly at real destination')
+ assert.equal(state.stroke('review'),0,'motion off does not run mechanism')
+ for(const hook of hooks.unmount)hook()
+ assert.ok(cancelled>0,'unmount releases RAF')
+}finally{globalThis.requestAnimationFrame=previousRaf;globalThis.cancelAnimationFrame=previousCancel;delete globalThis.__parcelSmoke}
+console.log('Parcel flow: routes, easing, single-stroke machinery, real-sequence arrival, replay isolation, pause freeze, motion off and teardown passed')

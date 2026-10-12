@@ -22,6 +22,16 @@ export function travelPath(from: ActivityStage | null,to: ActivityStage): Point[
  return [vertices[start]!,STOPS[to]]
 }
 export function pathLength(path: readonly Point[]):number {return path.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p.x-path[i]!.x,p.y-path[i]!.y),0)}
+/** 运输表现层的启停缓动，不表示后端处理百分比。 */
+export function transportProgress(progress: number): number {
+ const t = Math.max(0, Math.min(1, progress))
+ return t * t * (3 - 2 * t)
+}
+/** 到站后单次机械行程；历史、暂停由调用方管理，不自行跑时钟。 */
+export function stationStroke(elapsed: number): number {
+ const t = Math.max(0, Math.min(1, elapsed / 1000))
+ return Math.sin(Math.PI * t) ** 2
+}
 export function pathPoint(path: readonly Point[],progress:number):Point {
  let distance=pathLength(path)*Math.max(0,Math.min(1,progress))
  for(let i=1;i<path.length;i++){const a=path[i-1]!,b=path[i]!,length=Math.hypot(b.x-a.x,b.y-a.y)
